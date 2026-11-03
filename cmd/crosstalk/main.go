@@ -36,8 +36,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		}
 		return 0
 	case "capture":
-		fmt.Fprintf(stderr, "crosstalk %s: not implemented\n", args[0])
-		return 1
+		return runCapture(args[1:], stdout, stderr)
 	case "help", "-h", "--help":
 		fmt.Fprint(stdout, usage)
 		return 0
