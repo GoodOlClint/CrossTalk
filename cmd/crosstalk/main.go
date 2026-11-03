@@ -19,9 +19,11 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	switch args[0] {
-	case "mcp", "capture":
+	case "mcp":
 		fmt.Fprintf(stderr, "crosstalk %s: not implemented\n", args[0])
 		return 1
+	case "capture":
+		return runCapture(args[1:], stdout, stderr)
 	case "help", "-h", "--help":
 		fmt.Fprint(stdout, usage)
 		return 0
