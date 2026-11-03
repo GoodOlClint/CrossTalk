@@ -76,6 +76,9 @@ type Record struct {
 	To        string    `json:"to,omitempty"`
 	Owner     string    `json:"owner,omitempty"`
 	Claimed   bool      `json:"claimed,omitempty"`
+	// Message is the normalized message a dedupe record was accepted with,
+	// kept so the mailbox can return it.
+	Message json.RawMessage `json:"message,omitempty"`
 }
 
 func (r Record) key() string {
