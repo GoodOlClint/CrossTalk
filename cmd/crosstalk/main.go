@@ -1,9 +1,14 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/GoodOlClint/crosstalk/internal/mcpserver"
 )
 
 const usage = `usage: crosstalk <command>
@@ -19,7 +24,18 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 2
 	}
 	switch args[0] {
-	case "mcp", "capture":
+	case "mcp":
+		opt, err := mcpserver.DefaultOptions(mcpserver.Unwired{})
+		if err != nil {
+			fmt.Fprintf(stderr, "crosstalk mcp: %v\n", err)
+			return 1
+		}
+		if err := mcpserver.New(opt).Run(context.Background(), &mcp.StdioTransport{}); err != nil {
+			fmt.Fprintf(stderr, "crosstalk mcp: %v\n", err)
+			return 1
+		}
+		return 0
+	case "capture":
 		fmt.Fprintf(stderr, "crosstalk %s: not implemented\n", args[0])
 		return 1
 	case "help", "-h", "--help":

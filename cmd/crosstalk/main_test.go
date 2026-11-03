@@ -15,7 +15,6 @@ func TestRun(t *testing.T) {
 	}{
 		{nil, 2, "", "usage: crosstalk"},
 		{[]string{"help"}, 0, "usage: crosstalk", ""},
-		{[]string{"mcp"}, 1, "", "not implemented"},
 		{[]string{"capture"}, 1, "", "not implemented"},
 		{[]string{"bogus"}, 2, "", "unknown command"},
 	}
