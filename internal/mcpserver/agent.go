@@ -23,6 +23,7 @@ type Agent struct {
 	harnessName string
 	reg         *registry.Registration
 	j           *journal.Journal
+	replay      journal.Replay
 }
 
 func (a *Agent) ID() string                           { return a.id }
@@ -32,6 +33,10 @@ func (a *Agent) Name() string                         { return a.reg.Name() }
 func (a *Agent) Descriptor() registry.Descriptor      { return a.reg.Descriptor() }
 func (a *Agent) Journal() *journal.Journal            { return a.j }
 func (a *Agent) Registration() *registry.Registration { return a.reg }
+
+// Replay is what journal.Open returned for this registration; a Binder
+// passes it to receiver.Recover.
+func (a *Agent) Replay() journal.Replay { return a.replay }
 
 func (a *Agent) isReady() bool {
 	select {

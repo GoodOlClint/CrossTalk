@@ -68,6 +68,22 @@ type Binder interface {
 	Bind(ctx context.Context, a *Agent) (BindInfo, error)
 }
 
+// HarnessBinder is optionally implemented by a Backend that confirms the
+// harness binding before the journal opens, so every journal record carries
+// the real harness_endpoint (§5). It runs after the locks are taken and
+// before Bind.
+type HarnessBinder interface {
+	BindHarness(ctx context.Context, a *Agent) (adapter.Binding, error)
+}
+
+// AgentCloser is optionally implemented by a Backend holding per-agent
+// listeners. CloseAgent runs while the agent's locks are still held, before
+// the descriptor is removed, and also when a registration fails after
+// BindHarness; it must tolerate an agent it never finished binding.
+type AgentCloser interface {
+	CloseAgent(a *Agent) error
+}
+
 type BindInfo struct {
 	A2AURL          string
 	HarnessEndpoint string
