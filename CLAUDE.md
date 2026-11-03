@@ -4,7 +4,7 @@ Cross-harness agent messaging: one process per agent session (the shim) that is 
 
 ## Architecture
 
-- Go, single static binary (`crosstalk`), one shim process per session started by `crosstalk run -- <harness cmd>`; the harness's MCP entry is `crosstalk mcp`, a stateless stdio forwarder to that shim. ADR 0002.
+- Go, single static binary (`crosstalk`), one shim process per session started by `crosstalk run -- <harness cmd>`; the harness's MCP entry is `crosstalk mcp`, a stateless stdio forwarder to that shim. ADR 0002, ADR 0005.
 - Model-facing: MCP over stdio (`list_agents`, `send_message`, `reply`, `ask`, `receive_message`).
 - Peer-facing: A2A over loopback HTTP plus a `/tmp/cc-socks`-compatible unix socket speaking Claude Code's two-line peer protocol.
 - Harness adapters: Claude (session socket + `~/.claude/sessions` registry), Codex (managed app-server daemon over websocket-on-unix: `thread/turns/list`, `turn/steer`, `turn/start`, `codex queue`).
