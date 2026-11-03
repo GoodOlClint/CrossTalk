@@ -1,0 +1,599 @@
+[
+  {
+    "time": 1793740021.151318,
+    "client": "creator",
+    "direction": "out",
+    "message": {
+      "id": "creator-1",
+      "method": "initialize",
+      "params": {
+        "clientInfo": {
+          "name": "crosstalk_binding_probe_creator",
+          "version": "0.1"
+        },
+        "capabilities": {
+          "experimentalApi": true
+        }
+      }
+    }
+  },
+  {
+    "time": 1793740021.151653,
+    "client": "creator",
+    "direction": "in",
+    "message": {
+      "id": "creator-1",
+      "result": {
+        "userAgent": "codex-tui/0.166.0 (Mac OS 27.2.0; arm64) Apple_Terminal/488.9 (crosstalk_binding_probe_creator; 0.1)",
+        "codexHome": "/Users/goodolclint/.codex",
+        "platformFamily": "unix",
+        "platformOs": "macos"
+      }
+    }
+  },
+  {
+    "time": 1793740021.152282,
+    "client": "caller",
+    "direction": "out",
+    "message": {
+      "id": "caller-1",
+      "method": "initialize",
+      "params": {
+        "clientInfo": {
+          "name": "crosstalk_binding_probe_caller",
+          "version": "0.1"
+        },
+        "capabilities": {
+          "experimentalApi": true
+        }
+      }
+    }
+  },
+  {
+    "time": 1793740021.152537,
+    "client": "caller",
+    "direction": "in",
+    "message": {
+      "id": "caller-1",
+      "result": {
+        "userAgent": "codex-tui/0.166.0 (Mac OS 27.2.0; arm64) Apple_Terminal/488.9 (crosstalk_binding_probe_caller; 0.1)",
+        "codexHome": "/Users/goodolclint/.codex",
+        "platformFamily": "unix",
+        "platformOs": "macos"
+      }
+    }
+  },
+  {
+    "time": 1793740021.153236,
+    "client": "observer",
+    "direction": "out",
+    "message": {
+      "id": "observer-1",
+      "method": "initialize",
+      "params": {
+        "clientInfo": {
+          "name": "crosstalk_binding_probe_observer",
+          "version": "0.1"
+        },
+        "capabilities": {
+          "experimentalApi": true
+        }
+      }
+    }
+  },
+  {
+    "time": 1793740021.1534562,
+    "client": "observer",
+    "direction": "in",
+    "message": {
+      "id": "observer-1",
+      "result": {
+        "userAgent": "codex-tui/0.166.0 (Mac OS 27.2.0; arm64) Apple_Terminal/488.9 (crosstalk_binding_probe_observer; 0.1)",
+        "codexHome": "/Users/goodolclint/.codex",
+        "platformFamily": "unix",
+        "platformOs": "macos"
+      }
+    }
+  },
+  {
+    "time": 1793740021.1539688,
+    "client": "nonexperimental",
+    "direction": "out",
+    "message": {
+      "id": "nonexperimental-1",
+      "method": "initialize",
+      "params": {
+        "clientInfo": {
+          "name": "crosstalk_binding_probe_nonexperimental",
+          "version": "0.1"
+        },
+        "capabilities": {
+          "experimentalApi": false
+        }
+      }
+    }
+  },
+  {
+    "time": 1793740021.1541739,
+    "client": "nonexperimental",
+    "direction": "in",
+    "message": {
+      "id": "nonexperimental-1",
+      "result": {
+        "userAgent": "codex-tui/0.166.0 (Mac OS 27.2.0; arm64) Apple_Terminal/488.9 (crosstalk_binding_probe_nonexperimental; 0.1)",
+        "codexHome": "/Users/goodolclint/.codex",
+        "platformFamily": "unix",
+        "platformOs": "macos"
+      }
+    }
+  },
+  {
+    "time": 1793740021.167137,
+    "client": "caller",
+    "direction": "out",
+    "message": {
+      "id": "caller-4",
+      "method": "mcpServer/tool/call",
+      "params": {
+        "threadId": "01a1a300-21dc-7fe2-870a-d43593ff0992",
+        "server": "crosstalk-probe",
+        "tool": "_bind",
+        "arguments": {
+          "nonce": "active-1793740021167120000"
+        }
+      }
+    }
+  },
+  {
+    "time": 1793740021.1801338,
+    "client": "caller",
+    "direction": "in",
+    "message": {
+      "id": "caller-4",
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"nonce\": \"active-1793740021167120000\", \"pid\": 93073, \"ppid\": 83168, \"meta\": {\"threadId\": \"01a1a300-21dc-7fe2-870a-d43593ff0992\", \"progressToken\": 1}}"
+          }
+        ],
+        "structuredContent": {
+          "nonce": "active-1793740021167120000",
+          "pid": 93073,
+          "ppid": 83168,
+          "meta": {
+            "threadId": "01a1a300-21dc-7fe2-870a-d43593ff0992",
+            "progressToken": 1
+          }
+        },
+        "isError": false
+      }
+    }
+  },
+  {
+    "time": 1793740021.2268329,
+    "client": "caller",
+    "direction": "out",
+    "message": {
+      "id": "caller-5",
+      "method": "mcpServer/tool/call",
+      "params": {
+        "threadId": "01a1a33c-9dbe-74d0-9309-f9e6d8e10407",
+        "server": "crosstalk-probe",
+        "tool": "_bind",
+        "arguments": {
+          "nonce": "idle-0-1793740021226817000"
+        }
+      }
+    }
+  },
+  {
+    "time": 1793740021.243202,
+    "client": "caller",
+    "direction": "in",
+    "message": {
+      "id": "caller-5",
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"nonce\": \"idle-0-1793740021226817000\", \"pid\": 93091, \"ppid\": 83168, \"meta\": {\"threadId\": \"01a1a33c-9dbe-74d0-9309-f9e6d8e10407\", \"progressToken\": 1}}"
+          }
+        ],
+        "structuredContent": {
+          "nonce": "idle-0-1793740021226817000",
+          "pid": 93091,
+          "ppid": 83168,
+          "meta": {
+            "threadId": "01a1a33c-9dbe-74d0-9309-f9e6d8e10407",
+            "progressToken": 1
+          }
+        },
+        "isError": false
+      }
+    }
+  },
+  {
+    "time": 1793740021.243435,
+    "client": "caller",
+    "direction": "out",
+    "message": {
+      "id": "caller-6",
+      "method": "mcpServerStatus/list",
+      "params": {
+        "threadId": "01a1a33c-9dbe-74d0-9309-f9e6d8e10407",
+        "serverName": "crosstalk-probe"
+      }
+    }
+  },
+  {
+    "time": 1793740021.244024,
+    "client": "caller",
+    "direction": "in",
+    "message": {
+      "id": "caller-6",
+      "result": {
+        "data": [
+          {
+            "name": "crosstalk-probe",
+            "runtimeStatus": "connected",
+            "pluginId": null,
+            "httpOrigin": null,
+            "serverInfo": {
+              "name": "crosstalk-probe",
+              "title": null,
+              "version": "0.1",
+              "description": null,
+              "icons": null,
+              "websiteUrl": null
+            },
+            "serverCapabilities": {
+              "tools": {}
+            },
+            "toolListMeta": null,
+            "tools": {
+              "_elicit": {
+                "name": "_elicit",
+                "description": "Request a disposable test form and return its response.",
+                "inputSchema": {
+                  "type": "object",
+                  "properties": {
+                    "nonce": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "nonce"
+                  ],
+                  "additionalProperties": false
+                },
+                "annotations": {
+                  "readOnlyHint": true
+                }
+              },
+              "_bind": {
+                "name": "_bind",
+                "description": "Return the provided probe nonce, server process identity and request metadata.",
+                "inputSchema": {
+                  "type": "object",
+                  "properties": {
+                    "nonce": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "nonce"
+                  ],
+                  "additionalProperties": false
+                },
+                "annotations": {
+                  "readOnlyHint": true
+                }
+              }
+            },
+            "toolsError": null,
+            "resources": [],
+            "resourceTemplates": [],
+            "authStatus": "unsupported"
+          }
+        ],
+        "nextCursor": null
+      }
+    }
+  },
+  {
+    "time": 1793740021.244202,
+    "client": "nonexperimental",
+    "direction": "out",
+    "message": {
+      "id": "nonexperimental-2",
+      "method": "mcpServer/tool/call",
+      "params": {
+        "threadId": "01a1a33c-9dbe-74d0-9309-f9e6d8e10407",
+        "server": "crosstalk-probe",
+        "tool": "_bind",
+        "arguments": {
+          "nonce": "nonexperimental-1793740021244186000"
+        }
+      }
+    }
+  },
+  {
+    "time": 1793740021.244649,
+    "client": "nonexperimental",
+    "direction": "in",
+    "message": {
+      "id": "nonexperimental-2",
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"nonce\": \"nonexperimental-1793740021244186000\", \"pid\": 93091, \"ppid\": 83168, \"meta\": {\"threadId\": \"01a1a33c-9dbe-74d0-9309-f9e6d8e10407\", \"progressToken\": 4}}"
+          }
+        ],
+        "structuredContent": {
+          "nonce": "nonexperimental-1793740021244186000",
+          "pid": 93091,
+          "ppid": 83168,
+          "meta": {
+            "threadId": "01a1a33c-9dbe-74d0-9309-f9e6d8e10407",
+            "progressToken": 4
+          }
+        },
+        "isError": false
+      }
+    }
+  },
+  {
+    "time": 1793740021.286618,
+    "client": "caller",
+    "direction": "out",
+    "message": {
+      "id": "caller-7",
+      "method": "mcpServer/tool/call",
+      "params": {
+        "threadId": "01a1a33c-9dff-79d3-af97-c77dd38b884d",
+        "server": "crosstalk-probe",
+        "tool": "_bind",
+        "arguments": {
+          "nonce": "idle-1-1793740021286598000"
+        }
+      }
+    }
+  },
+  {
+    "time": 1793740021.301088,
+    "client": "caller",
+    "direction": "in",
+    "message": {
+      "id": "caller-7",
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"nonce\": \"idle-1-1793740021286598000\", \"pid\": 93120, \"ppid\": 83168, \"meta\": {\"threadId\": \"01a1a33c-9dff-79d3-af97-c77dd38b884d\", \"progressToken\": 1}}"
+          }
+        ],
+        "structuredContent": {
+          "nonce": "idle-1-1793740021286598000",
+          "pid": 93120,
+          "ppid": 83168,
+          "meta": {
+            "threadId": "01a1a33c-9dff-79d3-af97-c77dd38b884d",
+            "progressToken": 1
+          }
+        },
+        "isError": false
+      }
+    }
+  },
+  {
+    "time": 1793740021.301352,
+    "client": "caller",
+    "direction": "out",
+    "message": {
+      "id": "caller-8",
+      "method": "mcpServerStatus/list",
+      "params": {
+        "threadId": "01a1a33c-9dff-79d3-af97-c77dd38b884d",
+        "serverName": "crosstalk-probe"
+      }
+    }
+  },
+  {
+    "time": 1793740021.302088,
+    "client": "caller",
+    "direction": "in",
+    "message": {
+      "id": "caller-8",
+      "result": {
+        "data": [
+          {
+            "name": "crosstalk-probe",
+            "runtimeStatus": "connected",
+            "pluginId": null,
+            "httpOrigin": null,
+            "serverInfo": {
+              "name": "crosstalk-probe",
+              "title": null,
+              "version": "0.1",
+              "description": null,
+              "icons": null,
+              "websiteUrl": null
+            },
+            "serverCapabilities": {
+              "tools": {}
+            },
+            "toolListMeta": null,
+            "tools": {
+              "_elicit": {
+                "name": "_elicit",
+                "description": "Request a disposable test form and return its response.",
+                "inputSchema": {
+                  "type": "object",
+                  "properties": {
+                    "nonce": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "nonce"
+                  ],
+                  "additionalProperties": false
+                },
+                "annotations": {
+                  "readOnlyHint": true
+                }
+              },
+              "_bind": {
+                "name": "_bind",
+                "description": "Return the provided probe nonce, server process identity and request metadata.",
+                "inputSchema": {
+                  "type": "object",
+                  "properties": {
+                    "nonce": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "nonce"
+                  ],
+                  "additionalProperties": false
+                },
+                "annotations": {
+                  "readOnlyHint": true
+                }
+              }
+            },
+            "toolsError": null,
+            "resources": [],
+            "resourceTemplates": [],
+            "authStatus": "unsupported"
+          }
+        ],
+        "nextCursor": null
+      }
+    }
+  },
+  {
+    "time": 1793740021.302295,
+    "client": "nonexperimental",
+    "direction": "out",
+    "message": {
+      "id": "nonexperimental-3",
+      "method": "mcpServer/tool/call",
+      "params": {
+        "threadId": "01a1a33c-9dff-79d3-af97-c77dd38b884d",
+        "server": "crosstalk-probe",
+        "tool": "_bind",
+        "arguments": {
+          "nonce": "nonexperimental-1793740021302272000"
+        }
+      }
+    }
+  },
+  {
+    "time": 1793740021.302964,
+    "client": "nonexperimental",
+    "direction": "in",
+    "message": {
+      "id": "nonexperimental-3",
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"nonce\": \"nonexperimental-1793740021302272000\", \"pid\": 93120, \"ppid\": 83168, \"meta\": {\"threadId\": \"01a1a33c-9dff-79d3-af97-c77dd38b884d\", \"progressToken\": 4}}"
+          }
+        ],
+        "structuredContent": {
+          "nonce": "nonexperimental-1793740021302272000",
+          "pid": 93120,
+          "ppid": 83168,
+          "meta": {
+            "threadId": "01a1a33c-9dff-79d3-af97-c77dd38b884d",
+            "progressToken": 4
+          }
+        },
+        "isError": false
+      }
+    }
+  },
+  {
+    "time": 1793740021.303207,
+    "client": "caller",
+    "direction": "out",
+    "message": {
+      "id": "caller-9",
+      "method": "mcpServer/tool/call",
+      "params": {
+        "threadId": "01a1a33c-9dbe-74d0-9309-f9e6d8e10407",
+        "server": "crosstalk-probe",
+        "tool": "_elicit",
+        "arguments": {
+          "nonce": "elicitation-1793740021303192000"
+        }
+      }
+    }
+  },
+  {
+    "time": 1793740021.304373,
+    "client": "creator",
+    "direction": "in",
+    "message": {
+      "method": "mcpServer/elicitation/request",
+      "id": 0,
+      "params": {
+        "threadId": "01a1a33c-9dbe-74d0-9309-f9e6d8e10407",
+        "turnId": null,
+        "serverName": "crosstalk-probe",
+        "mode": "form",
+        "_meta": null,
+        "message": "Disposable CrossTalk routing probe; decline is expected.",
+        "requestedSchema": {
+          "type": "object",
+          "properties": {
+            "ok": {
+              "type": "boolean"
+            }
+          },
+          "required": [
+            "ok"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "time": 1793740024.308741,
+    "client": "caller",
+    "direction": "in",
+    "message": {
+      "id": "caller-9",
+      "result": {
+        "content": [
+          {
+            "type": "text",
+            "text": "{\"nonce\": \"elicitation-1793740021303192000\", \"pid\": 93091, \"ppid\": 83168, \"meta\": {\"threadId\": \"01a1a33c-9dbe-74d0-9309-f9e6d8e10407\", \"progressToken\": 5}, \"elicitation_response\": {\"jsonrpc\": \"2.0\", \"id\": \"probe-elicitation-93091-1\", \"result\": {\"action\": \"decline\"}}}"
+          }
+        ],
+        "structuredContent": {
+          "nonce": "elicitation-1793740021303192000",
+          "pid": 93091,
+          "ppid": 83168,
+          "meta": {
+            "threadId": "01a1a33c-9dbe-74d0-9309-f9e6d8e10407",
+            "progressToken": 5
+          },
+          "elicitation_response": {
+            "jsonrpc": "2.0",
+            "id": "probe-elicitation-93091-1",
+            "result": {
+              "action": "decline"
+            }
+          }
+        },
+        "isError": false
+      }
+    }
+  }
+]
