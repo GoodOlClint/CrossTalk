@@ -450,4 +450,5 @@ func (s *Server) addTools() {
 		return map[string]any{"messages": es}, nil
 	})
 
+	s.addClaimTools()
 }

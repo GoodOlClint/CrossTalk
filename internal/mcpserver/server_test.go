@@ -139,7 +139,7 @@ func TestToolSurface(t *testing.T) {
 		}
 	}
 	slices.Sort(names)
-	want := []string{"ask", "list_agents", "receive_message", "reply", "send_message"}
+	want := []string{"ask", "claim", "list_agents", "receive_message", "release", "reply", "send_message"}
 	if !slices.Equal(names, want) {
 		t.Fatalf("tools %v, want %v", names, want)
 	}
@@ -189,6 +189,8 @@ func TestUnboundServesOnlyListAgents(t *testing.T) {
 		e.mustErr(meta, "reply", map[string]any{"message_id": "m", "text": "x"}, CodeUnbound, "")
 		e.mustErr(meta, "ask", sendArgs("bob", "q"), CodeUnbound, "")
 		e.mustErr(meta, "receive_message", map[string]any{}, CodeUnbound, "")
+		e.mustErr(meta, "claim", map[string]any{"name": "bob"}, CodeUnbound, "")
+		e.mustErr(meta, "release", map[string]any{"name": "bob"}, CodeUnbound, "")
 		out := e.mustOK(meta, "list_agents", map[string]any{})
 		if _, ok := out["agents"]; !ok {
 			t.Fatalf("list_agents %v", out)
