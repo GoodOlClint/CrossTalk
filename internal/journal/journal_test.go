@@ -313,3 +313,23 @@ func TestSameConversation(t *testing.T) {
 		t.Fatal("different session_ref treated as same conversation")
 	}
 }
+
+func TestAcceptRecordCarriesMessageAndRecordsListsInOrder(t *testing.T) {
+	dir := t.TempDir()
+	j, _ := open(t, dir, Options{})
+	if _, dup, err := j.AcceptRecord(Record{Sender: "a", MessageID: "m1", State: "submitted", Message: []byte(`{"x":1}`)}); dup || err != nil {
+		t.Fatal(dup, err)
+	}
+	if prior, dup, _ := j.AcceptRecord(Record{Sender: "a", MessageID: "m1", State: "submitted"}); !dup || prior != "submitted" {
+		t.Fatal("second AcceptRecord not deduped")
+	}
+	j.SetDedupeState("a", "m1", "accepted")
+	rs, err := j.Records()
+	if err != nil || len(rs) != 2 || string(rs[0].Message) != `{"x":1}` || rs[0].Type != TypeDedupe || rs[1].State != "accepted" {
+		t.Fatalf("%+v %v", rs, err)
+	}
+	j.Close()
+	if _, err := j.Records(); err != ErrClosed {
+		t.Fatal(err)
+	}
+}
