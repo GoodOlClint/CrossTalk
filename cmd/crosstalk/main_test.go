@@ -2,8 +2,14 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"errors"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRun(t *testing.T) {
@@ -26,5 +32,29 @@ func TestRun(t *testing.T) {
 		if !strings.Contains(out.String(), c.out) || !strings.Contains(errb.String(), c.err) {
 			t.Errorf("run(%v) stdout=%q stderr=%q", c.args, out.String(), errb.String())
 		}
+	}
+}
+
+func TestMain(m *testing.M) {
+	if os.Getenv("CROSSTALK_TEST_MAIN") == "1" {
+		os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+	}
+	os.Exit(m.Run())
+}
+
+func TestMCPExitsCleanlyOnClosedStdin(t *testing.T) {
+	home := t.TempDir()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, os.Args[0], "mcp")
+	cmd.Env = append(os.Environ(), "CROSSTALK_TEST_MAIN=1", "HOME="+home)
+	cmd.Stdin = strings.NewReader("")
+	var errb bytes.Buffer
+	cmd.Stderr = &errb
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("crosstalk mcp: %v, stderr %q", err, errb.String())
+	}
+	if _, err := os.Stat(filepath.Join(home, ".local", "state", "crosstalk", "agents")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("protocol start created agent state: %v", err)
 	}
 }
