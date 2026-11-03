@@ -41,6 +41,12 @@ type Transport interface {
 	Send(ctx context.Context, from, to registry.Descriptor, m msg.Message, returnImmediately bool) (adapter.State, error)
 }
 
+// TaskTransport is a Transport that also returns the far side's task id,
+// which the outbound journal record keeps.
+type TaskTransport interface {
+	SendTask(ctx context.Context, from, to registry.Descriptor, m msg.Message, returnImmediately bool) (string, adapter.State, error)
+}
+
 // ClaimTransport asks the shim serving target to record or end owner's claim
 // on it (§7). A Transport that does not implement it cannot carry claims.
 type ClaimTransport interface {

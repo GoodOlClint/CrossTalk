@@ -81,8 +81,11 @@ type Config struct {
 	Version       string
 	PeerTokenPath string
 	ResolvePeer   func(name string) (Peer, bool)
-	Limits        Limits
-	Logger        *slog.Logger
+	// Claim, when set, serves metadata.crosstalk.claim requests; nil refuses
+	// them as unsupported.
+	Claim  ClaimFunc
+	Limits Limits
+	Logger *slog.Logger
 }
 
 type Server struct {

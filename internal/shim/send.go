@@ -32,7 +32,12 @@ func (st *AgentState) newMessage(to string, k msg.Kind, d msg.Delivery, text str
 }
 
 func (st *AgentState) outbound(m msg.Message, to string, state adapter.State, withBody bool) {
-	r := journal.Record{Type: journal.TypeOutbound, MessageID: m.MessageID, To: to, Kind: string(m.Kind), State: string(state)}
+	st.outboundTask(m, to, state, withBody, "")
+}
+
+// outboundTask also keeps the far side's task id, when the Transport reports one.
+func (st *AgentState) outboundTask(m msg.Message, to string, state adapter.State, withBody bool, taskID string) {
+	r := journal.Record{Type: journal.TypeOutbound, MessageID: m.MessageID, To: to, Kind: string(m.Kind), State: string(state), TaskID: taskID}
 	if m.InReplyTo != nil {
 		r.InReplyTo = *m.InReplyTo
 	}
@@ -44,19 +49,28 @@ func (st *AgentState) outbound(m msg.Message, to string, state adapter.State, wi
 	}
 }
 
-func (st *AgentState) viaTransport(ctx context.Context, to registry.Descriptor, m msg.Message) (adapter.State, string) {
+func (st *AgentState) viaTransport(ctx context.Context, to registry.Descriptor, m msg.Message) (adapter.State, string, string) {
 	t := st.shim.opt.Transport
 	if t == nil {
-		return adapter.Unreachable, ReasonNoTransport
+		return adapter.Unreachable, ReasonNoTransport, ""
 	}
-	state, err := t.Send(ctx, st.agent.Descriptor(), to, m, true)
+	var (
+		taskID string
+		state  adapter.State
+		err    error
+	)
+	if tt, ok := t.(TaskTransport); ok {
+		taskID, state, err = tt.SendTask(ctx, st.agent.Descriptor(), to, m, true)
+	} else {
+		state, err = t.Send(ctx, st.agent.Descriptor(), to, m, true)
+	}
 	if !state.Injectable() {
 		state = adapter.Unknown
 	}
 	if err != nil {
-		return state, err.Error()
+		return state, err.Error(), taskID
 	}
-	return state, ""
+	return state, "", taskID
 }
 
 // deliver sends m by name: a descriptor means a shim-served agent (Transport);
@@ -78,8 +92,10 @@ func (st *AgentState) deliver(ctx context.Context, m msg.Message) mcpserver.Resu
 			return finish(d.AgentID, adapter.Rejected, ReasonSelf)
 		}
 		st.outbound(m, d.AgentID, journal.StateSubmitted, true)
-		state, reason := st.viaTransport(ctx, d, m)
-		return finish(d.AgentID, state, reason)
+		state, reason, taskID := st.viaTransport(ctx, d, m)
+		st.outboundTask(m, d.AgentID, state, false, taskID)
+		res.State, res.Reason = state, reason
+		return res
 	}
 	if m.Kind != msg.Inform {
 		return finish(m.To, adapter.Rejected, ReasonNativeInformOnly)
@@ -280,8 +296,9 @@ func (st *AgentState) sendReply(ctx context.Context, r msg.Message, key string, 
 	}
 	r.To = d.Name
 	st.outbound(r, d.AgentID, journal.StateSubmitted, true)
-	res.State, res.Reason = st.viaTransport(ctx, d, r)
-	st.outbound(r, d.AgentID, res.State, false)
+	var taskID string
+	res.State, res.Reason, taskID = st.viaTransport(ctx, d, r)
+	st.outboundTask(r, d.AgentID, res.State, false, taskID)
 	if res.State == adapter.Accepted || res.State == adapter.Queued {
 		delivered()
 	}
@@ -342,8 +359,8 @@ func (f forwarder) Forward(ctx context.Context, m msg.Message, toAgentID string)
 	}
 	m.To = d.Name
 	st.outbound(m, d.AgentID, journal.StateSubmitted, true)
-	state, reason := st.viaTransport(ctx, d, m)
-	st.outbound(m, d.AgentID, state, false)
+	state, reason, taskID := st.viaTransport(ctx, d, m)
+	st.outboundTask(m, d.AgentID, state, false, taskID)
 	if reason != "" {
 		return state, errors.New(reason)
 	}

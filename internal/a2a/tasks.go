@@ -305,6 +305,11 @@ func (h *handler) SendMessage(ctx context.Context, req *sdk.SendMessageRequest) 
 	if req.Message == nil {
 		return nil, badMessage("no message")
 	}
+	if c, ok, err := claimOf(req.Message); err != nil {
+		return nil, err
+	} else if ok {
+		return s.claim(ctx, snd, c)
+	}
 	who := principal(snd)
 	wait := req.Config == nil || !req.Config.ReturnImmediately
 	if wait {
