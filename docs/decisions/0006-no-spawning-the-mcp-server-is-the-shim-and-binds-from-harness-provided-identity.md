@@ -1,6 +1,6 @@
 # ADR 0006 — No spawning: the MCP server is the shim and binds from harness-provided identity
 
-- **Status:** Proposed
+- **Status:** Accepted (provisional, operator 2026-11-03; full review pending)
 - **Date:** 2026-11-03
 - **Deciders:** operator + Claude session + Codex session
 - **Context source:** operator redirect 2026-11-03 ("build this without needing to spawn processes on our own; communicate with any Claude or Codex session running"); Codex source read of rust-v0.166.0 `codex-rs/core/src/mcp_tool_call.rs`; live process inspection on this machine

@@ -1,6 +1,6 @@
 # ADR 0003 — Discovery from harness registries plus a descriptor directory
 
-- **Status:** Proposed
+- **Status:** Accepted (provisional, operator 2026-11-03; full review pending)
 - **Date:** 2026-11-03
 - **Deciders:** operator + Claude (Fable 5.1) + Codex (0.166.0) review
 - **Context source:** operator question "I assume we don't need herdr anymore since we have the sockets helping with discovery?"

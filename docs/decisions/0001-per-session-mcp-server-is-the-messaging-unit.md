@@ -1,6 +1,6 @@
 # ADR 0001 — Per-session MCP server is the messaging unit
 
-- **Status:** Proposed
+- **Status:** Accepted (provisional, operator 2026-11-03; full review pending)
 - **Date:** 2026-11-03
 - **Deciders:** operator + Claude (Fable 5.1) + Codex (0.166.0) review
 - **Context source:** design session 2026-11-03 (spikes 1–4 and the cross-harness round trip: `docs/spikes/README.md`)

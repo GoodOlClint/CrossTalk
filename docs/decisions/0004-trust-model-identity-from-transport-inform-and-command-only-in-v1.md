@@ -1,6 +1,6 @@
 # ADR 0004 — Trust model: identity from transport, inform and command only in v1
 
-- **Status:** Proposed
+- **Status:** Accepted (provisional, operator 2026-11-03; full review pending)
 - **Date:** 2026-11-03
 - **Deciders:** operator + Claude (Fable 5.1) + Codex (0.166.0) review
 - **Context source:** Codex review findings F4, F6, F7 (design changelog 1.1); council verdict V3 (design changelog 1.4)
