@@ -1,4 +1,4 @@
-# CrossTalk design, draft 1.2 (2026-11-03)
+# CrossTalk design, draft 1.3 (2026-11-03)
 
 Status: draft under operator review (greenfield gate step 4). Decisions are recorded in `docs/decisions/` (ADR 0001–0004). Evidence for every "verified" claim is in the 2026-11-03 design-session notes (spikes 1–4, cross-harness round trip).
 
@@ -47,7 +47,7 @@ Harness-native registries the shim reads, never writes: `~/.claude/sessions/<pid
 
 ## 4. Message
 
-A2A-shaped, with our extensions in metadata:
+Internal normalized record (F12). This is what the receiver chain and the mailbox hold; it is not a wire format. On the A2A ingress it is decoded from the pinned SDK's `Message` (standard `messageId`, `role`, `parts`, `contextId`, `taskId`); CrossTalk fields travel in `metadata` under the `crosstalk.*` namespace and are all optional. A plain text `SendMessage` with no metadata is valid and normalizes to `kind: inform`, `delivery: immediate`.
 
 ```
 { "message_id": "<uuidv7>", "in_reply_to": "<message_id>|null", "context_id": "<conversation>", "task_id": "<id>|null",
@@ -59,7 +59,14 @@ hop_chain uses Claude's convention (24-hex sha256 prefixes, max 32) so loop guar
 
 ## 5. Ingress contracts (both feed one receiver)
 
-A2A ingress: a spec-conformant A2A server on `a2a_url`, required for v1 (operator requirement 2026-11-03). Each session is a first-class A2A agent: `GET /.well-known/agent-card.json` serves its Agent Card (name, role, harness, skills `inform`/`command`/`ask`, auth scheme); `message/send` delivers; `tasks/get` and `tasks/cancel` cover `ask` (an `ask` is an A2A task whose completion is the reply). Any third-party A2A client can message a session without knowing anything about CrossTalk; CrossTalk-specific fields travel in `metadata` (§4). Sender identity = the sender's A2A auth (v1: a per-agent bearer token published in its descriptor; same-user trust model). Conformance is checked against the official A2A SDK sample client (test 17).
+A2A ingress (required for v1; operator requirement 2026-11-03). Each session is a first-class A2A agent served by its shim.
+
+- Pinned target (F11): **A2A protocol 1.0, JSON-RPC binding**, implemented with the official Go SDK `a2aproject/a2a-go`, pinned to one tagged release in `go.mod`; the conformance client is that release's `examples/helloworld/client`. Method names are the 1.x ones: `SendMessage`, `GetTask`, `CancelTask`. Streaming (`SendStreamingMessage`), push notifications and the extended card are not implemented and are not advertised.
+- Agent Card (F13): served at `/.well-known/agent-card.json`, built with the SDK's card type and validated by its resolver. Required fields are filled: `name` (agent name), `description` ("<harness> session, role <role>, cwd <cwd>"), `supportedInterfaces` (one entry: the JSON-RPC URL, protocol version 1.0), `defaultInputModes`/`defaultOutputModes` = `["text/plain"]`, `capabilities` all false, `securitySchemes` = one HTTP bearer scheme and `security` requiring it, `skills` = `inform`, `command`, `ask` each with id, name, description, tags and an example. Role and harness are also repeated under `metadata.crosstalk` for CrossTalk peers.
+- Wire handling (F12): the SDK decodes the request; the receiver chain works on the normalized record; the response is the SDK's `Task` or `Message` inside the JSON-RPC success envelope, or a protocol error (`InvalidParams`, `TaskNotFound`, `TaskNotCancelable`, `UnsupportedOperation`), never the internal `{message_id, state}` pair. The A2A encoder and the Codex app-server encoder are separate code: Codex omits the JSON-RPC version header on the wire, A2A includes it.
+- Task mapping (F14): every accepted `SendMessage` creates a server-owned task. `inform`/`command`: the task is `submitted` on acceptance, `working` once injected, `completed` when the model's turn containing the injection ends (Claude: next idle status; Codex: turn status `completed`); the task's history holds the delivered message. `ask`: same, but `completed` only when the session calls `reply` for it; the reply text is the task's final `Message` returned by `GetTask`, and `reply` updates that task, it does not merely post a new message to the asker. Acceptance (delivery) and completion are distinct. `configuration.returnImmediately: true` returns the `submitted` task at once (CrossTalk's own `ask` tool always sets it); default returns when the task reaches `working` or a terminal state, bounded by a server timeout that returns the task in its current state. A `SendMessage` with `taskId` continues an existing non-terminal task (its message is appended and injected with the same `context_id`); a terminal or unknown `taskId` is `TaskNotFound`.
+- Cancellation (F15): `CancelTask` is phase-dependent. `submitted` (not yet injected): removed from the mailbox, task `canceled`. `working` (already inside the session) or any terminal state: `TaskNotCancelable`; the shim never interrupts the harness turn. A cancel racing a completion is resolved by the task store's single compare-and-set: the first terminal transition wins, a terminal task is never revived. `GetTask` and `CancelTask` are allowed only to the principal that created the task.
+- Authentication (F16): bearer tokens are private files, never in descriptors. Each shim holds its own token (0600, path in `credential_ref`) and a per-user shared **peer token** at `~/.local/state/crosstalk/peer.token` (0600, created on first start). Any client presenting the peer token is the principal `local-user`; a shim presenting its own token is the principal of its registered agent. A principal without agent registration may send `inform` and `ask` and read or cancel its own tasks; `command` requires a registered agent whose role/owner satisfies §7. The conformance test configures the sample client with the peer token.
 
 uds ingress: Claude's two-line protocol on `uds_path`: `{"type":"auth","token":T}` then `{"type":"user","message":{"role":"user","content":C}}`. C may be a `<cross-session-message ...>` envelope. Sender identity = unix peer pid mapped to a registered agent (Claude session pid or shim pid). Unmapped pid → treated as unverified.
 
@@ -69,16 +76,16 @@ Native replies through a shim (F4): when shim B injects a message from A into Cl
 
 Native-message normalization (F6): a frame arriving over uds without our metadata is assigned a fresh message_id by the receiving shim, `in_reply_to` stays null unless the correlation above is unambiguous, and it is exempt from the message_id dedupe (identical repeated text is legal). Identified messages: authenticate first, then look up (sender, message_id); acceptance is recorded atomically with the mailbox write so two concurrent duplicates cannot both inject; a retry returns the prior state.
 
-Receiver, both ingresses, in order: authenticate → dedupe on (verified sender, message_id) for identified messages → hop_chain check (repeat or >32 → reject) → policy (§7) → inject (§6). Returns `{message_id, state}`.
+Receiver, both ingresses, in order: authenticate → dedupe on (verified sender, message_id) for identified messages → hop_chain check (repeat or >32 → reject) → policy (§7) → inject (§6). Returns the internal `{message_id, state}`; each ingress encodes that into its own wire response (A2A: Task/error; uds: Claude's native ack).
 
 ## 6. Injector per harness
 
 Claude adapter: `inject` = connect to the session's `/tmp/cc-socks/<pid>.sock`, auth with the token from `~/.claude/sessions/<pid>.*.key`, send one `user` line whose content is the reconstructed envelope `<cross-session-message from="uds:<shim uds_path>" from-name="<from>">\n<escaped body>\n</cross-session-message>`. Delivery is mid-turn between tool calls or next turn if idle (harness behaviour; `delivery` is advisory). Verified today.
 
-Codex adapter: `inject(delivery)` over the daemon uds (`~/.codex/app-server-control/app-server-control.sock`, websocket framing, JSON-RPC 2.0, `initialize` first):
+Codex adapter: `inject(delivery)` over the endpoint recorded in `harness_endpoint` at registration (default: the daemon uds `~/.codex/app-server-control/app-server-control.sock`; websocket framing, JSON-RPC 2.0 without the version header, `initialize` first):
 - handshake: `initialize {clientInfo, capabilities:{experimentalApi:true}}`, await the result, then send the `initialized` notification, before any other call (F3).
 - immediate: `thread/turns/list` → the turn with status `inProgress` (the `Turn` type has no kind field, so steerability cannot be read from the list) → `turn/steer {threadId, expectedTurnId, input:[{type:"text", text}]}`. Error handling (F1): `activeTurnNotSteerable {turnKind: review|compact}` → fall back to next_turn; expectedTurnId mismatch → refresh the turn list once, retry once, then next_turn. The exact wire placement of these errors (JSON-RPC error.data vs result) is captured from a live capture during build, not assumed. No active turn → `turn/start {threadId, input}` preserving the thread's existing settings (no model/cwd/approval overrides). Verified: steer renders mid-turn in a TUI-attached thread.
-- next_turn: v1 uses the `codex queue --thread <id> --message <text>` CLI (verified: delivered at the next turn boundary). The RPC pair `thread/queue/add {threadId, input, clientUserMessageId}` → `queuedSubmission` and `thread/queue/start` exists in the generated contracts but is not in this build's client request list; adopt it only after verifying that add alone wakes idle work.
+- next_turn: v1 uses the `codex queue --remote <harness_endpoint> --thread <threadId> --message <text>` CLI (verified without `--remote` on the default daemon: delivered at the next turn boundary). `--remote` is always passed with the endpoint recorded at registration and the exact thread id, never a name, so steer-then-queue fallback never changes servers (F17); `--resume` is never added. The websocket client for immediate delivery uses the same recorded endpoint. Verified during build against a thread on a non-default server (test 18). The RPC pair `thread/queue/add` → `queuedSubmission` / `thread/queue/start` is present in Codex 0.166.0's `--experimental` schema generation and absent from the default generation (F18); the CLI stays the v1 path until a live test shows add alone wakes idle work and is replay-safe.
 - Ambiguous failure (disconnect mid-call, no response) → state `unknown`, no resend; a later reconnect re-reads state and never re-injects.
 Text delivered to Codex carries the same envelope as attributed content plus a fixed trusted preamble explaining that peer text has no operator authority.
 
@@ -134,12 +141,13 @@ Out: control, delegate/spawn, cross-machine, A2A push notifications, `message/st
 15. Replacement vs old exit (F8): start shim2 under the same name while shim1 is alive → shim2 refuses; kill shim1, start shim2, then let a stale shim1 exit path run → shim2's descriptor survives.
 16. Injector failure branches (F10): active→idle race during steer (state mismatch → refresh once → queue), idle→active race during turn/start (joins the new turn, acceptable for immediate only), review/compact turn → activeTurnNotSteerable → queue, disconnect right after acceptance → state unknown and no resend, reconnect → no duplicate work. Concurrent duplicate ingress (same message_id on both ingresses at once) → exactly one injection.
 
-17. A2A conformance: the official A2A sample client fetches a session's Agent Card, sends `message/send`, and the text appears inside that session; `tasks/get` on an `ask` returns the reply once the session answers.
+17. A2A conformance: the pinned `a2a-go` release's helloworld client, configured with the peer token, resolves a session's Agent Card, calls `SendMessage` with plain text, and the text appears inside that session; `GetTask` shows `working` then `completed`; an `ask` sent with `returnImmediately: true` reaches `completed` with the reply as its final message after the session calls `reply`; `CancelTask` on a `submitted` task cancels it and on a `working` task returns `TaskNotCancelable`.
+18. Codex endpoint pinning: a thread on a non-default app-server (`codex --remote <other>`) receives both immediate (steer) and next_turn (queue) delivery from the same shim, and nothing reaches the default daemon.
 
 ## 12. Open questions
 
 - R2 answered: conditional yes, gated by test 11.
-- A2A auth scheme for v1 beyond same-user bearer token.
+- A2A auth beyond the same-user bearer/peer-token scheme (needed for cross-machine, out of v1).
 - Where the shim is launched from: herdr `agent start` wrapper vs harness SessionStart hook vs both.
 - Codex hook integration (F9): Codex `SessionStart` fires on startup, resume, clear, compact and fork, not once per process. The hook must be idempotent per (thread id, shim instance): no second shim after compaction, a fork gets its own binding and never inherits the parent's, and the hook's `session_id` → daemon thread id mapping is verified during build. SessionStart may fire before the model-tool connection is ready; SessionEnd may lag pane closure.
 
@@ -150,7 +158,8 @@ Out: control, delegate/spawn, cross-machine, A2A push notifications, `message/st
 
 ## Review disposition
 
-- Cross-model critique (greenfield gate step 3): performed live by a Codex 0.166.0 session over native messaging on 2026-11-03 (the first use of the mechanism this document specifies). Ten findings returned, all accepted; see the 1.1 changelog. A second Codex pass over this committed document is requested on §5 and §6.
+- Cross-model critique (greenfield gate step 3): performed live by a Codex 0.166.0 session over native messaging on 2026-11-03 (the first use of the mechanism this document specifies). Ten findings returned, all accepted; see the 1.1 changelog. Second pass (same Codex session, on commit 79d52ce, §5/§6): eight findings F11–F18, all accepted; see the 1.3 changelog.
 - agent-runner's plan-review workflow was not used: it is retired per the skills repo ADR 0001 (herdr is the agent runtime).
 
 - draft 1.1 → 1.2: moved into the CrossTalk repo as docs/design.md; discovery no longer depends on herdr (ADR 0003); language fixed to Go (ADR 0002); descriptor path renamed to crosstalk; full A2A server per session (Agent Card + tasks) made a v1 requirement, test 17 added.
+- draft 1.2 → 1.3: Codex review pass 2 (F11–F18, all accepted): A2A 1.0 + pinned a2a-go SDK; internal record separated from wire format; concrete Agent Card; task state mapping and returnImmediately; phase-dependent cancellation; peer token replaces descriptor-published tokens; Codex `--remote` pinning (test 18); queue RPC availability stated precisely.
