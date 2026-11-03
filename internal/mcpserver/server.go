@@ -106,9 +106,13 @@ func (s *Server) Close() error {
 	s.agents = map[string]*Agent{}
 	s.mu.Unlock()
 	var errs []error
+	ac, _ := s.backend.(AgentCloser)
 	for _, a := range agents {
 		<-a.ready
 		if a.err == nil {
+			if ac != nil {
+				errs = append(errs, ac.CloseAgent(a))
+			}
 			errs = append(errs, a.close())
 		}
 	}
@@ -167,14 +171,25 @@ func (s *Server) register(ctx context.Context, a *Agent, c caller) (notice strin
 	a.reg = g
 	defer func() {
 		if err != nil {
+			if ac, ok := s.backend.(AgentCloser); ok {
+				ac.CloseAgent(a)
+			}
 			a.close()
 		}
 	}()
-	j, _, err := journal.Open(s.reg.Dir, a.id, journal.Binding{InstanceID: g.InstanceID(), SessionRef: c.sessionRef}, journal.Options{})
+	var endpoint string
+	if hb, ok := s.backend.(HarnessBinder); ok {
+		b, err := hb.BindHarness(ctx, a)
+		if err != nil {
+			return "", err
+		}
+		endpoint = b.HarnessEndpoint
+	}
+	j, rp, err := journal.Open(s.reg.Dir, a.id, journal.Binding{InstanceID: g.InstanceID(), HarnessEndpoint: endpoint, SessionRef: c.sessionRef}, journal.Options{})
 	if err != nil {
 		return "", err
 	}
-	a.j = j
+	a.j, a.replay = j, rp
 	a.harnessName = c.name
 
 	d := registry.Descriptor{Harness: string(c.harness), Cwd: c.cwd, SessionRef: c.sessionRef, Role: registry.RolePrimary}

@@ -102,6 +102,13 @@ func (s *Server) inform(ctx context.Context, from *Agent, to, text string) (*Res
 	return &r, ""
 }
 
+// ApplyClaim records a claim on this agent made by ownerID through another
+// shim process; the caller has checked that ownerID is a registered primary.
+func (a *Agent) ApplyClaim(ownerID, ownerName string) error { return a.applyClaim(ownerID, ownerName) }
+
+// ApplyRelease ends ownerID's claim on this agent; a non-owner is rejected.
+func (a *Agent) ApplyRelease(ownerID string) error { return a.applyRelease(ownerID) }
+
 // applyClaim records ownerID's claim in this agent's own journal, then
 // republishes its descriptor as a subagent. The journal, not the descriptor,
 // is authoritative for the check.

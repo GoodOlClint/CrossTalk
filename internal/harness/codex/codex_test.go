@@ -564,3 +564,26 @@ func TestRender(t *testing.T) {
 		t.Fatal("verified label missing")
 	}
 }
+
+func TestLoadedThreadsListsLoadedOnlyAndSkipsDeadEndpoints(t *testing.T) {
+	s := appservertest.New(t)
+	s.AddThread(&appservertest.Thread{ID: thread, Name: "worker", Cwd: "/work", Loaded: true})
+	s.AddThread(&appservertest.Thread{ID: "stored-only", Cwd: "/old"})
+	a := &codex.Adapter{ControlSocket: t.TempDir() + "/absent.sock", Endpoints: []string{s.Endpoint()}}
+	got := a.LoadedThreads(ctx(t))
+	if len(got) != 1 || got[0].ID != thread || got[0].Name != "worker" || got[0].Cwd != "/work" || !got[0].Session.Loaded {
+		t.Fatalf("LoadedThreads = %+v", got)
+	}
+}
+
+func TestLoadedThreadsOnTwoEndpointsIsUnreachable(t *testing.T) {
+	s1, s2 := appservertest.New(t), appservertest.New(t)
+	for _, s := range []*appservertest.Server{s1, s2} {
+		s.AddThread(&appservertest.Thread{ID: thread, Cwd: "/work", Loaded: true})
+	}
+	a := &codex.Adapter{ControlSocket: s1.Endpoint()}
+	got := a.LoadedThreads(ctx(t), s2.Endpoint())
+	if len(got) != 1 || got[0].Session.Reachable || got[0].Endpoint != "" {
+		t.Fatalf("LoadedThreads = %+v", got)
+	}
+}
