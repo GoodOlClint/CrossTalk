@@ -1,6 +1,6 @@
 # ADR 0005 — crosstalk mcp is a stateless forwarder; crosstalk run owns the shim
 
-- **Status:** Proposed
+- **Status:** Superseded by [ADR 0006](0006-no-spawning-the-mcp-server-is-the-shim-and-binds-from-harness-provided-identity.md)
 - **Date:** 2026-11-03
 - **Deciders:** operator + Claude session (council-reviewed, Codex concurrence)
 - **Context source:** design.md §9, Codex council C2 and final-read CQ5–CQ7

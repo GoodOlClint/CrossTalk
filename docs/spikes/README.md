@@ -21,4 +21,4 @@ Status of captured frames: to be committed before `go mod init`. Until then the 
 | 5 | macOS peer pid: read `LOCAL_PEERPID` (`SOL_LOCAL`) from Go via `golang.org/x/sys/unix` on an accepted uds connection and map it to a Claude session pid and to another shim's pid. | uds ingress |
 | 6 | Idle Claude wake: inject into a Claude session with no active turn and record whether a turn starts and the model sees the envelope. | Claude adapter idle path (test 19) |
 | 7 | Claude-visible record (R2): publish a `~/.claude/sessions/<pid>.json` + key pair for a shim and record what Claude does with it. | §3 decision, uds ingress (test 11) |
-| 8 | Codex thread binding under `crosstalk run`: map a wrapper-launched Codex child to its thread id. | Codex adapter |
+| 9 | Harness-provided identity (ADR 0006): capture `params._meta` of a model-issued `tools/call` from a Codex thread on 0.166.0 with a metadata-echo MCP server (expect `threadId`, `sessionId`), and confirm a Claude MCP child's parent pid maps to `~/.claude/sessions/<ppid>.json`. | Codex adapter, §3 binding |
