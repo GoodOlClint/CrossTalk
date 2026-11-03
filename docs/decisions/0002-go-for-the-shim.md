@@ -11,7 +11,7 @@ One shim runs per agent session, so startup time and footprint matter. It speaks
 
 ## Decision
 
-Go. Single static binary, fast start, `net` package covers unix sockets and peer credentials (`syscall.GetsockoptXucred` on macOS, `SO_PEERCRED` on Linux), an official MCP Go SDK (`modelcontextprotocol/go-sdk`) and an A2A Go SDK exist, and iteration speed is higher than Rust for a protocol-heavy service that will change as the harnesses change.
+Go. Single static binary, fast start, `net` and `golang.org/x/sys/unix` cover unix sockets and peer credentials (peer pid via `getsockopt(SOL_LOCAL, LOCAL_PEERPID)` on macOS, since `xucred` carries uid/gids only; `SO_PEERCRED` on Linux), an official MCP Go SDK (`modelcontextprotocol/go-sdk`) and an A2A Go SDK exist, and iteration speed is higher than Rust for a protocol-heavy service that will change as the harnesses change.
 
 ## Rejected alternatives
 
@@ -23,4 +23,5 @@ Go. Single static binary, fast start, `net` package covers unix sockets and peer
 
 - Repo is a Go module; build is `go build ./...`, tests `go test ./...`.
 - Peer-credential code is platform-specific; macOS first, Linux behind a build tag.
+- The macOS `LOCAL_PEERPID` call is verified by a committed spike (`docs/spikes/README.md`, spike 5) before the uds ingress is written.
 - The MCP Go SDK's stdio transport is the model-facing surface; everything else is net/http and a small websocket client.

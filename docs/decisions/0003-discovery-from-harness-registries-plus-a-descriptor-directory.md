@@ -11,9 +11,9 @@ Agents must find each other by name. Both harnesses already publish a live regis
 
 ## Decision
 
-Discovery has no daemon. Each shim writes one descriptor to `~/.local/state/crosstalk/agents/<name>.json` (name, harness, role, owner, pid, instance_id, cwd, session_ref, harness_endpoint, a2a_url, uds_path, credential_ref) after its listeners are up, atomically, and removes only its own instance's file on exit. `list_agents` reads that directory, prunes entries whose pid is dead or reused, and enriches each row with live status from the harness's own registry. herdr pane ids are recorded when present and used only for the terminal fallback.
+Discovery has no daemon. Each shim writes one descriptor to `~/.local/state/crosstalk/agents/<name>.json` (name, harness, role, owner, pid, harness_pid, harness_started_at, instance_id, cwd, session_ref, harness_endpoint, harness_version, a2a_url, uds_path, credential_ref) after its listeners are up, atomically, and removes only its own instance's file on exit. `list_agents` reads that directory, prunes entries whose pid is dead or reused, and enriches each row with live status from the harness's own registry. herdr pane ids are recorded when present; no v1 code uses them.
 
-A shim also publishes a Claude-visible pair in `~/.claude/sessions/` (its own pid, its own key, a distinct name, `kind: external`) so Claude sessions can address it with native SendMessage. This is conditional on a compatibility test (design §11 test 11); if Claude rejects or mishandles the record, discovery stays in `list_agents` only.
+A shim also publishes a Claude-visible pair in `~/.claude/sessions/` (its own pid, its own key, a distinct name, `kind: external`) so Claude sessions can address it with native SendMessage. This is conditional on spike 7 (`docs/spikes/README.md`), regression-tested by design §11 test 11; if Claude rejects or mishandles the record, discovery stays in `list_agents` only.
 
 ## Rejected alternatives
 
@@ -23,6 +23,6 @@ A shim also publishes a Claude-visible pair in `~/.claude/sessions/` (its own pi
 
 ## Consequences
 
-- Stable names are a launch-time input; two live shims with the same name is a startup conflict.
+- Stable names are a launch-time input; two live shims with the same name is a startup conflict, enforced by a per-name `flock` held for the shim's lifetime (design §3).
 - Stale-record cleanup must check pid reuse (start time), not pid existence.
 - The Claude-visible record must never borrow a Claude session id or token.

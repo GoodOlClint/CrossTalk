@@ -3,7 +3,7 @@
 - **Status:** Proposed
 - **Date:** 2026-11-03
 - **Deciders:** operator + Claude (Fable 5.1) + Codex (0.166.0) review
-- **Context source:** design session 2026-11-03 (notes: 2026-11-03-agent-messaging-concept.md, spikes 1–4)
+- **Context source:** design session 2026-11-03 (spikes 1–4 and the cross-harness round trip: `docs/spikes/README.md`)
 
 ## Context
 
@@ -18,7 +18,7 @@ The unit of the system is one process per agent session, the **shim**. It is at 
 - **Central gateway that routes messages** (herdr-a2a's shape). Adds a process in every path and still needs a per-harness injector; the only thing it centralises is the registry, which ADR 0003 covers without a daemon.
 - **Native harness plugin without a process** (hooks only). Hooks fire at turn boundaries; neither harness lets a hook wake an idle session, and Codex has no asyncRewake equivalent.
 - **Spawn-per-request A2A wrappers** (`claude -p`, `codex exec`). Stateless workers; the session in the pane is never the one that receives the message.
-- **Terminal injection as the primary path** (herdr send-keys). Works, but blind to dialogs and turn state; kept only as the last rung of the delivery ladder.
+- **Terminal injection as the primary path** (herdr send-keys). Works, but blind to dialogs and turn state; kept out of v1 (design §10); the herdr pane id is recorded only.
 
 ## Consequences
 
