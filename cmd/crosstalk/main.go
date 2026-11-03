@@ -13,6 +13,7 @@ import (
 
 	"github.com/GoodOlClint/crosstalk/internal/mcpserver"
 	"github.com/GoodOlClint/crosstalk/internal/shim"
+	"github.com/GoodOlClint/crosstalk/internal/wire"
 )
 
 const usage = `usage: crosstalk <command>
@@ -42,11 +43,12 @@ func run(args []string, stdout, stderr io.Writer) int {
 }
 
 func runMCP(stderr io.Writer) int {
-	sh, err := shim.New(shim.Options{})
+	w, err := wire.New(shim.Options{})
 	if err != nil {
 		fmt.Fprintf(stderr, "crosstalk mcp: %v\n", err)
 		return 1
 	}
+	sh := w.Shim()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	err = errors.Join(mcpserver.New(sh.MCPOptions()).Run(ctx, &mcp.StdioTransport{}), sh.Close())
