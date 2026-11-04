@@ -102,7 +102,7 @@ func (st *AgentState) outbound(m msg.Message, to string, state adapter.State, re
 
 // outboundTask also keeps the far side's task id, when the Transport reports one.
 func (st *AgentState) outboundTask(m msg.Message, to string, state adapter.State, reason string, withBody bool, taskID string) error {
-	r := journal.Record{Type: journal.TypeOutbound, MessageID: m.MessageID, To: to, Kind: string(m.Kind), State: string(state), Reason: reason, TaskID: taskID}
+	r := journal.Record{Type: journal.TypeOutbound, MessageID: m.MessageID, To: to, Kind: string(m.Kind), State: string(state), Reason: reason, TaskID: taskID, ContextID: m.ContextID}
 	if m.InReplyTo != nil {
 		r.InReplyTo = *m.InReplyTo
 	}
@@ -252,7 +252,7 @@ func (st *AgentState) rearmDeadlines() {
 		}
 	}
 	for id, ask := range asks {
-		if s := adapter.State(latest[id].State); s == adapter.Rejected || s == adapter.Unreachable || st.replied(id) {
+		if s := adapter.State(latest[id].State); s == adapter.Rejected || s == adapter.Unreachable || st.replied(id) || st.noticed(id) || st.legacyReceipt(ask, latest[id].To) {
 			continue
 		}
 		remaining := ask.SentAt.Add(time.Duration(ask.DeadlineSeconds) * time.Second).Sub(st.shim.now())
@@ -284,20 +284,58 @@ func (st *AgentState) expire(ask msg.Message) {
 	})
 }
 
-// replied reports whether any journaled inbound answers messageID.
+// replied reports whether a reply receipt exists for the outbound ask
+// messageID: an admitted reply from the asked peer in the ask's context.
 func (st *AgentState) replied(messageID string) bool {
 	rs, err := st.agent.Journal().Records()
 	if err != nil {
 		return false
 	}
 	for _, r := range rs {
-		if r.Type != journal.TypeDedupe || len(r.Message) == 0 {
+		if r.Type == journal.TypeReceipt && r.InReplyTo == messageID {
+			return true
+		}
+	}
+	return false
+}
+
+// noticed reports whether this agent's session was already told that the
+// ask messageID expired.
+func (st *AgentState) noticed(messageID string) bool {
+	rs, err := st.agent.Journal().Records()
+	if err != nil {
+		return false
+	}
+	for _, r := range rs {
+		var m msg.Message
+		if r.Type == journal.TypeDedupe && r.Sender == PrincipalCrossTalk && len(r.Message) > 0 && json.Unmarshal(r.Message, &m) == nil && m.InReplyTo != nil && *m.InReplyTo == messageID {
+			return true
+		}
+	}
+	return false
+}
+
+// legacyReceipt accepts, for a journal written before reply receipts, an
+// admitted inbound body from peer answering ask in its context, and records
+// it as a receipt so the fallback runs once.
+func (st *AgentState) legacyReceipt(ask msg.Message, peer string) bool {
+	j := st.agent.Journal()
+	rs, err := j.Records()
+	if err != nil || !isAgentID(peer) {
+		return false
+	}
+	for _, r := range rs {
+		if r.Type != journal.TypeDedupe || r.Sender != peer || len(r.Message) == 0 {
 			continue
 		}
 		var m msg.Message
-		if json.Unmarshal(r.Message, &m) == nil && m.InReplyTo != nil && *m.InReplyTo == messageID {
-			return true
+		if json.Unmarshal(r.Message, &m) != nil || m.InReplyTo == nil || *m.InReplyTo != ask.MessageID || m.ContextID != ask.ContextID {
+			continue
 		}
+		if l, ok := j.Latest(r); !ok || l.State == string(adapter.Rejected) {
+			continue
+		}
+		return j.Append(journal.Record{Type: journal.TypeReceipt, MessageID: m.MessageID, InReplyTo: ask.MessageID, Sender: peer, ContextID: ask.ContextID}) == nil
 	}
 	return false
 }

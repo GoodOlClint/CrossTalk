@@ -26,6 +26,7 @@ const (
 	TypeObligation Type = "obligation"
 	TypeClaim      Type = "claim"
 	TypeOutbound   Type = "outbound"
+	TypeReceipt    Type = "receipt"
 )
 
 const (
@@ -67,7 +68,8 @@ func (b Binding) SameConversation(o Binding) bool {
 //	route:      Session, MessageID, Sender (original sender), State open|closed
 //	obligation: MessageID (the reply), InReplyTo, To, State pending|delivered|closed (the ask closed first)
 //	claim:      Owner (agent_id), Claimed
-//	outbound:   MessageID, To (agent_id, harness:session_ref, or an unresolved name), Kind, State, Reason, TaskID (far side's); the first carries Message, whose deadline_seconds and sent_at fix an ask's deadline
+//	outbound:   MessageID, To (agent_id, harness:session_ref, or an unresolved name), Kind, State, Reason, TaskID (far side's), ContextID; the first carries Message, whose deadline_seconds and sent_at fix an ask's deadline
+//	receipt:    MessageID (an admitted inbound reply), InReplyTo (the outbound ask it answers), Sender (the ask's peer agent_id), ContextID (the ask's)
 type Record struct {
 	Type      Type       `json:"type"`
 	At        time.Time  `json:"at"`
@@ -110,6 +112,8 @@ func (r Record) key() string {
 		return "c"
 	case TypeOutbound:
 		return "s\x00" + r.MessageID
+	case TypeReceipt:
+		return "p\x00" + r.InReplyTo + "\x00" + r.MessageID
 	}
 	return "?\x00" + string(r.Type)
 }

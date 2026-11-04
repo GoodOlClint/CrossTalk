@@ -251,6 +251,12 @@ func (r *Receiver) receive(ctx context.Context, in Inbound, resume bool) Result 
 	}
 	defer r.unreserve()
 
+	if !in.Native && in.Sender.registered() && m.InReplyTo != nil && r.askedPeer(*m.InReplyTo, in.Sender.AgentID, m.ContextID) {
+		if err := r.j.Append(journal.Record{Type: journal.TypeReceipt, MessageID: m.MessageID, InReplyTo: *m.InReplyTo, Sender: in.Sender.AgentID, ContextID: m.ContextID}); err != nil {
+			return reject(ReasonJournal)
+		}
+	}
+
 	if in.Native && in.Sender.registered() && in.Sender.AgentID == self.AgentID {
 		return r.nativeReply(ctx, key, m, self)
 	}
@@ -292,6 +298,29 @@ func (r *Receiver) receive(ctx context.Context, in Inbound, resume bool) Result 
 		r.closeRoute(rt)
 	}
 	return Result{MessageID: m.MessageID, State: st}
+}
+
+// askedPeer reports whether askID is an outbound ask of this agent sent to
+// agentID in conversation contextID.
+func (r *Receiver) askedPeer(askID, agentID, contextID string) bool {
+	l, ok := r.j.Latest(journal.Record{Type: journal.TypeOutbound, MessageID: askID})
+	if !ok || l.Kind != string(msg.Ask) || l.To != agentID {
+		return false
+	}
+	if l.ContextID != "" {
+		return l.ContextID == contextID
+	}
+	rs, err := r.j.Records()
+	if err != nil {
+		return false
+	}
+	for _, o := range rs {
+		var m msg.Message
+		if o.Type == journal.TypeOutbound && o.MessageID == askID && len(o.Message) > 0 && json.Unmarshal(o.Message, &m) == nil {
+			return m.ContextID == contextID
+		}
+	}
+	return false
 }
 
 func hopCheck(chain []string, selfID string) string {
