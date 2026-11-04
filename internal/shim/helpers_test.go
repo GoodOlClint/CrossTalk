@@ -153,6 +153,18 @@ func newWorld(t *testing.T) *world {
 	return w
 }
 
+// become rewrites f's session file as /clear or /resume does: same process and
+// socket, another session.
+func (w *world) become(f *fakeClaude, sessionID, name string) {
+	w.t.Helper()
+	f.sessionID, f.name = sessionID, name
+	rec := map[string]any{"pid": f.pid, "sessionId": sessionID, "name": name, "cwd": "/work/" + name, "status": "idle", "messagingSocketPath": f.sock}
+	b, _ := json.Marshal(rec)
+	if err := os.WriteFile(filepath.Join(w.sessions, itoa(f.pid)+".json"), b, 0o600); err != nil {
+		w.t.Fatal(err)
+	}
+}
+
 // harnesses is the production order: Codex over cx, then Claude on the
 // world's sessions directory.
 func (w *world) harnesses(cx codex.Threads) []harness.Harness {

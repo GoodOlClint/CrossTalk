@@ -31,8 +31,9 @@ func IsAgentID(s string) bool {
 
 // ResolveTarget resolves to by its shape. An agent_id-shaped to matches a
 // registered agent_id, then a native agent_id, and never a name. Any other to
-// matches a registered name without discovery, then a native name. An empty to
-// matches nothing.
+// matches a registered name without discovery, then a native name; a single
+// native match whose session is registered under another name resolves to that
+// registration. An empty to matches nothing.
 func ResolveTarget(ctx context.Context, reg *registry.Registry, discover func(context.Context) ([]Session, error), to string) (Target, error) {
 	if to == "" {
 		return Target{}, nil
@@ -52,6 +53,14 @@ func ResolveTarget(ctx context.Context, reg *registry.Registry, discover func(co
 	for _, s := range ss {
 		if id && identity.AgentID(string(s.Harness), s.SessionRef) == to || !id && s.Name == to {
 			native = append(native, s)
+		}
+	}
+	if len(native) == 1 && !id {
+		nid := identity.AgentID(string(native[0].Harness), native[0].SessionRef)
+		for _, d := range ds {
+			if d.AgentID == nid {
+				return Target{Desc: d, Registered: true}, nil
+			}
 		}
 	}
 	return Target{Native: native}, nil

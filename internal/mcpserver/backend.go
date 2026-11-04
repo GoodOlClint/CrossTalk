@@ -28,6 +28,8 @@ type Result struct {
 	MessageID string        `json:"message_id"`
 	State     adapter.State `json:"state"`
 	Reason    string        `json:"reason,omitempty"`
+	// Hint tells the model its next step; Reason stays the stable code.
+	Hint string `json:"hint,omitempty"`
 }
 
 type MailboxEntry struct {

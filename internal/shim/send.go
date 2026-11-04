@@ -25,6 +25,12 @@ const (
 	ReasonAlreadyReplied = "already_replied"
 )
 
+const (
+	hintNativeReachable   = "This session has no CrossTalk binding yet, so it takes no ask or command. send_message with the default kind reaches it; if CrossTalk is installed there, its first CrossTalk call binds it, and then ask works."
+	hintNativeUnreachable = "This session has no CrossTalk binding yet and its harness reports it unreachable, so nothing can reach it now. Check list_agents later; if CrossTalk is installed there, its first CrossTalk call binds it, and then ask works."
+	hintAmbiguousName     = "Several sessions carry this name. Find the one you mean in list_agents and address it by agent_id."
+)
+
 // ErrAskClosed is what Options.OnReply returns when the ask's task reached a
 // terminal state before the reply could complete it.
 var ErrAskClosed = errors.New("shim: ask is closed")
@@ -172,6 +178,9 @@ func (st *AgentState) deliver(ctx context.Context, m msg.Message) mcpserver.Resu
 	finish := func(to string, state adapter.State, reason string) mcpserver.Result {
 		st.outbound(m, to, state, reason, false)
 		res.State, res.Reason = state, reason
+		if reason == ReasonAmbiguousName {
+			res.Hint = hintAmbiguousName
+		}
 		return res
 	}
 	var fs []found
@@ -202,10 +211,19 @@ func (st *AgentState) deliver(ctx context.Context, m msg.Message) mcpserver.Resu
 		return res
 	}
 	if m.Kind != msg.Inform {
-		if len(tgt.Native) == 0 {
+		switch len(tgt.Native) {
+		case 0:
 			return finish(m.To, adapter.Rejected, ReasonNoSuchAgent)
+		case 1:
+		default:
+			return finish(m.To, adapter.Rejected, ReasonAmbiguousName)
 		}
-		return finish(m.To, adapter.Rejected, ReasonNativeInformOnly)
+		res := finish(m.To, adapter.Rejected, ReasonNativeInformOnly)
+		res.Hint = hintNativeUnreachable
+		if tgt.Native[0].Reachable {
+			res.Hint = hintNativeReachable
+		}
+		return res
 	}
 	b, ad, state, reason := st.nativeTarget(ctx, tgt.Native, fs)
 	if ad == nil {
