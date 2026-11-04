@@ -20,7 +20,8 @@ import (
 // ControlSocketRel is the managed daemon socket, relative to the home directory.
 const ControlSocketRel = ".codex/app-server-control/app-server-control.sock"
 
-// WriteTimeout bounds every websocket write, including the close frame.
+// WriteTimeout bounds every websocket write, including the close frame; a
+// caller's earlier context deadline takes precedence.
 var WriteTimeout = 5 * time.Second
 
 var (
@@ -107,7 +108,7 @@ type Client struct {
 	opt      Options
 	endpoint string
 
-	wmu sync.Mutex
+	wsem chan struct{}
 
 	mu      sync.Mutex
 	nextID  int64
@@ -148,19 +149,29 @@ func Dial(ctx context.Context, endpoint string, opt Options) (*Client, error) {
 		conn.Close()
 		return nil, err
 	}
-	c := &Client{conn: conn, br: br, opt: opt, endpoint: ep, pending: map[string]chan response{}, done: make(chan struct{})}
+	c := newClient(conn, br, opt, ep)
 	go c.readLoop()
 	return c, nil
+}
+
+func newClient(conn net.Conn, br *bufio.Reader, opt Options, ep string) *Client {
+	return &Client{conn: conn, br: br, opt: opt, endpoint: ep, wsem: make(chan struct{}, 1), pending: map[string]chan response{}, done: make(chan struct{})}
 }
 
 // Endpoint is the normalized endpoint this client is connected to.
 func (c *Client) Endpoint() string { return c.endpoint }
 
-func (c *Client) Close() error {
-	c.wmu.Lock()
-	c.conn.SetWriteDeadline(time.Now().Add(WriteTimeout))
-	_ = WriteFrame(c.conn, OpClose, nil, true)
-	c.wmu.Unlock()
+func (c *Client) Close() error { return c.CloseContext(context.Background()) }
+
+// CloseContext closes the connection, sending the close frame only within
+// ctx's remaining time (capped by WriteTimeout).
+func (c *Client) CloseContext(ctx context.Context) error {
+	if deadline, ok := c.lock(ctx); ok {
+		if ctx.Err() == nil {
+			c.writeFrameCtx(ctx, OpClose, nil, deadline)
+		}
+		c.unlock()
+	}
 	err := c.conn.Close()
 	<-c.done
 	return err
@@ -169,18 +180,60 @@ func (c *Client) Close() error {
 // Done is closed when the connection's read side ends.
 func (c *Client) Done() <-chan struct{} { return c.done }
 
-func (c *Client) write(raw []byte) error {
-	c.wmu.Lock()
-	defer c.wmu.Unlock()
+// lock acquires the write lock by min(ctx deadline, now+WriteTimeout) and
+// returns that deadline for the write that follows.
+func (c *Client) lock(ctx context.Context) (time.Time, bool) {
+	deadline := time.Now().Add(WriteTimeout)
+	if d, ok := ctx.Deadline(); ok && d.Before(deadline) {
+		deadline = d
+	}
+	if ctx.Err() != nil {
+		return deadline, false
+	}
+	t := time.NewTimer(time.Until(deadline))
+	defer t.Stop()
+	select {
+	case c.wsem <- struct{}{}:
+		return deadline, true
+	case <-ctx.Done():
+	case <-t.C:
+	}
+	return deadline, false
+}
+
+func (c *Client) unlock() { <-c.wsem }
+
+func (c *Client) write(ctx context.Context, raw []byte) error {
+	deadline, ok := c.lock(ctx)
+	if !ok {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		return os.ErrDeadlineExceeded
+	}
+	defer c.unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if c.opt.OnFrame != nil {
 		c.opt.OnFrame(DirOut, raw)
 	}
-	return c.writeFrame(OpText, raw)
+	return c.writeFrameCtx(ctx, OpText, raw, deadline)
 }
 
-func (c *Client) writeFrame(op byte, payload []byte) error {
-	c.conn.SetWriteDeadline(time.Now().Add(WriteTimeout))
+// writeFrameCtx requires the write lock; the cancellation hook must finish
+// before the lock is released or it could expire the next writer's deadline.
+func (c *Client) writeFrameCtx(ctx context.Context, op byte, payload []byte, deadline time.Time) error {
+	fired := make(chan struct{})
+	stop := context.AfterFunc(ctx, func() {
+		c.conn.SetWriteDeadline(time.Unix(1, 0))
+		close(fired)
+	})
+	c.conn.SetWriteDeadline(deadline)
 	err := WriteFrame(c.conn, op, payload, true)
+	if !stop() {
+		<-fired
+	}
 	if err != nil {
 		c.conn.Close()
 	}
@@ -214,9 +267,9 @@ func (c *Client) readLoop() {
 		if op != OpPing {
 			return nil
 		}
-		c.wmu.Lock()
-		defer c.wmu.Unlock()
-		return c.writeFrame(OpPong, payload)
+		c.wsem <- struct{}{}
+		defer c.unlock()
+		return c.writeFrameCtx(context.Background(), OpPong, payload, time.Now().Add(WriteTimeout))
 	}
 	var err error
 	for {
@@ -268,7 +321,7 @@ func (c *Client) refuseServerRequest(id json.RawMessage) {
 		"jsonrpc": "2.0", "id": id,
 		"error": map[string]any{"code": -32601, "message": "crosstalk does not serve server requests"},
 	})
-	_ = c.write(raw)
+	_ = c.write(context.Background(), raw)
 }
 
 // Call sends a request and decodes the result into out (if non-nil). Errors:
@@ -292,6 +345,9 @@ func (c *Client) CallRaw(ctx context.Context, method string, params any) (json.R
 	if params == nil {
 		params = struct{}{}
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("%w: %s: %w", ErrNotSent, method, err)
+	}
 	c.mu.Lock()
 	if c.readErr != nil || isClosed(c.done) {
 		c.mu.Unlock()
@@ -305,7 +361,7 @@ func (c *Client) CallRaw(ctx context.Context, method string, params any) (json.R
 
 	raw, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params})
 	if err == nil {
-		err = c.write(raw)
+		err = c.write(ctx, raw)
 	}
 	if err != nil {
 		c.mu.Lock()
@@ -340,7 +396,7 @@ func (c *Client) Notify(method string, params any) error {
 	if err != nil {
 		return err
 	}
-	if err := c.write(raw); err != nil {
+	if err := c.write(context.Background(), raw); err != nil {
 		return fmt.Errorf("%w: %s: %v", ErrNotSent, method, err)
 	}
 	return nil

@@ -103,7 +103,7 @@ func (a *Adapter) connect(ctx context.Context, ep string) (*appserver.Client, er
 		return nil, err
 	}
 	if _, err := c.Initialize(ctx, a.clientInfo()); err != nil {
-		c.Close()
+		c.CloseContext(ctx)
 		return nil, err
 	}
 	return c, nil
