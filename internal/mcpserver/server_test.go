@@ -45,7 +45,9 @@ func newEnv(t *testing.T, ppid int, fb *FakeBackend) *env {
 func (e *env) start(ppid int) {
 	t := e.t
 	e.reg = registry.New(e.stateDir)
-	e.srv = New(Options{Backend: e.fb.AsBackend(), Registry: e.reg, SessionDir: e.sessionDir, PPID: ppid, Alive: func(pid int) bool { return pid > 0 && pid < 900000 }})
+	hs := testHarnesses(t, e.sessionDir)
+	e.fb.Harnesses = hs[1:]
+	e.srv = New(Options{Backend: e.fb.AsBackend(), Registry: e.reg, Harnesses: hs, PPID: ppid})
 	st, ct := mcp.NewInMemoryTransports()
 	ctx := context.Background()
 	if _, err := e.srv.MCP().Connect(ctx, st, nil); err != nil {

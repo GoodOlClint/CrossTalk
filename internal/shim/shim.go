@@ -13,8 +13,7 @@ import (
 	"time"
 
 	"github.com/GoodOlClint/crosstalk/internal/adapter"
-	"github.com/GoodOlClint/crosstalk/internal/harness/claude"
-	"github.com/GoodOlClint/crosstalk/internal/harness/codex"
+	"github.com/GoodOlClint/crosstalk/internal/harness"
 	"github.com/GoodOlClint/crosstalk/internal/mcpserver"
 	"github.com/GoodOlClint/crosstalk/internal/msg"
 	"github.com/GoodOlClint/crosstalk/internal/registry"
@@ -53,12 +52,6 @@ type ClaimTransport interface {
 	SetClaim(ctx context.Context, owner, target registry.Descriptor, claimed bool) error
 }
 
-// CodexHarness is the Codex adapter plus loaded-thread discovery.
-type CodexHarness interface {
-	adapter.Adapter
-	LoadedThreads(ctx context.Context, extraEndpoints ...string) []codex.LoadedThread
-}
-
 // A2AListener is what Options.StartA2A returns for one agent; URL and
 // CredentialRef are published in its descriptor.
 type A2AListener struct {
@@ -70,16 +63,12 @@ type A2AListener struct {
 type Options struct {
 	// StateDir is ~/.local/state/crosstalk; "" means registry.DefaultDir().
 	StateDir string
-	// SessionsDir is ~/.claude/sessions; "" means claude.DefaultSessionsDir().
-	SessionsDir string
-	// PPID is the Claude session pid; 0 means os.Getppid().
+	// Harnesses are tried in order for binding and unioned for discovery
+	// (ADR 0008); none means every caller is unbound.
+	Harnesses []harness.Harness
+	// PPID is the parent pid every request context carries; 0 means
+	// os.Getppid().
 	PPID int
-	// Alive reports whether a Claude session pid is running; nil means the
-	// harness and mcpserver defaults.
-	Alive func(pid int) bool
-	// Codex is the Codex harness; nil means a codex.Adapter on the default
-	// control socket.
-	Codex CodexHarness
 	// Transport carries messages to shim-served agents; nil makes every such
 	// send unreachable with reason no_transport.
 	Transport Transport
@@ -98,10 +87,10 @@ type Options struct {
 // Shim implements mcpserver.Backend, mcpserver.Binder,
 // mcpserver.HarnessBinder and mcpserver.AgentCloser.
 type Shim struct {
-	opt   Options
-	reg   *registry.Registry
-	codex CodexHarness
-	log   *slog.Logger
+	opt     Options
+	reg     *registry.Registry
+	ingress harness.NativeIngress
+	log     *slog.Logger
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -127,13 +116,6 @@ func New(opt Options) (*Shim, error) {
 		}
 		opt.StateDir = d
 	}
-	if opt.SessionsDir == "" {
-		d, err := claude.DefaultSessionsDir()
-		if err != nil {
-			return nil, err
-		}
-		opt.SessionsDir = d
-	}
 	if opt.PPID == 0 {
 		opt.PPID = os.Getppid()
 	}
@@ -143,21 +125,24 @@ func New(opt Options) (*Shim, error) {
 	if opt.Now == nil {
 		opt.Now = time.Now
 	}
-	s := &Shim{opt: opt, reg: registry.New(opt.StateDir), codex: opt.Codex, log: opt.Logger, agents: map[string]*AgentState{}}
+	s := &Shim{opt: opt, reg: registry.New(opt.StateDir), log: opt.Logger, agents: map[string]*AgentState{}}
 	if s.log == nil {
 		s.log = slog.Default()
 	}
-	if s.codex == nil {
-		s.codex = &codex.Adapter{Logger: s.log, ClientInfo: codexClientInfo}
+	for _, h := range opt.Harnesses {
+		if ni, ok := h.(harness.NativeIngress); ok {
+			s.ingress = ni
+			break
+		}
 	}
 	s.ctx, s.cancel = context.WithCancel(context.Background())
 	return s, nil
 }
 
 // MCPOptions are the mcpserver options that share this shim's registry,
-// sessions directory, parent pid and liveness check.
+// harnesses and parent pid.
 func (s *Shim) MCPOptions() mcpserver.Options {
-	return mcpserver.Options{Backend: s, Registry: s.reg, SessionDir: s.opt.SessionsDir, PPID: s.opt.PPID, Alive: s.opt.Alive}
+	return mcpserver.Options{Backend: s, Registry: s.reg, Harnesses: s.opt.Harnesses, PPID: s.opt.PPID}
 }
 
 func (s *Shim) Registry() *registry.Registry { return s.reg }
@@ -189,11 +174,6 @@ func (s *Shim) Close() error {
 	}
 	s.cancel()
 	return errors.Join(errs...)
-}
-
-func (s *Shim) claudeAdapter(udsPath string) *claude.Adapter {
-	ppid := s.opt.PPID
-	return &claude.Adapter{SessionsDir: s.opt.SessionsDir, PPID: func() int { return ppid }, UDSPath: udsPath, Alive: s.opt.Alive}
 }
 
 func (s *Shim) now() time.Time { return s.opt.Now().UTC() }

@@ -2,13 +2,10 @@ package mcpserver
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"sort"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/GoodOlClint/crosstalk/internal/adapter"
 	"github.com/GoodOlClint/crosstalk/internal/identity"
 )
 
@@ -50,22 +47,6 @@ func (s *Server) listAgentsTool(ctx context.Context, req *mcp.CallToolRequest, _
 func (s *Server) listAgents(ctx context.Context) ([]Row, []string) {
 	rows := map[string]*Row{}
 	var warnings []string
-
-	paths, _ := filepath.Glob(filepath.Join(s.sessionDir, "*.json"))
-	for _, p := range paths {
-		cs, err := readClaudeSession(p)
-		if err != nil || cs.SessionID == "" || !s.alive(cs.PID) {
-			continue
-		}
-		id := identity.AgentID(string(adapter.Claude), cs.SessionID)
-		reachable := false
-		if cs.MessagingSocketPath != "" {
-			if fi, err := os.Stat(cs.MessagingSocketPath); err == nil && fi.Mode()&os.ModeSocket != 0 {
-				reachable = true
-			}
-		}
-		rows[id] = &Row{Name: cs.Name, Harness: string(adapter.Claude), Cwd: cs.Cwd, Status: cs.Status, Reachable: reachable, AgentID: id}
-	}
 
 	sessions, err := s.backend.Discover(ctx)
 	if err != nil {

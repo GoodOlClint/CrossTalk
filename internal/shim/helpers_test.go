@@ -14,11 +14,14 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/GoodOlClint/crosstalk/internal/adapter"
+	"github.com/GoodOlClint/crosstalk/internal/harness"
+	"github.com/GoodOlClint/crosstalk/internal/harness/claude"
 	"github.com/GoodOlClint/crosstalk/internal/harness/codex"
 	"github.com/GoodOlClint/crosstalk/internal/identity"
 	"github.com/GoodOlClint/crosstalk/internal/mcpserver"
 	"github.com/GoodOlClint/crosstalk/internal/procstart"
 	"github.com/GoodOlClint/crosstalk/internal/registry"
+	"github.com/GoodOlClint/crosstalk/internal/udsingress"
 )
 
 var fakeStart = time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC)
@@ -150,6 +153,16 @@ func newWorld(t *testing.T) *world {
 	return w
 }
 
+// harnesses is the production order: Codex over cx, then Claude on the
+// world's sessions directory.
+func (w *world) harnesses(cx codex.Threads) []harness.Harness {
+	ch, err := claude.NewHarness(claude.HarnessOptions{SessionsDir: w.sessions, Alive: fakePID, Ingress: udsingress.NewIngress})
+	if err != nil {
+		w.t.Fatal(err)
+	}
+	return []harness.Harness{codex.NewHarness(codex.HarnessOptions{Adapter: cx, Directory: registry.New(w.state)}), ch}
+}
+
 type node struct {
 	t   *testing.T
 	sh  *Shim
@@ -159,7 +172,7 @@ type node struct {
 
 func (w *world) node(ppid int, tr Transport, edit func(*Options)) *node {
 	t := w.t
-	opt := Options{StateDir: w.state, SessionsDir: w.sessions, PPID: ppid, Alive: fakePID, Codex: w.codex, Transport: tr}
+	opt := Options{StateDir: w.state, PPID: ppid, Harnesses: w.harnesses(w.codex), Transport: tr}
 	if edit != nil {
 		edit(&opt)
 	}

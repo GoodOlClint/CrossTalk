@@ -4,6 +4,7 @@ import (
 	"sync"
 
 	"github.com/GoodOlClint/crosstalk/internal/adapter"
+	"github.com/GoodOlClint/crosstalk/internal/harness"
 	"github.com/GoodOlClint/crosstalk/internal/journal"
 	"github.com/GoodOlClint/crosstalk/internal/registry"
 )
@@ -14,6 +15,7 @@ type Agent struct {
 	id         string
 	harness    adapter.Harness
 	sessionRef string
+	req        harness.RequestContext
 
 	ready chan struct{}
 	err   error
@@ -26,9 +28,13 @@ type Agent struct {
 	replay      journal.Replay
 }
 
-func (a *Agent) ID() string                           { return a.id }
-func (a *Agent) Harness() adapter.Harness             { return a.harness }
-func (a *Agent) SessionRef() string                   { return a.sessionRef }
+func (a *Agent) ID() string               { return a.id }
+func (a *Agent) Harness() adapter.Harness { return a.harness }
+func (a *Agent) SessionRef() string       { return a.sessionRef }
+
+// Request is the context of the call that registered the agent; a
+// HarnessBinder passes it to harness.Harness.Bind.
+func (a *Agent) Request() harness.RequestContext      { return a.req }
 func (a *Agent) Name() string                         { return a.reg.Name() }
 func (a *Agent) Descriptor() registry.Descriptor      { return a.reg.Descriptor() }
 func (a *Agent) Journal() *journal.Journal            { return a.j }

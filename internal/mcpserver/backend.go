@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/GoodOlClint/crosstalk/internal/adapter"
+	"github.com/GoodOlClint/crosstalk/internal/harness"
 	"github.com/GoodOlClint/crosstalk/internal/msg"
 	"github.com/GoodOlClint/crosstalk/internal/registry"
 )
@@ -42,15 +43,8 @@ type MailboxEntry struct {
 	SessionRef string        `json:"session_ref"`
 }
 
-// Session is one harness session a Backend can see (today: loaded Codex threads).
-type Session struct {
-	Harness    adapter.Harness
-	SessionRef string
-	Name       string
-	Cwd        string
-	Status     string
-	Reachable  bool
-}
+// Session is one harness session a Backend can see.
+type Session = harness.Session
 
 // Backend does the messaging work behind the tools. from/of/owner is the bound
 // caller; target is a registered agent served by another shim process.
@@ -119,7 +113,7 @@ func (e *Error) Error() string {
 func rejected(reason string) *Error { return &Error{Code: CodeRejected, Reason: reason} }
 
 // Unwired is the Backend used until the receiver, adapter and A2A slices are
-// integrated: discovery sees no Codex threads and every send is unreachable.
+// integrated: discovery sees no sessions and every send is unreachable.
 type Unwired struct{}
 
 var errUnwired = &Error{Code: string(adapter.Unreachable), Reason: "backend_not_wired"}
