@@ -3,6 +3,7 @@ package mcpserver
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -447,5 +448,27 @@ func TestCloseRemovesOwnDescriptors(t *testing.T) {
 	}
 	if _, err := os.Stat(journal.Path(e.stateDir, codexID("T-1"))); err != nil {
 		t.Fatalf("journal removed: %v", err)
+	}
+}
+
+type timedOutCloser struct{ *FakeBackend }
+
+func (timedOutCloser) CloseAgent(*Agent) error { return ErrCloseTimeout }
+
+func TestCloseKeepsOwnershipWhenAgentCloseTimesOut(t *testing.T) {
+	e := newEnv(t, 999999, NewFakeBackend())
+	e.srv.backend = timedOutCloser{e.fb}
+	e.mustOK(thread("T-1"), "send_message", sendArgs("x", "1"))
+	id := codexID("T-1")
+	e.cs.Close()
+	if err := e.srv.Close(); !errors.Is(err, ErrCloseTimeout) {
+		t.Fatalf("Close err = %v, want ErrCloseTimeout", err)
+	}
+	if d := e.descriptor(id); d.AgentID != id {
+		t.Fatalf("descriptor %+v", d)
+	}
+	_, err := registry.New(e.stateDir).Acquire(registry.Request{AgentID: id, HarnessName: "other", Harness: "codex", Cwd: "/w"})
+	if !errors.Is(err, registry.ErrAgentHeld) {
+		t.Fatalf("Acquire err = %v, want ErrAgentHeld while a handler may still run", err)
 	}
 }

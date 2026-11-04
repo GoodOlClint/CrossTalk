@@ -89,10 +89,14 @@ func (s *Server) Close() error {
 	for _, a := range agents {
 		<-a.ready
 		if a.err == nil {
+			var cerr error
 			if ac != nil {
-				errs = append(errs, ac.CloseAgent(a))
+				cerr = ac.CloseAgent(a)
+				errs = append(errs, cerr)
 			}
-			errs = append(errs, a.close())
+			if !errors.Is(cerr, ErrCloseTimeout) {
+				errs = append(errs, a.close())
+			}
 		}
 	}
 	return errors.Join(errs...)
@@ -151,7 +155,9 @@ func (s *Server) register(ctx context.Context, a *Agent, c caller) (notice strin
 	defer func() {
 		if err != nil {
 			if ac, ok := s.backend.(AgentCloser); ok {
-				ac.CloseAgent(a)
+				if errors.Is(ac.CloseAgent(a), ErrCloseTimeout) {
+					return
+				}
 			}
 			a.close()
 		}

@@ -115,6 +115,8 @@ type Server struct {
 	peerHash  [32]byte
 	closeOnce sync.Once
 	closed    chan struct{}
+	closeErr  error
+	drained   chan struct{}
 
 	base   context.Context
 	cancel context.CancelFunc
@@ -146,7 +148,7 @@ func NewServer(c Config) *Server {
 		c.Tasks = NewMemoryTaskStore()
 	}
 	base, cancel := context.WithCancel(context.Background())
-	s := &Server{cfg: c, base: base, cancel: cancel, closed: make(chan struct{}), tasks: newStore(c.Tasks, c.Logger)}
+	s := &Server{cfg: c, base: base, cancel: cancel, closed: make(chan struct{}), drained: make(chan struct{}), tasks: newStore(c.Tasks, c.Logger)}
 	for _, id := range s.tasks.pending() {
 		if t, ok := s.tasks.byMessage(id); ok {
 			s.armDeadline(t)
@@ -306,10 +308,17 @@ func (s *Server) Serve(ctx context.Context) error {
 	return nil
 }
 
+// ErrWorkersRunning: Close gave up waiting for in-flight receives, which may
+// still dispatch.
+var ErrWorkersRunning = errors.New("a2a: receives still running after close")
+
 // Close drops open connections, including default-wait SendMessage calls,
 // cancels in-flight receives and waits for them to return.
-func (s *Server) Close() error {
-	var err error
+func (s *Server) Close() error { return s.CloseContext(context.Background()) }
+
+// CloseContext is Close with the wait for in-flight receives bounded by ctx;
+// on expiry it returns ErrWorkersRunning.
+func (s *Server) CloseContext(ctx context.Context) error {
 	s.closeOnce.Do(func() {
 		close(s.closed)
 		s.cancel()
@@ -318,14 +327,22 @@ func (s *Server) Close() error {
 		s.mu.Unlock()
 		switch {
 		case srv != nil:
-			err = srv.Close()
+			s.closeErr = srv.Close()
 		case ln != nil:
-			err = ln.Close()
+			s.closeErr = ln.Close()
 		}
 		s.tasks.stopTimers()
-		s.wg.Wait()
+		go func() {
+			s.wg.Wait()
+			close(s.drained)
+		}()
 	})
-	return err
+	select {
+	case <-s.drained:
+		return s.closeErr
+	case <-ctx.Done():
+		return errors.Join(s.closeErr, fmt.Errorf("%w: %w", ErrWorkersRunning, ctx.Err()))
+	}
 }
 
 // CompleteAsk completes the ask task for messageID with replyText as its
