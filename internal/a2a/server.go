@@ -22,6 +22,7 @@ import (
 	sdk "github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
 
+	"github.com/GoodOlClint/crosstalk/internal/adapter"
 	"github.com/GoodOlClint/crosstalk/internal/receiver"
 	"github.com/GoodOlClint/crosstalk/internal/udsingress"
 )
@@ -43,10 +44,11 @@ const (
 )
 
 var (
-	ErrNoSuchAsk = errors.New("a2a: no ask task for message_id")
-	ErrAskClosed = errors.New("a2a: ask task is already terminal")
-	ErrNotListen = errors.New("a2a: Listen has not been called")
-	errTokenMode = errors.New("a2a: token file is not a 0600 regular file")
+	ErrNoSuchAsk  = errors.New("a2a: no ask task for message_id")
+	ErrNoSuchTask = errors.New("a2a: no task for message_id")
+	ErrAskClosed  = errors.New("a2a: ask task is already terminal")
+	ErrNotListen  = errors.New("a2a: Listen has not been called")
+	errTokenMode  = errors.New("a2a: token file is not a 0600 regular file")
 )
 
 type Receiver interface {
@@ -86,6 +88,8 @@ type Config struct {
 	Claim  ClaimFunc
 	Limits Limits
 	Logger *slog.Logger
+	// Tasks persists tasks; nil keeps them in memory for this Server only.
+	Tasks TaskStore
 }
 
 type Server struct {
@@ -119,8 +123,17 @@ func NewServer(c Config) *Server {
 	if c.Logger == nil {
 		c.Logger = slog.New(slog.DiscardHandler)
 	}
+	if c.Tasks == nil {
+		c.Tasks = NewMemoryTaskStore()
+	}
 	base, cancel := context.WithCancel(context.Background())
-	return &Server{cfg: c, base: base, cancel: cancel, closed: make(chan struct{}), tasks: newStore()}
+	s := &Server{cfg: c, base: base, cancel: cancel, closed: make(chan struct{}), tasks: newStore(c.Tasks, c.Logger)}
+	for _, id := range s.tasks.pending() {
+		if t, ok := s.tasks.byMessage(id); ok {
+			s.armDeadline(t)
+		}
+	}
+	return s
 }
 
 // Listen reads (creating it on first start) the peer token and binds
@@ -204,6 +217,23 @@ func (s *Server) Close() error {
 func (s *Server) CompleteAsk(messageID, replyText string) error {
 	return s.tasks.completeAsk(messageID, replyText)
 }
+
+// Resolve applies a delivery outcome learned after the receive returned (a
+// replay or a reconcile) to messageID's task: accepted or queued completes an
+// inform or command, rejected or unreachable fails it, unknown leaves it
+// working. A terminal task is left as it is.
+func (s *Server) Resolve(messageID string, state adapter.State, reason string) error {
+	t, ok := s.tasks.byMessage(messageID)
+	if !ok {
+		return ErrNoSuchTask
+	}
+	s.apply(t, receiver.Result{MessageID: messageID, State: state, Reason: reason})
+	return nil
+}
+
+// PendingMessageIDs lists the message_ids of non-terminal tasks, the ones a
+// caller may reconcile with Resolve.
+func (s *Server) PendingMessageIDs() []string { return s.tasks.pending() }
 
 func (s *Server) enforcer() a2asrv.CallInterceptor {
 	ic, err := a2asrv.NewAgentCardEnforcer(s.Card())

@@ -35,6 +35,7 @@ type env struct {
 	srv     *Server
 	url     string
 	peerTok string
+	stop    func()
 
 	mu     sync.Mutex
 	self   receiver.Recipient
@@ -44,7 +45,14 @@ type env struct {
 
 func newEnv(t *testing.T, lim receiver.Limits, alim Limits, hook func(*Server)) *env {
 	t.Helper()
-	e := &env{t: t, dir: t.TempDir(), fake: adapter.NewFake(adapter.Claude), agents: map[string]Peer{}, toks: map[string]string{}}
+	return newEnvOn(t, t.TempDir(), nil, lim, alim, hook)
+}
+
+// newEnvOn builds the env on dir; tasks, when set, makes the task store from
+// the env's journal.
+func newEnvOn(t *testing.T, dir string, tasks func(*journal.Journal) TaskStore, lim receiver.Limits, alim Limits, hook func(*Server)) *env {
+	t.Helper()
+	e := &env{t: t, dir: dir, fake: adapter.NewFake(adapter.Claude), agents: map[string]Peer{}, toks: map[string]string{}}
 	b := adapter.Binding{Harness: adapter.Claude, SessionRef: "sess-self"}
 	e.self = receiver.Recipient{AgentID: selfID, Name: "self", Role: registry.RolePrimary, Binding: b}
 	j, _, err := journal.Open(e.dir, selfID, journal.Binding{InstanceID: msg.NewUUIDv7(), SessionRef: b.SessionRef}, journal.Options{})
@@ -61,7 +69,12 @@ func newEnv(t *testing.T, lim receiver.Limits, alim Limits, hook func(*Server)) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	var ts TaskStore
+	if tasks != nil {
+		ts = tasks(j)
+	}
 	e.srv = NewServer(Config{
+		Tasks:         ts,
 		Receiver:      rcv,
 		Version:       "test-1",
 		PeerTokenPath: peerPath,
@@ -87,13 +100,17 @@ func newEnv(t *testing.T, lim receiver.Limits, alim Limits, hook func(*Server)) 
 	}
 	done := make(chan error, 1)
 	go func() { done <- e.srv.Serve(context.Background()) }()
-	t.Cleanup(func() {
-		e.srv.Close()
-		if err := <-done; err != nil {
-			t.Errorf("Serve: %v", err)
-		}
-		j.Close()
-	})
+	var once sync.Once
+	e.stop = func() {
+		once.Do(func() {
+			e.srv.Close()
+			if err := <-done; err != nil {
+				t.Errorf("Serve: %v", err)
+			}
+			j.Close()
+		})
+	}
+	t.Cleanup(e.stop)
 	return e
 }
 
