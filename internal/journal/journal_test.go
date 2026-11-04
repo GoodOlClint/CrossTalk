@@ -376,27 +376,26 @@ func TestRetentionKeepsOpenAskOriginal(t *testing.T) {
 	}
 }
 
-func TestRetentionKeepsWorkingOutboundAsk(t *testing.T) {
+func TestRetentionKeepsUnansweredOutboundAsk(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
 	j, _ := open(t, dir, Options{Now: func() time.Time { return now }})
 	j.Append(Record{Type: TypeOutbound, MessageID: "out", To: "bob", Kind: "ask", State: "accepted", TaskID: "far", Message: json.RawMessage(`{"deadline_seconds":0}`)})
-	j.Append(Record{Type: TypeTask, TaskID: "far", Kind: "ask", State: StateWorking})
 	j.Append(Record{Type: TypeOutbound, MessageID: "out-done", To: "bob", Kind: "inform", State: "accepted"})
 	j.Close()
 
 	j2, _ := reopenAfter(t, dir, now, 25*time.Hour)
 	if r, ok := j2.Latest(Record{Type: TypeOutbound, MessageID: "out"}); !ok || len(r.Message) == 0 {
-		t.Errorf("working outbound ask lost its record or body: %+v", r)
+		t.Errorf("unanswered outbound ask lost its record or body: %+v", r)
 	}
 	if _, ok := j2.Latest(Record{Type: TypeOutbound, MessageID: "out-done"}); ok {
 		t.Error("resolved outbound older than retention kept")
 	}
 
-	j2.Append(Record{Type: TypeTask, TaskID: "far", Kind: "ask", State: StateCompleted})
+	j2.Append(Record{Type: TypeDedupe, Sender: "bobid", MessageID: "answer", State: "accepted", Message: json.RawMessage(`{"message_id":"answer","in_reply_to":"out","kind":"inform"}`)})
 	j2.Close()
 	j3, _ := reopenAfter(t, dir, now, 50*time.Hour)
 	if _, ok := j3.Latest(Record{Type: TypeOutbound, MessageID: "out"}); ok {
-		t.Error("outbound kept after its task completed")
+		t.Error("outbound ask kept after it was answered")
 	}
 }

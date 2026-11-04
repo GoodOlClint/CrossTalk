@@ -149,9 +149,29 @@ type dependencies struct {
 	tasks    map[string]bool
 }
 
-func liveSet(latest map[string]Record) dependencies {
+// liveSet also keeps an accepted outbound ask until some record answers it
+// (names it in in_reply_to): the asker has no local task record for it and
+// its deadline re-arm reads this record.
+func liveSet(records []Record, latest map[string]Record) dependencies {
 	d := dependencies{messages: map[string]bool{}, tasks: map[string]bool{}}
+	answered := map[string]bool{}
+	for _, r := range records {
+		if r.InReplyTo != "" {
+			answered[r.InReplyTo] = true
+		} else if len(r.Message) > 0 {
+			var m struct {
+				InReplyTo *string `json:"in_reply_to"`
+			}
+			if json.Unmarshal(r.Message, &m) == nil && m.InReplyTo != nil {
+				answered[*m.InReplyTo] = true
+			}
+		}
+	}
 	for _, l := range latest {
+		if l.Type == TypeOutbound && l.Kind == "ask" && (l.State == "accepted" || l.State == "queued") && !answered[l.MessageID] {
+			d.messages[l.MessageID] = true
+			continue
+		}
 		if !unresolved(l) {
 			continue
 		}
@@ -227,7 +247,7 @@ func Open(stateDir, agentID string, binding Binding, opt Options) (*Journal, Rep
 	for _, r := range records {
 		latest[r.key()] = r
 	}
-	live := liveSet(latest)
+	live := liveSet(records, latest)
 	cutoff := opt.Now().Add(-opt.Retention)
 	var kept []Record
 	for _, r := range records {
