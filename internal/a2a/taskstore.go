@@ -152,6 +152,9 @@ func (st *store) replay(rs []journal.Record) {
 			if t != nil {
 				delete(st.byID, t.id)
 				delete(st.byMsg, t.messageID)
+				for _, h := range t.handles {
+					delete(st.byMsg, h)
+				}
 			}
 			continue
 		}
@@ -177,6 +180,9 @@ func (st *store) replay(rs []journal.Record) {
 				t.history = append(t.history, &m)
 				if state.Terminal() {
 					t.status = &m
+				}
+				if m.Role == sdk.MessageRoleUser {
+					st.index(t, m.ID)
 				}
 			}
 		}

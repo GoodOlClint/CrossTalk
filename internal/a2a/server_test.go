@@ -798,7 +798,7 @@ func TestAskClosedHookOnTerminalOutsideLock(t *testing.T) {
 	e = newEnv(t, receiver.Limits{}, Limits{}, func(s *Server) {
 		s.cfg.OnAskClosed = func(ids []string) {
 			for _, id := range ids {
-				open, known := s.AskOpen(id)
+				_, open, known := s.AskOpen(id)
 				mu.Lock()
 				closed[id] = known && !open
 				mu.Unlock()
@@ -816,7 +816,7 @@ func TestAskClosedHookOnTerminalOutsideLock(t *testing.T) {
 	if _, err := send(t, cl, ctx, d, true); err != nil {
 		t.Fatal(err)
 	}
-	if open, known := e.srv.AskOpen(d.ID); !open || !known {
+	if _, open, known := e.srv.AskOpen(d.ID); !open || !known {
 		t.Fatalf("fresh ask open=%v known=%v", open, known)
 	}
 	waitFor(t, "deadline closes the ask", func() bool { return isClosed(d.ID) })
@@ -841,7 +841,7 @@ func TestAskClosedHookOnTerminalOutsideLock(t *testing.T) {
 	if _, err := send(t, cl, ctx, in, false); err != nil {
 		t.Fatal(err)
 	}
-	if _, known := e.srv.AskOpen(in.ID); known {
+	if _, _, known := e.srv.AskOpen(in.ID); known {
 		t.Fatal("an inform is reported as an ask")
 	}
 	mu.Lock()

@@ -28,6 +28,7 @@ type task struct {
 	contextID string
 	principal string
 	messageID string
+	handles   []string
 	kind      msg.Kind
 	state     sdk.TaskState
 	delivery  string
@@ -175,6 +176,9 @@ func (st *store) remove(t *task) {
 	defer st.mu.Unlock()
 	delete(st.byID, t.id)
 	delete(st.byMsg, t.messageID)
+	for _, h := range t.handles {
+		delete(st.byMsg, h)
+	}
 	if err := st.ts.Save(t.record(journal.StateRemoved, nil)); err != nil {
 		st.log.Warn("a2a: task removal not journaled", "task", t.id, "err", err)
 	}
@@ -298,9 +302,14 @@ func (st *store) markUnknown(t *task) {
 	_ = st.saveLocked(t, nil)
 }
 
-func (st *store) appendHistory(t *task, m *sdk.Message) error {
+// appendContinuation records a continuation message of t and makes its
+// message id a handle that resolves to t.
+func (st *store) appendContinuation(t *task, m *sdk.Message) error {
 	st.mu.Lock()
 	defer st.mu.Unlock()
+	if o, ok := st.byMsg[m.ID]; ok && o != t {
+		return badMessage("message_id is in use by another task")
+	}
 	prev := *t
 	t.history = append(t.history, m)
 	t.updated = time.Now().UTC()
@@ -308,25 +317,34 @@ func (st *store) appendHistory(t *task, m *sdk.Message) error {
 		t.history, t.updated = prev.history, prev.updated
 		return err
 	}
+	st.index(t, m.ID)
 	return nil
 }
 
-// askOpen reports whether messageID names an ask task and whether that task
-// is still open.
-func (st *store) askOpen(messageID string) (open, known bool) {
+func (st *store) index(t *task, handle string) {
+	if handle == "" || handle == t.messageID || slices.Contains(t.handles, handle) {
+		return
+	}
+	t.handles = append(t.handles, handle)
+	st.byMsg[handle] = t
+}
+
+// askOpen reports whether messageID is a handle of an ask task, that task's
+// id, and whether the task is still open.
+func (st *store) askOpen(messageID string) (taskID string, open, known bool) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	t, ok := st.byMsg[messageID]
 	if !ok || t.kind != msg.Ask {
-		return false, false
+		return "", false, false
 	}
-	return !t.state.Terminal(), true
+	return string(t.id), !t.state.Terminal(), true
 }
 
 func (st *store) messageIDs(t *task) []string {
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	return []string{t.messageID}
+	return append([]string{t.messageID}, t.handles...)
 }
 
 func (st *store) terminalAsks() []*task {
@@ -347,6 +365,9 @@ func (st *store) completeAsk(messageID, text string) (*task, error) {
 	t, ok := st.byMsg[messageID]
 	if !ok || t.kind != msg.Ask {
 		return nil, ErrNoSuchAsk
+	}
+	if t.state == sdk.TaskStateCompleted && t.status != nil && messageText(t.status) == text {
+		return t, nil
 	}
 	reply := &sdk.Message{ID: msg.NewUUIDv7(), Role: sdk.MessageRoleAgent, ContextID: t.contextID, TaskID: t.id, Parts: sdk.ContentParts{sdk.NewTextPart(text)}}
 	delivery := ""
@@ -694,7 +715,10 @@ func (h *handler) continuation(ctx context.Context, snd receiver.Sender, m msg.M
 	}
 	wire.Metadata[MetaKey] = ct
 	if !res.Duplicate {
-		if err := s.tasks.appendHistory(t, wire); err != nil {
+		if err := s.tasks.appendContinuation(t, wire); err != nil {
+			if errors.Is(err, errBadMessage) {
+				return nil, err
+			}
 			return nil, sdk.NewError(sdk.ErrInternalError, "message could not be recorded")
 		}
 	}

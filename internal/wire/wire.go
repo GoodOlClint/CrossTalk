@@ -245,14 +245,14 @@ func (w *Wire) onReply(_ context.Context, st *shim.AgentState, original, reply m
 	return nil
 }
 
-// AskOpen reports, for an agent this Wire serves, whether messageID names an
-// ask task and whether it is still open.
-func (w *Wire) AskOpen(agentID, messageID string) (open, known bool) {
+// AskOpen reports, for an agent this Wire serves, whether messageID is a
+// handle of an ask task, the task's id, and whether it is still open.
+func (w *Wire) AskOpen(agentID, messageID string) (taskID string, open, known bool) {
 	w.mu.Lock()
 	srv := w.servers[agentID]
 	w.mu.Unlock()
 	if srv == nil {
-		return false, false
+		return "", false, false
 	}
 	return srv.AskOpen(messageID)
 }

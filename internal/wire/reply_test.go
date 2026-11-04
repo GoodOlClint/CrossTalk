@@ -1,6 +1,7 @@
 package wire
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"slices"
@@ -8,8 +9,12 @@ import (
 	"testing"
 	"time"
 
+	sdk "github.com/a2aproject/a2a-go/v2/a2a"
+
+	"github.com/GoodOlClint/crosstalk/internal/a2a"
 	"github.com/GoodOlClint/crosstalk/internal/journal"
 	"github.com/GoodOlClint/crosstalk/internal/mcpserver"
+	"github.com/GoodOlClint/crosstalk/internal/msg"
 	"github.com/GoodOlClint/crosstalk/internal/shim"
 )
 
@@ -98,6 +103,70 @@ func TestReplyBeforeDeadlineCompletesTask(t *testing.T) {
 	}
 	if rs := routeStates(t, dir, bob.id(), askID); !slices.Equal(rs[len(rs)-1:], []string{journal.StateClosed}) {
 		t.Fatalf("route states %v", rs)
+	}
+	if n := repliesFrom(alice, "bob"); n != 1 {
+		t.Fatalf("alice got %d replies", n)
+	}
+}
+
+// continueAsk sends a continuation of alice's ask askID to bob's task as
+// alice, and returns its message id.
+func continueAsk(t *testing.T, dir string, alice, bob *node, askID, text string) (string, string) {
+	t.Helper()
+	taskID := outboundTask(t, dir, alice.id(), askID)
+	tok, err := readOwnToken(descriptor(t, dir, alice.id()).CredentialRef)
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := msg.NewUUIDv7()
+	m := msg.Message{MessageID: id, ContextID: askID, Kind: msg.Ask, Delivery: msg.Immediate, TaskID: &taskID, Parts: []msg.Part{{Type: "text", Text: text}}}
+	if _, _, err := (&a2a.Client{Name: "alice"}).Send(context.Background(), descriptor(t, dir, bob.id()).A2AURL, tok, m, true); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "continuation injected", func() bool {
+		for _, w := range bob.codex.Writes() {
+			if w.Message.MessageID == id {
+				return true
+			}
+		}
+		return false
+	})
+	return id, taskID
+}
+
+func TestReplyToContinuationIDCompletesWholeTask(t *testing.T) {
+	dir, alice, bob := pair(t)
+	askID := alice.ok("ask", map[string]any{"to": "bob", "text": "first?"})["message_id"].(string)
+	contID, taskID := continueAsk(t, dir, alice, bob, askID, "revised?")
+	if rep := bob.ok("reply", map[string]any{"message_id": contID, "text": "done"}); rep["state"] != "accepted" {
+		t.Fatalf("reply %v", rep)
+	}
+	tok, _ := readOwnToken(descriptor(t, dir, alice.id()).CredentialRef)
+	task, err := (&a2a.Client{Name: "alice"}).GetTask(context.Background(), descriptor(t, dir, bob.id()).A2AURL, tok, taskID)
+	if err != nil || task.TaskState != sdk.TaskStateCompleted || task.Reply != "done" {
+		t.Fatalf("task %+v %v", task, err)
+	}
+	for _, id := range []string{askID, contID} {
+		if rs := routeStates(t, dir, bob.id(), id); len(rs) == 0 || rs[len(rs)-1] != journal.StateClosed {
+			t.Fatalf("route %s states %v", id, rs)
+		}
+	}
+}
+
+func TestReplyToOriginalThenContinuationDeliversOnce(t *testing.T) {
+	dir, alice, bob := pair(t)
+	askID := alice.ok("ask", map[string]any{"to": "bob", "text": "first?"})["message_id"].(string)
+	contID, _ := continueAsk(t, dir, alice, bob, askID, "revised?")
+	first := bob.ok("reply", map[string]any{"message_id": askID, "text": "A"})
+	if first["state"] != "accepted" {
+		t.Fatalf("reply %v", first)
+	}
+	isErr, out := bob.call("reply", map[string]any{"message_id": contID, "text": "B"})
+	if !isErr || out["reason"] != shim.ReasonAskClosed {
+		t.Fatalf("second reply to the same task %v %v", isErr, out)
+	}
+	if again := bob.ok("reply", map[string]any{"message_id": contID, "text": "A"}); again["message_id"] != first["message_id"] {
+		t.Fatalf("identical retry through the continuation id %v, first %v", again, first)
 	}
 	if n := repliesFrom(alice, "bob"); n != 1 {
 		t.Fatalf("alice got %d replies", n)

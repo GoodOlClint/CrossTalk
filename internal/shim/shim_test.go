@@ -310,12 +310,18 @@ func TestReplyRoutesThroughJournal(t *testing.T) {
 		t.Fatalf("route states after reply %v", routeStates)
 	}
 
-	if out := nb.ok(thread("T-bob"), "reply", map[string]any{"message_id": askID, "text": "4 again"}); out["state"] != "accepted" {
-		t.Fatalf("second reply %v", out)
+	nb.fails(thread("T-bob"), "reply", map[string]any{"message_id": askID, "text": "4 again"}, mcpserver.CodeRejected, ReasonAlreadyReplied)
+	if again := nb.ok(thread("T-bob"), "reply", map[string]any{"message_id": askID, "text": "4"}); again["message_id"] != rep["message_id"] || again["state"] != "accepted" {
+		t.Fatalf("identical retry %v, first %v", again, rep)
 	}
-	if len(alice.got()) != 2 {
-		t.Fatalf("second reply has its own message_id and is delivered: %q", alice.got())
+	if len(alice.got()) != 1 {
+		t.Fatalf("one reply per ask, alice got %q", alice.got())
 	}
+	mu.Lock()
+	if len(hooked) != 1 {
+		t.Fatalf("hook calls after retries %v", hooked)
+	}
+	mu.Unlock()
 }
 
 func TestNativeReplyBouncedToOwnSession(t *testing.T) {

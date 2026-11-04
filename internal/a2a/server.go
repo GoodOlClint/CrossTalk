@@ -290,9 +290,10 @@ func (s *Server) CompleteAsk(messageID, replyText string) error {
 	return nil
 }
 
-// AskOpen reports whether messageID names an ask task (known) and whether
-// that task is still open; a reply to a known, closed ask must not be sent.
-func (s *Server) AskOpen(messageID string) (open, known bool) {
+// AskOpen reports whether messageID is a handle (first message or a
+// continuation) of an ask task (known), the task's id, and whether the task
+// is still open; a reply to a known, closed ask must not be sent.
+func (s *Server) AskOpen(messageID string) (taskID string, open, known bool) {
 	return s.tasks.askOpen(messageID)
 }
 

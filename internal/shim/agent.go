@@ -37,6 +37,8 @@ type AgentState struct {
 	cancel context.CancelFunc
 	serve  chan struct{}
 
+	replyMu sync.Mutex
+
 	mu       sync.Mutex
 	up       bool
 	closed   bool
