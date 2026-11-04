@@ -6,6 +6,8 @@ import (
 	"errors"
 	"net"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -107,5 +109,56 @@ func TestCloseContextBoundedByCallerDeadline(t *testing.T) {
 	c2.CloseContext(expired)
 	if n := <-got; n != 0 {
 		t.Fatalf("peer received %d bytes from a close after cancellation", n)
+	}
+}
+
+type cancelDuringDeadlineConn struct {
+	net.Conn
+	cancel  context.CancelFunc
+	expired chan struct{}
+	once    sync.Once
+	armed   atomic.Bool
+}
+
+func (c *cancelDuringDeadlineConn) SetWriteDeadline(d time.Time) error {
+	if d.After(time.Now()) && !c.armed.Swap(true) {
+		c.cancel()
+		select {
+		case <-c.expired:
+		case <-time.After(20 * time.Millisecond):
+		}
+		return c.Conn.SetWriteDeadline(d)
+	}
+	err := c.Conn.SetWriteDeadline(d)
+	if !d.After(time.Now()) {
+		c.once.Do(func() { close(c.expired) })
+	}
+	return err
+}
+
+func TestCallRawCanceledWhileDeadlineSetSendsNothing(t *testing.T) {
+	old := WriteTimeout
+	WriteTimeout = 2 * time.Second
+	t.Cleanup(func() { WriteTimeout = old })
+	local, remote := net.Pipe()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	conn := &cancelDuringDeadlineConn{Conn: local, cancel: cancel, expired: make(chan struct{})}
+	c := newClient(conn, bufio.NewReader(conn), Options{}, "")
+	go c.readLoop()
+	t.Cleanup(func() {
+		remote.Close()
+		c.Close()
+	})
+	start := time.Now()
+	_, err := c.CallRaw(ctx, "turn/start", map[string]string{"text": "late"})
+	if el := time.Since(start); el > 200*time.Millisecond {
+		t.Fatalf("CallRaw took %v after cancellation during deadline setup; WriteTimeout is %v", el, WriteTimeout)
+	}
+	if !errors.Is(err, ErrNotSent) {
+		t.Fatalf("err = %v, want ErrNotSent", err)
+	}
+	if n := readAll(t, remote, 100*time.Millisecond); n != 0 {
+		t.Fatalf("peer received %d bytes from a call canceled before send", n)
 	}
 }

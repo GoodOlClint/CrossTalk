@@ -224,16 +224,23 @@ func (c *Client) write(ctx context.Context, raw []byte) error {
 // writeFrameCtx requires the write lock; the cancellation hook must finish
 // before the lock is released or it could expire the next writer's deadline.
 func (c *Client) writeFrameCtx(ctx context.Context, op byte, payload []byte, deadline time.Time) error {
+	c.conn.SetWriteDeadline(deadline)
 	fired := make(chan struct{})
 	stop := context.AfterFunc(ctx, func() {
 		c.conn.SetWriteDeadline(time.Unix(1, 0))
 		close(fired)
 	})
-	c.conn.SetWriteDeadline(deadline)
-	err := WriteFrame(c.conn, op, payload, true)
-	if !stop() {
-		<-fired
+	join := func() {
+		if !stop() {
+			<-fired
+		}
 	}
+	if err := ctx.Err(); err != nil {
+		join()
+		return err
+	}
+	err := WriteFrame(c.conn, op, payload, true)
+	join()
 	if err != nil {
 		c.conn.Close()
 	}
