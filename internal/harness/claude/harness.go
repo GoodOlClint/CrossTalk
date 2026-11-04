@@ -146,7 +146,7 @@ func (h *Harness) Render(m msg.Message, from harness.Identity) any {
 	if err != nil {
 		addr = ""
 	}
-	return Envelope(addr, from.Name, m)
+	return Envelope(addr, from.Name, from.Harness, m)
 }
 
 func (h *Harness) NativeReplyAddress(self harness.Self) string { return self.UDSPath }

@@ -370,7 +370,7 @@ func (s *Server) identify(pid int, started time.Time) receiver.Sender {
 	if role == "" {
 		role = registry.RolePrimary
 	}
-	return receiver.Sender{Verified: true, AgentID: d.AgentID, Name: d.Name, Role: role, PID: pid}
+	return receiver.Sender{Verified: true, AgentID: d.AgentID, Name: d.Name, Role: role, Harness: d.Harness, PID: pid}
 }
 
 // NewIngress is the Claude harness's native ingress (harness.NativeIngress)

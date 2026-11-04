@@ -52,6 +52,7 @@ type Sender struct {
 	AgentID   string
 	Name      string
 	Role      string
+	Harness   string
 	PID       int
 }
 
@@ -295,7 +296,7 @@ func (r *Receiver) receive(ctx context.Context, in Inbound, resume bool) Result 
 			return reject(ReasonJournal)
 		}
 	}
-	st, _ := r.ad.Inject(ctx, m, adapter.Delivery{Mode: m.Delivery, Target: self.Binding, VerifiedSender: in.Sender.Verified})
+	st, _ := r.ad.Inject(ctx, m, adapter.Delivery{Mode: m.Delivery, Target: self.Binding, VerifiedSender: in.Sender.Verified, SenderHarness: in.Sender.Harness})
 	if !st.Injectable() {
 		st = adapter.Unknown
 	}
