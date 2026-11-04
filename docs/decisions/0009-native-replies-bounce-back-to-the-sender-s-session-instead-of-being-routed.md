@@ -1,6 +1,6 @@
 # ADR 0009 — Native replies bounce back to the sender's session instead of being routed
 
-- **Status:** Accepted (provisional, operator 2026-11-04)
+- **Status:** Provisional
 - **Date:** 2026-11-04
 - **Deciders:** operator + Claude
 - **Context source:** live round 4 on 7bf18d1 (docs/spikes/10-live-2026-11-03.md, defect 6); operator ruling 2026-11-04
@@ -13,7 +13,7 @@ The shim never has the context to correlate a native frame. The model that sent 
 
 ## Decision
 
-A native frame from the bound session is never forwarded. The shim journals it as `bounced` and injects a short message back into the same session (through the harness `Inject`, from `crosstalk`) saying the native message was not delivered and listing the open inbound messages it may answer, each as `message_id`, sender name and kind, with the instruction to use `reply` (for an inbound message) or `send_message` (for anything else). With no open route it says so and names `send_message`. The bounce quotes the first line of the undelivered text so the model can repeat it.
+A native frame from the bound session is never forwarded. The shim journals it as `bounced` and injects a short message back into the same session (through the harness `Inject`, from `crosstalk`) saying the native message was not delivered and listing the open inbound messages it may answer (every open ask, then the ten newest informs and a count of the rest, ADR 0010), each as `message_id`, sender name and kind, with the instruction to use `reply` (for an inbound message) or `send_message` (for anything else). With no open route it says so and names `send_message`. The bounce quotes the first line of the undelivered text so the model can repeat it.
 
 A bounce is an injection, not a delivery: it opens no route, is never bounced itself, and completes nothing. `reply` remains the only path that completes an ask or closes a route (e6a3b2b). Delivered messages therefore always carry an authoritative `in_reply_to` or none.
 

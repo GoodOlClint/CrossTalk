@@ -1,13 +1,13 @@
 # ADR 0002 — Go for the shim
 
-- **Status:** Accepted (provisional, operator 2026-11-03; full review pending)
+- **Status:** Provisional
 - **Date:** 2026-11-03
 - **Deciders:** operator + Claude (Fable 5.1)
 - **Context source:** operator: "an MCP server written in something like go or rust"
 
 ## Context
 
-One shim runs per agent session, so startup time and footprint matter. It speaks MCP (stdio) to its model, websocket-over-unix JSON-RPC to the Codex daemon, a line protocol on unix sockets to Claude, and HTTP for A2A. It needs unix peer credentials (pid of the connecting process) for sender verification. The operator asked for a compiled language, Go or Rust.
+One shim process runs per harness MCP connection, so startup time and footprint matter. It speaks MCP (stdio) to its model, websocket-over-unix JSON-RPC to the Codex daemon, a line protocol on unix sockets to Claude, and HTTP for A2A. It needs unix peer credentials (pid of the connecting process) for sender verification. The operator asked for a compiled language, Go or Rust.
 
 ## Decision
 
@@ -22,6 +22,6 @@ Go. Single static binary, fast start, `net` and `golang.org/x/sys/unix` cover un
 ## Consequences
 
 - Repo is a Go module; build is `go build ./...`, tests `go test ./...`.
-- Peer-credential code is platform-specific; macOS first, Linux behind a build tag.
+- Peer-credential code is platform-specific: `internal/peercred` has a darwin and a linux implementation selected by file suffix, and other platforms return `ErrUnsupported`.
 - The macOS `LOCAL_PEERPID` call is verified by a committed spike (`docs/spikes/README.md`, spike 5) before the uds ingress is written.
 - The MCP Go SDK's stdio transport is the model-facing surface; everything else is net/http and a small websocket client.

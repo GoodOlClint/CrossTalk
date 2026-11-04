@@ -1,6 +1,6 @@
 # ADR 0008 — Each harness is one package behind a shared interface; adding one never edits another
 
-- **Status:** Accepted (provisional, operator 2026-11-03)
+- **Status:** Provisional
 - **Date:** 2026-11-03
 - **Deciders:** operator + Claude
 - **Context source:** operator instruction during the first live run: adding a harness such as Gemini must not require rewriting the Claude or Codex support. ADR 0007 is reserved for Codex toolOutput delivery (Codex-authored).
@@ -11,7 +11,7 @@ Design §2 already says "adding a harness = one adapter: register(), inject(mess
 
 ## Decision
 
-"Pluggable" here means an in-process Go interface with a compile-time list, not a runtime plugin: every release ships all supported harnesses in the one binary (operator, 2026-11-03). The bar is that adding a harness is one new package plus one line in `cmd/crosstalk`, with no change to the existing harness packages and no harness-specific code in the shim. Everything a harness contributes lives behind one interface in `internal/harness`, and the shim, mcpserver and A2A code never name a concrete harness.
+"Pluggable" here means an in-process Go interface with a compile-time list, not a runtime plugin: every release ships all supported harnesses in the one binary (operator, 2026-11-03). The bar is that adding a harness is one new package plus one line in `cmd/crosstalk`, with no change to the existing harness packages and no harness-specific code in the shim. That holds only within the extension points the interface has today: the core selects one `NativeIngress` implementation (the first harness in the list that has one) for every agent; a second native ingress protocol, a deferred-delivery (mailbox) capability and installation hooks are outside the interface; and `Render` is on the interface but no shared code calls it, since each injector builds its own payload. Revisit when a second native protocol is chosen. Everything a harness contributes lives behind one interface in `internal/harness`, and the shim, mcpserver and A2A code never name a concrete harness.
 
 Final interface (`internal/harness`, implemented 2026-11-03):
 
@@ -46,7 +46,7 @@ var ErrAmbiguous error // Codex: thread loaded on more than one endpoint
 
 Differences from the first sketch: binding is two calls, because the MCP server identifies the caller on every tool call (cheap, no harness contact) while the endpoint probe runs once at registration; `Harness` embeds `adapter.Adapter`, since native-name sends need `Register`; the reply address reaches `Inject` as `adapter.Delivery.ReplyAddress`, set by the shim from the target harness's `NativeReplyAddress`. mcpserver receives the harness list in `mcpserver.Options.Harnesses` (from `shim.MCPOptions`) and stores the registering call's `RequestContext` on the `Agent` for the shim's `Bind`. The uds ingress is served by an agent of any harness, because its senders are native Claude sessions; Claude's protocol server is `udsingress.NewIngress`, passed in `claude.HarnessOptions.Ingress` by `cmd/crosstalk` (the `claude` package cannot import `udsingress`, whose tests import `claude`). `internal/shim/arch_test.go` pins that `internal/shim`, `internal/mcpserver`, `internal/a2a` and `internal/wire` import no `internal/harness/<name>` package.
 
-`RequestContext` carries what the MCP server knows about a call: parent pid, `_meta`, client info, session id. Each harness package (`internal/harness/claude`, `internal/harness/codex`, later `internal/harness/gemini`) exports a constructor returning a `Harness`; `cmd/crosstalk` lists them once in a slice, in trust order. The shim iterates that slice for Bind and Discover and otherwise only holds the `Harness` it bound. Harness-specific ingress (Claude's uds socket protocol) is likewise behind an `Ingress` constructor the harness returns, so a harness with no native socket contributes none. Tests for the shim use `adapter.Fake` wrapped as a `Harness`; no harness package is imported by `internal/shim` or `internal/mcpserver` after the refactor, and a `go list -deps` check pins that in `go test`.
+`RequestContext` carries what the MCP server knows about a call: parent pid, `_meta`, client info, session id. Each harness package (`internal/harness/claude`, `internal/harness/codex`, later `internal/harness/gemini`) exports a constructor returning a `Harness`; `cmd/crosstalk` lists them once in a slice, in trust order. The shim iterates that slice for Bind and Discover and otherwise only holds the `Harness` it bound. Harness-specific ingress (Claude's uds socket protocol) is likewise behind an `Ingress` constructor the harness returns, so a harness with no native socket contributes none. Tests for the shim use `adapter.Fake` wrapped as a `Harness`; no harness package is imported by `internal/shim` or `internal/mcpserver`, and `TestSharedCodeImportsNoHarnessPackage` pins that in `go test`.
 
 ## Rejected alternatives
 
@@ -56,6 +56,6 @@ Differences from the first sketch: binding is two calls, because the MCP server 
 
 ## Consequences
 
-- A refactor slice moves binding, discovery, rendering and the native-reply address out of `internal/shim`, `internal/mcpserver` and `internal/wire` into the two harness packages; behaviour is unchanged and pinned by the existing tests.
+- Binding, discovery, rendering and the native-reply address live in the two harness packages, not in `internal/shim`, `internal/mcpserver` or `internal/wire`.
 - Design §2 "Components" and §6 "Injector per harness" are the contract and name the interface; a new harness is one package plus one line in `cmd/crosstalk`.
 - Codex's toolOutput work (ADR 0007) implements `Render` and `Inject` for Codex and must not add Codex knowledge to the shim.

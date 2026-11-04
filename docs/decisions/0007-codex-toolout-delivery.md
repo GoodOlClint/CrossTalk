@@ -1,6 +1,6 @@
 # ADR 0007 — Codex delivery as named toolOutput
 
-- **Status:** Accepted (provisional, operator 2026-11-03)
+- **Status:** Provisional
 - **Date:** 2026-11-03
 - **Deciders:** operator + Claude + Codex
 - **Context source:** operator authorization to design and build the Codex adapter on `codex/toolout`; live 0.166.0 probes recorded in `~/Documents/Codex/2026-11-03/crosstalk-external-sender-identity.md` and `crosstalk-toolout-evidence/`

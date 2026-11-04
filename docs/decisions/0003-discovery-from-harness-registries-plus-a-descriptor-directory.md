@@ -1,6 +1,6 @@
 # ADR 0003 — Discovery from harness registries plus a descriptor directory
 
-- **Status:** Accepted (provisional, operator 2026-11-03; full review pending)
+- **Status:** Provisional
 - **Date:** 2026-11-03
 - **Deciders:** operator + Claude (Fable 5.1) + Codex (0.166.0) review
 - **Context source:** operator question "I assume we don't need herdr anymore since we have the sockets helping with discovery?"
@@ -11,9 +11,9 @@ Agents must find each other by name. Both harnesses already publish a live regis
 
 ## Decision
 
-Discovery has no daemon. Each shim writes one descriptor to `~/.local/state/crosstalk/agents/<name>.json` (name, harness, role, owner, pid, harness_pid, harness_started_at, instance_id, cwd, session_ref, harness_endpoint, harness_version, a2a_url, uds_path, credential_ref) after its listeners are up, atomically, and removes only its own instance's file on exit. `list_agents` reads that directory, prunes entries whose pid is dead or reused, and enriches each row with live status from the harness's own registry. herdr pane ids are recorded when present; no v1 code uses them.
+Discovery has no daemon. Each shim writes one descriptor per agent it serves to `~/.local/state/crosstalk/agents/<agent_id>.json` (agent_id, name, harness, role, owner, pid, harness_pid, harness_started_at, instance_id, cwd, session_ref, harness_endpoint, harness_version, a2a_url, uds_path, credential_ref, installed, started_at, protocol) after its listeners are up, atomically, and removes only its own instance's file on exit. `agent_id` is a stable hash of harness and session_ref; the name is an alias set from the harness-provided session name. `list_agents` enumerates every Claude session from `~/.claude/sessions` and every loaded Codex thread from `thread/loaded/list` and `thread/read`, merges them with the descriptor directory, and prunes descriptors whose pid is dead or reused.
 
-A shim also publishes a Claude-visible pair in `~/.claude/sessions/` (its own pid, its own key, a distinct name, `kind: external`) so Claude sessions can address it with native SendMessage. This is conditional on spike 7 (`docs/spikes/README.md`), regression-tested by design §11 test 11; if Claude rejects or mishandles the record, discovery stays in `list_agents` only.
+A shim publishes no Claude-visible record in `~/.claude/sessions/` in v1: a reply address travels in the envelope, and a pooled shim has no single pid to publish under. Claude sessions see other agents through `list_agents`.
 
 ## Rejected alternatives
 
@@ -23,6 +23,5 @@ A shim also publishes a Claude-visible pair in `~/.claude/sessions/` (its own pi
 
 ## Consequences
 
-- Stable names are a launch-time input; two live shims with the same name is a startup conflict, enforced by a per-name `flock` held for the shim's lifetime (design §3).
+- Registration takes two `flock`s held for its lifetime: an agent record lock keyed by agent_id and an alias lock keyed by name. A held name lock sends the newcomer to a fallback name (design §3).
 - Stale-record cleanup must check pid reuse (start time), not pid existence.
-- The Claude-visible record must never borrow a Claude session id or token.

@@ -1,6 +1,6 @@
 # ADR 0006 — No spawning: the MCP server is the shim and binds from harness-provided identity
 
-- **Status:** Accepted (provisional, operator 2026-11-03; full review pending)
+- **Status:** Provisional
 - **Date:** 2026-11-03
 - **Deciders:** operator + Claude session + Codex session
 - **Context source:** operator redirect 2026-11-03 ("build this without needing to spawn processes on our own; communicate with any Claude or Codex session running"); Codex source read of rust-v0.166.0 `codex-rs/core/src/mcp_tool_call.rs`; live process inspection on this machine
@@ -9,15 +9,15 @@
 
 ADR 0005 made `crosstalk run` the process owner because an MCP server process could not tell which session it served. That forced every session to be launched through CrossTalk. Two facts remove the need. Claude Code starts MCP servers as children of the session process, so the server's parent pid names the session and `~/.claude/sessions/<ppid>.json` carries its name, socket and status. Codex attaches `params._meta.threadId` and `sessionId` to every MCP `tools/call` it issues (`with_mcp_tool_call_ids_meta`), and the app-server's own `mcpServer/tool/call` sets `_meta.threadId` too. Codex 0.166 can also pool one stdio MCP connection across threads when the 2026-07-28 protocol is negotiated, so a process is not reliably one-per-thread.
 
-Inbound delivery already needs nothing installed on the receiver: Claude's per-session socket and Codex's app-server `turn/steer` and `codex queue` reach any running session.
+Inbound delivery already needs nothing installed on the receiver: Claude's per-session socket and Codex's app-server reaches any running session (then `turn/steer` and `codex queue`; now `turn/start` `toolOutput` and `thread/inject_items`, ADR 0007).
 
 ## Decision
 
-CrossTalk spawns nothing and wraps nothing. `crosstalk mcp` is the shim, installed once per harness as an ordinary MCP server entry. It serves whatever sessions the harness connects to it and binds identity per request: Claude from the parent pid; Codex from `_meta.threadId` on each `tools/call`. A request with neither is `unbound` and gets no messaging tool. One process may hold several agent records (Codex pooling); nothing is bound permanently to the first caller.
+CrossTalk spawns nothing and wraps nothing. `crosstalk mcp` is the shim, installed once per harness as an ordinary MCP server entry. It serves whatever sessions the harness connects to it and binds identity per request: Claude from the parent pid; Codex from `_meta.threadId` on each `tools/call`. A request with neither is `unbound` and is served `list_agents` only. One process may hold several agent records (Codex pooling); nothing is bound permanently to the first caller.
 
 Every running session is listed by `list_agents` whether or not it has CrossTalk loaded, from `~/.claude/sessions` and `thread/loaded/list` on known app-servers, with `reachable` and `crosstalk` flags. A session without CrossTalk can receive but cannot send, has no stable name beyond its harness name, and has no A2A card.
 
-Role and owner are asserted by the owner (`claim`), not by a launcher. `crosstalk run` is removed from v1.
+Role and owner are set at runtime by `claim` and `release` between registered agents, not by a launcher. `crosstalk run` is removed from v1.
 
 ## Rejected alternatives
 

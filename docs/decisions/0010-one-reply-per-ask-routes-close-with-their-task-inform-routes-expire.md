@@ -29,7 +29,7 @@ Implementation notes (s26, 2026-11-04, Codex finding WA6/WA7/WA9): retention cou
 
 ## Consequences
 
-- `reply` gains two error reasons, `already_replied` and `ask_closed`; design §8 and tests 5 and 13 change; `TestReplyRoutesThroughJournal` currently pins the opposite of rule 1 and is rewritten.
+- `reply` has two error reasons, `already_replied` and `ask_closed`; design §8 and tests 5 and 13 describe them; `TestReplyRoutesThroughJournal` pins the single-reply transaction.
 - The journal gains a reply-receipt record type (asker side); continuation-to-task associations are rebuilt from task history, no new record. The legacy receipt fallback on replay also requires that the body was admitted, not rejected. A `noticed` check (a journaled deadline notice from `crosstalk`) keeps a restart after expiry from re-sending the notice.
 - An inform route that expired makes a later `reply` to it return `no_such_message`; the model can still `send_message` by name.
 - Implementation commits carry `Provisional-ADR: 0010`.
