@@ -149,7 +149,7 @@ func TestCaptureFixturesDriveClassifier(t *testing.T) {
 			if live[0].Error != nil {
 				err = live[0].Error
 			}
-			got, ok := codex.NotSteerable(live[0].Result, err)
+			got, ok := codex.NotSteerable(err)
 			if !ok || (got != "" && got != kind) {
 				t.Errorf("%s: steer_live classified notSteerable=%v kind=%q", f, ok, got)
 			}

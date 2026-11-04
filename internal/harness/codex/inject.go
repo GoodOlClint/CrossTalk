@@ -55,7 +55,7 @@ func (a *Adapter) Inject(ctx context.Context, m msg.Message, d adapter.Delivery)
 		return appendOutput(ctx, c, thread, text)
 	}
 	res, err := c.StartToolOutput(ctx, thread, text)
-	if _, refused := NotSteerable(res, err); refused {
+	if _, refused := NotSteerable(err); refused {
 		return appendOutput(ctx, c, thread, text)
 	}
 	if err != nil {
