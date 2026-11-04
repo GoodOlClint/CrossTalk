@@ -213,10 +213,17 @@ var attrEscaper = strings.NewReplacer(`&`, "&amp;", `"`, "&quot;", `<`, "&lt;", 
 // the body can neither close the envelope nor open a nested one.
 func EscapeBody(s string) string { return strings.ReplaceAll(s, "<", "&lt;") }
 
-func Envelope(from, fromName, messageID, body string) string {
-	return `<cross-session-message from="` + from + `" from-name="` + attrEscaper.Replace(fromName) +
-		`" message-id="` + attrEscaper.Replace(messageID) + "\">\n" +
-		EscapeBody(body) + "\n</cross-session-message>"
+func Envelope(from, fromName string, m msg.Message) string {
+	kind := m.Kind
+	if kind == "" {
+		kind = msg.Inform
+	}
+	head := `<cross-session-message from="` + from + `" from-name="` + attrEscaper.Replace(fromName) +
+		`" message-id="` + attrEscaper.Replace(m.MessageID) + `" kind="` + attrEscaper.Replace(string(kind)) + `"`
+	if m.InReplyTo != nil {
+		head += ` in-reply-to="` + attrEscaper.Replace(*m.InReplyTo) + `"`
+	}
+	return head + ">\n" + EscapeBody(Body(m)) + "\n</cross-session-message>"
 }
 
 func Body(m msg.Message) string {
@@ -267,7 +274,7 @@ func (a *Adapter) Inject(ctx context.Context, m msg.Message, d adapter.Delivery)
 	if err != nil {
 		return adapter.Unreachable, err
 	}
-	payload, err := frames(token, Envelope(from, m.From, m.MessageID, Body(m)))
+	payload, err := frames(token, Envelope(from, m.From, m))
 	if err != nil {
 		return adapter.Unreachable, err
 	}
