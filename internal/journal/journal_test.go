@@ -1,6 +1,7 @@
 package journal
 
 import (
+	"encoding/json"
 	"os"
 	"strings"
 	"sync"
@@ -331,5 +332,70 @@ func TestAcceptRecordCarriesMessageAndRecordsListsInOrder(t *testing.T) {
 	j.Close()
 	if _, err := j.Records(); err != ErrClosed {
 		t.Fatal(err)
+	}
+}
+
+func reopenAfter(t *testing.T, dir string, now time.Time, d time.Duration) (*Journal, Replay) {
+	t.Helper()
+	return open(t, dir, Options{Now: func() time.Time { return now.Add(d) }})
+}
+
+func TestRetentionKeepsOpenAskOriginal(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+	j, _ := open(t, dir, Options{Now: func() time.Time { return now }})
+	body := json.RawMessage(`{"message_id":"ask","kind":"ask"}`)
+	j.Append(Record{Type: TypeDedupe, Sender: "sender", MessageID: "ask", State: "accepted", Message: body})
+	j.Append(Record{Type: TypeRoute, MessageID: "ask", Sender: "sender", Session: "session", State: StateOpen})
+	j.Append(Record{Type: TypeTask, MessageID: "ask", TaskID: "task", State: StateWorking})
+	j.Claim("ask")
+	j.Resolve("ask", "accepted")
+	j.Accept("alice", "done", "accepted")
+	j.Close()
+
+	j2, _ := reopenAfter(t, dir, now, 25*time.Hour)
+	rs, err := j2.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kept []Type
+	for _, r := range rs {
+		kept = append(kept, r.Type)
+		if r.Type == TypeDedupe && r.MessageID == "done" {
+			t.Error("fully resolved message older than retention kept")
+		}
+	}
+	for _, want := range []Type{TypeDedupe, TypeDispatch, TypeOutcome, TypeRoute, TypeTask} {
+		found := false
+		for _, r := range rs {
+			found = found || r.Type == want && r.MessageID == "ask" && (want != TypeDedupe || len(r.Message) > 0)
+		}
+		if !found {
+			t.Errorf("open ask lost %s record: kept %v", want, kept)
+		}
+	}
+}
+
+func TestRetentionKeepsUnansweredOutboundAsk(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+	j, _ := open(t, dir, Options{Now: func() time.Time { return now }})
+	j.Append(Record{Type: TypeOutbound, MessageID: "out", To: "bob", Kind: "ask", State: "accepted", TaskID: "far", Message: json.RawMessage(`{"deadline_seconds":0}`)})
+	j.Append(Record{Type: TypeOutbound, MessageID: "out-done", To: "bob", Kind: "inform", State: "accepted"})
+	j.Close()
+
+	j2, _ := reopenAfter(t, dir, now, 25*time.Hour)
+	if r, ok := j2.Latest(Record{Type: TypeOutbound, MessageID: "out"}); !ok || len(r.Message) == 0 {
+		t.Errorf("unanswered outbound ask lost its record or body: %+v", r)
+	}
+	if _, ok := j2.Latest(Record{Type: TypeOutbound, MessageID: "out-done"}); ok {
+		t.Error("resolved outbound older than retention kept")
+	}
+
+	j2.Append(Record{Type: TypeDedupe, Sender: "bobid", MessageID: "answer", State: "accepted", Message: json.RawMessage(`{"message_id":"answer","in_reply_to":"out","kind":"inform"}`)})
+	j2.Close()
+	j3, _ := reopenAfter(t, dir, now, 50*time.Hour)
+	if _, ok := j3.Latest(Record{Type: TypeOutbound, MessageID: "out"}); ok {
+		t.Error("outbound ask kept after it was answered")
 	}
 }

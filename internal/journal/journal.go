@@ -142,6 +142,57 @@ func unresolved(latest Record) bool {
 	return false
 }
 
+// dependencies holds the message and task ids named by unresolved work; every
+// record naming one of them is retained until that work resolves.
+type dependencies struct {
+	messages map[string]bool
+	tasks    map[string]bool
+}
+
+// liveSet also keeps an accepted outbound ask until some record answers it
+// (names it in in_reply_to): the asker has no local task record for it and
+// its deadline re-arm reads this record.
+func liveSet(records []Record, latest map[string]Record) dependencies {
+	d := dependencies{messages: map[string]bool{}, tasks: map[string]bool{}}
+	answered := map[string]bool{}
+	for _, r := range records {
+		if r.InReplyTo != "" {
+			answered[r.InReplyTo] = true
+		} else if len(r.Message) > 0 {
+			var m struct {
+				InReplyTo *string `json:"in_reply_to"`
+			}
+			if json.Unmarshal(r.Message, &m) == nil && m.InReplyTo != nil {
+				answered[*m.InReplyTo] = true
+			}
+		}
+	}
+	for _, l := range latest {
+		if l.Type == TypeOutbound && l.Kind == "ask" && (l.State == "accepted" || l.State == "queued") && !answered[l.MessageID] {
+			d.messages[l.MessageID] = true
+			continue
+		}
+		if !unresolved(l) {
+			continue
+		}
+		for _, id := range []string{l.MessageID, l.InReplyTo} {
+			if id != "" {
+				d.messages[id] = true
+			}
+		}
+		if l.TaskID != "" {
+			d.tasks[l.TaskID] = true
+		}
+	}
+	return d
+}
+
+func (d dependencies) holds(r Record) bool {
+	return d.messages[r.MessageID] && r.MessageID != "" ||
+		d.messages[r.InReplyTo] && r.InReplyTo != "" ||
+		d.tasks[r.TaskID] && r.TaskID != ""
+}
+
 type Options struct {
 	Now       func() time.Time
 	Retention time.Duration
@@ -196,10 +247,11 @@ func Open(stateDir, agentID string, binding Binding, opt Options) (*Journal, Rep
 	for _, r := range records {
 		latest[r.key()] = r
 	}
+	live := liveSet(records, latest)
 	cutoff := opt.Now().Add(-opt.Retention)
 	var kept []Record
 	for _, r := range records {
-		if !r.At.Before(cutoff) || unresolved(latest[r.key()]) {
+		if !r.At.Before(cutoff) || unresolved(latest[r.key()]) || live.holds(r) {
 			kept = append(kept, r)
 		}
 	}
