@@ -98,7 +98,7 @@ func (s *Server) release(ctx context.Context, a *Agent, name string) (any, error
 func (s *Server) inform(ctx context.Context, from *Agent, to, text string) (*Result, string) {
 	r, err := s.backend.Send(ctx, from, SendRequest{To: to, Text: text, Kind: msg.Inform, Delivery: msg.Immediate})
 	if err != nil {
-		return nil, err.Error()
+		return nil, describe(err)
 	}
 	return &r, ""
 }

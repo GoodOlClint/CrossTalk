@@ -23,6 +23,14 @@ func (e *Error) hint() string {
 	return hintFor(e.Code)
 }
 
+func describe(err error) string {
+	out := err.Error()
+	if h := toolError(err).hint(); h != "" {
+		out += ". " + h
+	}
+	return out
+}
+
 func withHint(out any) any {
 	switch r := out.(type) {
 	case Result:
