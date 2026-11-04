@@ -46,6 +46,9 @@ type Delivery struct {
 	Mode           msg.Delivery
 	Target         Binding
 	VerifiedSender bool
+	// ReplyAddress is the target harness's NativeReplyAddress for the
+	// injecting agent; "" when it has none.
+	ReplyAddress string
 }
 
 type SessionStatus struct {

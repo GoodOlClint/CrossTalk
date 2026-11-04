@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/GoodOlClint/crosstalk/internal/adapter"
+	"github.com/GoodOlClint/crosstalk/internal/harness"
 	"github.com/GoodOlClint/crosstalk/internal/msg"
 	"github.com/GoodOlClint/crosstalk/internal/peercred"
 	"github.com/GoodOlClint/crosstalk/internal/procstart"
@@ -371,3 +372,13 @@ func (s *Server) identify(pid int, started time.Time) receiver.Sender {
 	}
 	return receiver.Sender{Verified: true, AgentID: d.AgentID, Name: d.Name, Role: role, PID: pid}
 }
+
+// NewIngress is the Claude harness's native ingress (harness.NativeIngress)
+// on cfg.Path.
+func NewIngress(cfg harness.IngressConfig) harness.Ingress {
+	return &ingress{Server{Path: cfg.Path, Directory: cfg.Directory, Receiver: cfg.Receiver, StartTime: cfg.StartTime, PeerPID: cfg.PeerPID}}
+}
+
+type ingress struct{ Server }
+
+func (i *ingress) Files() []string { return []string{i.Path, KeyPath(i.Path)} }

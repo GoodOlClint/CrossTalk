@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -45,6 +46,15 @@ type Message struct {
 	HopChain        []string  `json:"hop_chain"`
 	SentAt          time.Time `json:"sent_at"`
 	Parts           []Part    `json:"parts"`
+}
+
+// Text is the text parts joined by newlines.
+func (m Message) Text() string {
+	texts := make([]string, 0, len(m.Parts))
+	for _, p := range m.Parts {
+		texts = append(texts, p.Text)
+	}
+	return strings.Join(texts, "\n")
 }
 
 var (
