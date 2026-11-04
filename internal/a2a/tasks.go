@@ -311,12 +311,42 @@ func (st *store) appendHistory(t *task, m *sdk.Message) error {
 	return nil
 }
 
-func (st *store) completeAsk(messageID, text string) error {
+// askOpen reports whether messageID names an ask task and whether that task
+// is still open.
+func (st *store) askOpen(messageID string) (open, known bool) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	t, ok := st.byMsg[messageID]
 	if !ok || t.kind != msg.Ask {
-		return ErrNoSuchAsk
+		return false, false
+	}
+	return !t.state.Terminal(), true
+}
+
+func (st *store) messageIDs(t *task) []string {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	return []string{t.messageID}
+}
+
+func (st *store) terminalAsks() []*task {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	var out []*task
+	for _, t := range st.byID {
+		if t.kind == msg.Ask && t.state.Terminal() {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+func (st *store) completeAsk(messageID, text string) (*task, error) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	t, ok := st.byMsg[messageID]
+	if !ok || t.kind != msg.Ask {
+		return nil, ErrNoSuchAsk
 	}
 	reply := &sdk.Message{ID: msg.NewUUIDv7(), Role: sdk.MessageRoleAgent, ContextID: t.contextID, TaskID: t.id, Parts: sdk.ContentParts{sdk.NewTextPart(text)}}
 	delivery := ""
@@ -325,12 +355,12 @@ func (st *store) completeAsk(messageID, text string) error {
 	}
 	done, err := st.updateLocked(t, sdk.TaskStateCompleted, delivery, "", reply)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if !done {
-		return ErrAskClosed
+		return nil, ErrAskClosed
 	}
-	return nil
+	return t, nil
 }
 
 func (st *store) snapshot(t *task, historyLength *int) *sdk.Task {
@@ -588,7 +618,9 @@ func (s *Server) armDeadline(t *task) {
 		return
 	}
 	expire := func() {
-		_, _ = s.tasks.update(t, sdk.TaskStateFailed, "", ReasonDeadline, failedStatus(t, "failed", ReasonDeadline))
+		if done, _ := s.tasks.update(t, sdk.TaskStateFailed, "", ReasonDeadline, failedStatus(t, "failed", ReasonDeadline)); done {
+			s.askClosed(t)
+		}
 	}
 	if d := time.Until(t.deadline); d > 0 {
 		s.tasks.setTimer(t, d, expire)
@@ -610,9 +642,23 @@ func (s *Server) apply(t *task, res receiver.Result) {
 	if state == sdk.TaskStateFailed {
 		status = failedStatus(t, res.State, reason)
 	}
-	if _, err := s.tasks.update(t, state, delivery, reason, status); err != nil {
+	done, err := s.tasks.update(t, state, delivery, reason, status)
+	if err != nil {
 		s.tasks.markUnknown(t)
+		return
 	}
+	if done && state.Terminal() {
+		s.askClosed(t)
+	}
+}
+
+// askClosed closes the routes of a terminal ask task; it must run without
+// the task store's lock held.
+func (s *Server) askClosed(t *task) {
+	if t.kind != msg.Ask || s.cfg.OnAskClosed == nil {
+		return
+	}
+	s.cfg.OnAskClosed(s.tasks.messageIDs(t))
 }
 
 func (h *handler) continuation(ctx context.Context, snd receiver.Sender, m msg.Message, wire *sdk.Message, wait bool) (sdk.SendMessageResult, error) {
@@ -713,6 +759,7 @@ func (h *handler) CancelTask(ctx context.Context, req *sdk.CancelTaskRequest) (*
 	if !ok {
 		return nil, sdk.ErrTaskNotCancelable
 	}
+	s.askClosed(t)
 	return s.tasks.snapshot(t, nil), nil
 }
 

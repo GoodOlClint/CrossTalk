@@ -20,6 +20,32 @@ import (
 // its own session, such as an ask's deadline notice (§8).
 const PrincipalCrossTalk = "crosstalk"
 
+const ReasonAskClosed = "ask_closed"
+
+// ErrAskClosed is what Options.OnReply returns when the ask's task reached a
+// terminal state before the reply could complete it.
+var ErrAskClosed = errors.New("shim: ask is closed")
+
+// AskTransport is a Transport that knows the ask tasks of the agents it
+// serves: known reports that messageID names an ask task, open that the task
+// is not terminal.
+type AskTransport interface {
+	AskOpen(agentID, messageID string) (open, known bool)
+}
+
+func askClosed(orig msg.Message) *mcpserver.Error {
+	return &mcpserver.Error{Code: mcpserver.CodeRejected, Reason: ReasonAskClosed, Message: "ask is closed; send your answer with send_message to " + orig.From}
+}
+
+func (st *AgentState) askClosed(messageID string) bool {
+	at, ok := st.shim.opt.Transport.(AskTransport)
+	if !ok {
+		return false
+	}
+	open, known := at.AskOpen(st.agent.ID(), messageID)
+	return known && !open
+}
+
 func itoa(i int) string { return strconv.Itoa(i) }
 
 func (st *AgentState) newMessage(to string, k msg.Kind, d msg.Delivery, text string) msg.Message {
@@ -294,16 +320,25 @@ func (s *Shim) Reply(ctx context.Context, from *mcpserver.Agent, messageID, text
 	if key == receiver.LabelUnverified {
 		return mcpserver.Result{}, &mcpserver.Error{Code: string(adapter.Unreachable), Reason: ReasonSenderUnverified}
 	}
+	if st.askClosed(orig.MessageID) {
+		return mcpserver.Result{}, askClosed(orig)
+	}
 	r := st.newMessage(orig.From, msg.Inform, msg.Immediate, text)
 	irt := orig.MessageID
 	r.InReplyTo, r.ContextID = &irt, orig.ContextID
 	if err := st.agent.Journal().Append(st.obligation(r, key, journal.StatePending, true)); err != nil {
 		return mcpserver.Result{}, err
 	}
-	st.rcv.CloseRoute(orig.MessageID)
 	var hookErr error
 	if s.opt.OnReply != nil {
 		hookErr = s.opt.OnReply(ctx, st, orig, r)
+	}
+	if errors.Is(hookErr, ErrAskClosed) {
+		st.agent.Journal().Append(st.obligation(r, key, journal.StateClosed, false))
+		return mcpserver.Result{}, askClosed(orig)
+	}
+	if hookErr == nil {
+		st.rcv.CloseRoute(orig.MessageID)
 	}
 	return st.sendReply(ctx, r, key, hookErr), nil
 }

@@ -54,6 +54,7 @@ var (
 	_ shim.Transport      = (*Wire)(nil)
 	_ shim.TaskTransport  = (*Wire)(nil)
 	_ shim.ClaimTransport = (*Wire)(nil)
+	_ shim.AskTransport   = (*Wire)(nil)
 )
 
 // New builds the shim with opt's Transport, StartA2A and OnReply set to this
@@ -133,6 +134,11 @@ func (w *Wire) startA2A(_ context.Context, st *shim.AgentState) (shim.A2AListene
 			return claimError(w.shim.ApplyClaim(ctx, registry.Descriptor{AgentID: snd.AgentID, Name: snd.Name}, id, claimed))
 		},
 		Logger: w.log.With("agent", id),
+		OnAskClosed: func(ids []string) {
+			for _, m := range ids {
+				st.Receiver().CloseRoute(m)
+			}
+		},
 	})
 	reconcile(srv, a.Journal(), w.log.With("agent", id))
 	srv.Resume()
@@ -229,10 +235,26 @@ func (w *Wire) onReply(_ context.Context, st *shim.AgentState, original, reply m
 	for _, p := range reply.Parts {
 		text.WriteString(p.Text)
 	}
-	if err := srv.CompleteAsk(original.MessageID, text.String()); err != nil && !errors.Is(err, a2a.ErrNoSuchAsk) {
+	err := srv.CompleteAsk(original.MessageID, text.String())
+	switch {
+	case errors.Is(err, a2a.ErrAskClosed):
+		return shim.ErrAskClosed
+	case err != nil && !errors.Is(err, a2a.ErrNoSuchAsk):
 		return err
 	}
 	return nil
+}
+
+// AskOpen reports, for an agent this Wire serves, whether messageID names an
+// ask task and whether it is still open.
+func (w *Wire) AskOpen(agentID, messageID string) (open, known bool) {
+	w.mu.Lock()
+	srv := w.servers[agentID]
+	w.mu.Unlock()
+	if srv == nil {
+		return false, false
+	}
+	return srv.AskOpen(messageID)
 }
 
 func readOwnToken(path string) (string, error) {

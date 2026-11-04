@@ -99,8 +99,9 @@ const (
 // Error is a tool error result. A Backend may return one to choose the code
 // and reason the model sees.
 type Error struct {
-	Code   string `json:"error"`
-	Reason string `json:"reason,omitempty"`
+	Code    string `json:"error"`
+	Reason  string `json:"reason,omitempty"`
+	Message string `json:"message,omitempty"`
 }
 
 func (e *Error) Error() string {

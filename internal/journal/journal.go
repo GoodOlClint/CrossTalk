@@ -65,7 +65,7 @@ func (b Binding) SameConversation(o Binding) bool {
 //	outcome:    MessageID, State
 //	cancel:     MessageID
 //	route:      Session, MessageID, Sender (original sender), State open|closed
-//	obligation: MessageID (the reply), InReplyTo, To, State pending|delivered
+//	obligation: MessageID (the reply), InReplyTo, To, State pending|delivered|closed (the ask closed first)
 //	claim:      Owner (agent_id), Claimed
 //	outbound:   MessageID, To (agent_id, harness:session_ref, or an unresolved name), Kind, State, Reason, TaskID (far side's); the first carries Message, whose deadline_seconds and sent_at fix an ask's deadline
 type Record struct {
@@ -135,7 +135,7 @@ func unresolved(latest Record) bool {
 	case TypeRoute:
 		return latest.State == StateOpen
 	case TypeObligation:
-		return latest.State != StateDelivered
+		return latest.State != StateDelivered && latest.State != StateClosed
 	case TypeClaim:
 		return latest.Claimed
 	}
