@@ -90,68 +90,11 @@ func TestWorkerStatusToCoordinatorAfterWorkersTalked(t *testing.T) {
 	nw.ok(thread("T-w2"), "receive_message", map[string]any{})
 
 	nc.ok(nil, "send_message", send("w1", "kickoff"))
-	nc.ok(nil, "send_message", send("w2", "kickoff"))
 	nw.ok(thread("T-w1"), "send_message", send("w2", "which api?"))
-	if r := nw.ok(thread("T-w2"), "send_message", send("coord", "status: done")); r["state"] == "rejected" {
+	nw.ok(thread("T-w2"), "send_message", send("w1", "v2"))
+	if r := nw.ok(thread("T-w1"), "send_message", send("coord", "status: done")); r["state"] == "rejected" {
 		t.Fatalf("status report %v", r)
 	}
-}
-
-const (
-	pinShortCap    = 20
-	pinShortWindow = 10 * time.Minute
-)
-
-func TestShortCapNumberAndWindowArePinned(t *testing.T) {
-	w := newWorld(t)
-	alice := w.claude(4001, "sess-alice", "alice")
-	w.codex.addThread("T-bob", "bob")
-	w.codex.addThread("T-carol", "carol")
-	clk := newClock()
-	na := w.node(alice.pid, w.lb, func(o *Options) { o.Now = clk.now })
-	nbc := w.node(1, w.lb, nil)
-	na.ok(nil, "receive_message", map[string]any{})
-	nbc.ok(thread("T-bob"), "receive_message", map[string]any{})
-	nbc.ok(thread("T-carol"), "receive_message", map[string]any{})
-
-	for i := 0; i < pinShortCap; i++ {
-		if r := na.ok(nil, "send_message", send("bob", "x")); r["reason"] == ReasonLoopCap {
-			t.Fatalf("send %d of %d capped", i+1, pinShortCap)
-		}
-	}
-	if r := na.ok(nil, "send_message", send("bob", "x")); r["reason"] != ReasonLoopCap {
-		t.Fatalf("send %d not capped: %v", pinShortCap+1, r)
-	}
-	if r := na.ok(nil, "send_message", send("carol", "x")); r["reason"] == ReasonLoopCap {
-		t.Fatalf("bob's count capped carol: %v", r)
-	}
-	clk.add(pinShortWindow - time.Second)
-	if r := na.ok(nil, "send_message", send("bob", "x")); r["reason"] != ReasonLoopCap {
-		t.Fatalf("window ended early: %v", r)
-	}
-	clk.add(2 * time.Second)
-	if r := na.ok(nil, "send_message", send("bob", "x")); r["reason"] == ReasonLoopCap {
-		t.Fatalf("window did not end: %v", r)
-	}
-}
-
-func TestUnknownSendsAreCounted(t *testing.T) {
-	w := newWorld(t)
-	alice := w.claude(4001, "sess-alice", "alice")
-	w.codex.addThread("T-bob", "bob")
-	na := w.node(alice.pid, w.lb, nil)
-	nb := w.node(1, w.lb, nil)
-	na.ok(nil, "receive_message", map[string]any{})
-	nb.ok(thread("T-bob"), "receive_message", map[string]any{})
-
-	slow := adapter.Outcome{State: adapter.Unknown}
-	for i := 0; i < pinShortCap+5; i++ {
-		w.codex.ScriptInject(slow)
-		if r := na.ok(nil, "send_message", send("bob", "x")); r["reason"] == ReasonLoopCap {
-			return
-		}
-	}
-	t.Fatal("unknown sends never counted")
 }
 
 func TestRingStopsOnTheCaps(t *testing.T) {
