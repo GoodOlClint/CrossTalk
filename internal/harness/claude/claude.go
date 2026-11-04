@@ -23,6 +23,7 @@ import (
 const (
 	DefaultDialTimeout = 2 * time.Second
 	DefaultAckTimeout  = 10 * time.Second
+	DefaultAckGrace    = 300 * time.Millisecond
 	maxAckLine         = 64 << 10
 )
 
@@ -66,6 +67,9 @@ type Adapter struct {
 	Alive       func(pid int) bool
 	DialTimeout time.Duration
 	AckTimeout  time.Duration
+	// AckGrace bounds the wait for an optional reply line; Claude Code writes
+	// nothing back, so silence with the connection open counts as accepted.
+	AckGrace time.Duration
 }
 
 var _ adapter.Adapter = (*Adapter)(nil)
@@ -209,8 +213,9 @@ var attrEscaper = strings.NewReplacer(`&`, "&amp;", `"`, "&quot;", `<`, "&lt;", 
 // the body can neither close the envelope nor open a nested one.
 func EscapeBody(s string) string { return strings.ReplaceAll(s, "<", "&lt;") }
 
-func Envelope(from, fromName, body string) string {
-	return `<cross-session-message from="` + from + `" from-name="` + attrEscaper.Replace(fromName) + "\">\n" +
+func Envelope(from, fromName, messageID, body string) string {
+	return `<cross-session-message from="` + from + `" from-name="` + attrEscaper.Replace(fromName) +
+		`" message-id="` + attrEscaper.Replace(messageID) + "\">\n" +
 		EscapeBody(body) + "\n</cross-session-message>"
 }
 
@@ -242,9 +247,10 @@ type ackFrame struct {
 	State string `json:"state"`
 }
 
-// Inject writes m into the session named by d.Target. Failures before the
-// first byte reaches the socket are unreachable; anything after is unknown
-// unless the socket returns an ack line (CQ2).
+// Inject writes m into the session named by d.Target. A failed first write is
+// unreachable. After both frames are written: an ack line decides the state;
+// silence for AckGrace with the connection open is accepted; EOF, reset, or
+// any other reply is unknown (CQ2).
 func (a *Adapter) Inject(ctx context.Context, m msg.Message, d adapter.Delivery) (adapter.State, error) {
 	from, err := FromAddress(a.UDSPath)
 	if err != nil {
@@ -261,7 +267,7 @@ func (a *Adapter) Inject(ctx context.Context, m msg.Message, d adapter.Delivery)
 	if err != nil {
 		return adapter.Unreachable, err
 	}
-	payload, err := frames(token, Envelope(from, m.From, Body(m)))
+	payload, err := frames(token, Envelope(from, m.From, m.MessageID, Body(m)))
 	if err != nil {
 		return adapter.Unreachable, err
 	}
@@ -294,7 +300,11 @@ func (a *Adapter) Inject(ctx context.Context, m msg.Message, d adapter.Delivery)
 		}
 		return adapter.Unknown, err
 	}
-	return readAck(conn)
+	grace := a.AckGrace
+	if grace == 0 {
+		grace = DefaultAckGrace
+	}
+	return readAck(conn, grace, deadline)
 }
 
 func frames(token, content string) ([]byte, error) {
@@ -313,8 +323,22 @@ func frames(token, content string) ([]byte, error) {
 
 var ErrNoAck = errors.New("claude: socket returned no acknowledgement")
 
-func readAck(conn net.Conn) (adapter.State, error) {
+func readAck(conn net.Conn, grace time.Duration, deadline time.Time) (adapter.State, error) {
+	graceEnd := time.Now().Add(grace)
+	if graceEnd.After(deadline) {
+		graceEnd = deadline
+	}
+	conn.SetReadDeadline(graceEnd)
 	r := bufio.NewReader(io.LimitReader(conn, maxAckLine))
+	first, err := r.Peek(1)
+	if len(first) == 0 {
+		var ne net.Error
+		if errors.As(err, &ne) && ne.Timeout() && time.Now().Before(deadline) {
+			return adapter.Accepted, nil
+		}
+		return adapter.Unknown, fmt.Errorf("%w: %v", ErrNoAck, err)
+	}
+	conn.SetReadDeadline(deadline)
 	line, err := r.ReadBytes('\n')
 	if len(strings.TrimSpace(string(line))) == 0 {
 		if err == nil {
