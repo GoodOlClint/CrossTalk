@@ -1,11 +1,15 @@
 package shim
 
 import (
+	"errors"
 	"os"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/GoodOlClint/crosstalk/internal/adapter"
+	"github.com/GoodOlClint/crosstalk/internal/harness/codex"
 )
 
 func TestNativeInformOnlyCarriesHonestHint(t *testing.T) {
@@ -151,5 +155,26 @@ func TestAcceptedNativeSendWarnsOneWay(t *testing.T) {
 	}
 	if h, _ := res["hint"].(string); !strings.Contains(h, "one way") || !strings.Contains(h, "wait on that session's user") {
 		t.Fatalf("hint %q", h)
+	}
+}
+
+func TestPulledMessageCarriesHarnessNotice(t *testing.T) {
+	w := newWorld(t)
+	alice := w.claude(4001, "sess-alice", "alice")
+	w.codex.addThread("T-bob", "bob")
+	na := w.node(alice.pid, w.lb, nil)
+	nb := w.node(1, w.lb, nil)
+	na.ok(nil, "receive_message", map[string]any{})
+	nb.ok(thread("T-bob"), "receive_message", map[string]any{})
+	w.codex.ScriptInject(adapter.Outcome{State: adapter.Unreachable, Err: errors.New("down")})
+	na.ok(nil, "send_message", send("bob", "please read README.md"))
+
+	es := nb.ok(thread("T-bob"), "receive_message", map[string]any{})["messages"].([]any)
+	if len(es) != 1 {
+		t.Fatalf("mailbox %v", es)
+	}
+	e := es[0].(map[string]any)
+	if e["notice"] != codex.Preamble || !strings.Contains(e["text"].(string), "README") {
+		t.Fatalf("entry %v", e)
 	}
 }

@@ -79,6 +79,13 @@ type Harness interface {
 	NativeReplyAddress(self Self) string
 }
 
+// Noticer is implemented by a harness whose model is told, with every
+// delivered peer message, how little authority that text has. Mailbox entries
+// pulled with receive_message carry the same text.
+type Noticer interface {
+	Notice() string
+}
+
 // IngressConfig is what the shim gives a native ingress for one agent.
 type IngressConfig struct {
 	Path      string
