@@ -1,6 +1,7 @@
 package mcpserver
 
 import (
+	"context"
 	"sync"
 
 	"github.com/GoodOlClint/crosstalk/internal/adapter"
@@ -26,6 +27,45 @@ type Agent struct {
 	reg         *registry.Registration
 	j           *journal.Journal
 	replay      journal.Replay
+
+	callMu   sync.Mutex
+	draining bool
+	calls    sync.WaitGroup
+}
+
+// admit registers a tool call with the agent's drain; the caller must call
+// a.calls.Done when it returns true.
+func (a *Agent) admit() bool {
+	a.callMu.Lock()
+	defer a.callMu.Unlock()
+	if a.draining {
+		return false
+	}
+	a.calls.Add(1)
+	return true
+}
+
+func (a *Agent) stopCalls() {
+	a.callMu.Lock()
+	a.draining = true
+	a.callMu.Unlock()
+}
+
+// Drain refuses new tool calls for the agent and waits for those in flight
+// until ctx ends. The journal must stay open until it returns nil.
+func (a *Agent) Drain(ctx context.Context) error {
+	a.stopCalls()
+	done := make(chan struct{})
+	go func() {
+		a.calls.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (a *Agent) ID() string               { return a.id }

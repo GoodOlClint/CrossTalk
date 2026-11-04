@@ -51,6 +51,9 @@ type Server struct {
 	mu     sync.Mutex
 	agents map[string]*Agent
 	closed bool
+	// timedOut keeps retired agents reachable: a collected *os.File's finalizer
+	// would drop the agent flock before process exit.
+	timedOut []*Agent
 }
 
 func DefaultOptions(b Backend, hs ...harness.Harness) (Options, error) {
@@ -112,8 +115,10 @@ func (s *Server) Run(ctx context.Context, t mcp.Transport) error {
 // RetireSuperseded ends the registration of every agent of this process whose
 // harness says its session is gone, the same way process exit ends one: the
 // listeners stop and the descriptor and locks go, and the journal stays for a
-// later resume. If handlers do not stop, the name is still released and the
-// agent lock stays until process exit.
+// later resume. In-flight tool calls finish first, so their final journal
+// records land. If handlers or calls do not stop within the budget, the name is
+// still released, the journal stays open and the agent lock stays until process
+// exit.
 func (s *Server) RetireSuperseded() {
 	s.mu.Lock()
 	ready := make([]*Agent, 0, len(s.agents))
@@ -137,12 +142,16 @@ func (s *Server) RetireSuperseded() {
 		if !mine {
 			continue
 		}
+		a.stopCalls()
 		var err error
 		if ac != nil {
 			err = ac.CloseAgent(a)
 		}
 		if errors.Is(err, ErrCloseTimeout) {
 			err = errors.Join(err, a.reg.ReleaseName())
+			s.mu.Lock()
+			s.timedOut = append(s.timedOut, a)
+			s.mu.Unlock()
 		} else {
 			err = errors.Join(err, a.close())
 		}
@@ -178,8 +187,9 @@ func (s *Server) Close() error {
 }
 
 // agent returns the bound agent for c, registering it on the first bound
-// call. A call that finds its agent's registration still running gets
-// not_ready; it never waits on or binds to another caller's registration.
+// call, with the call admitted: the caller must call a.calls.Done. A call that
+// finds its agent's registration still running gets not_ready; it never waits
+// on or binds to another caller's registration.
 func (s *Server) agent(ctx context.Context, c caller) (*Agent, string, *Error) {
 	id := identity.AgentID(string(c.harness), c.sessionRef)
 	s.mu.Lock()
@@ -202,6 +212,7 @@ func (s *Server) agent(ctx context.Context, c caller) (*Agent, string, *Error) {
 			close(a.ready)
 			return nil, "", toolError(err)
 		}
+		a.admit()
 		close(a.ready)
 		return a, notice, nil
 	}
@@ -213,6 +224,9 @@ func (s *Server) agent(ctx context.Context, c caller) (*Agent, string, *Error) {
 	}
 	if a.err != nil {
 		return nil, "", &Error{Code: CodeNotReady, Reason: "binding_failed"}
+	}
+	if !a.admit() {
+		return nil, "", &Error{Code: CodeNotReady, Reason: "agent_retiring"}
 	}
 	return a, s.followRename(a, c), nil
 }
@@ -415,6 +429,7 @@ func boundTool[In any](s *Server, t *mcp.Tool, h func(context.Context, *Agent, I
 		if e != nil {
 			return errResult(e)
 		}
+		defer a.calls.Done()
 		out, err := h(ctx, a, in)
 		if err != nil {
 			return errResult(toolError(err))

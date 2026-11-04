@@ -203,7 +203,8 @@ func (s *Shim) CloseAgent(a *mcpserver.Agent) error {
 }
 
 // HandlerCloseWait bounds how long closeState waits, in total, for the A2A
-// listener and the UDS handlers to stop after their context is cancelled.
+// listener and the UDS handlers to stop after their context is cancelled and
+// for the agent's in-flight tool calls to finish.
 var HandlerCloseWait = 5 * time.Second
 
 func (s *Shim) closeState(st *AgentState) error {
@@ -226,7 +227,12 @@ func (s *Shim) closeState(st *AgentState) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), HandlerCloseWait)
 	defer cancel()
-	a2aDone, udsDone := make(chan error, 1), make(chan error, 1)
+	a2aDone, udsDone, callsDone := make(chan error, 1), make(chan error, 1), make(chan error, 1)
+	if st.agent != nil {
+		go func() { callsDone <- st.agent.Drain(ctx) }()
+	} else {
+		callsDone <- nil
+	}
 	if st.a2a.Close != nil {
 		go func() { a2aDone <- st.a2a.Close(ctx) }()
 	} else {
@@ -243,8 +249,10 @@ func (s *Shim) closeState(st *AgentState) error {
 	}
 	var errs []error
 	timedOut := false
-	for range 2 {
+	for range 3 {
 		select {
+		case err := <-callsDone:
+			timedOut = timedOut || errors.Is(err, context.DeadlineExceeded)
 		case err := <-a2aDone:
 			timedOut = timedOut || errors.Is(err, context.DeadlineExceeded)
 			errs = append(errs, err)

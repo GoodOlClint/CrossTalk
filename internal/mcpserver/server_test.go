@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -500,4 +501,37 @@ func TestRetireReleasesNameWhenCloseTimesOut(t *testing.T) {
 	if !isErr || res["reason"] != "agent_held" {
 		t.Fatalf("resume during timeout: %v %v", isErr, res)
 	}
+}
+
+func TestDrainRefusesNewCallsAndWaitsForThoseInFlight(t *testing.T) {
+	a := &Agent{}
+	if !a.admit() {
+		t.Fatal("first call refused")
+	}
+	short, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if err := a.Drain(short); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("Drain with a call in flight: %v", err)
+	}
+	if a.admit() {
+		t.Fatal("call admitted after drain began")
+	}
+	a.calls.Done()
+	if err := a.Drain(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	b := &Agent{}
+	var wg sync.WaitGroup
+	for range 32 {
+		wg.Go(func() {
+			if b.admit() {
+				b.calls.Done()
+			}
+		})
+	}
+	if err := b.Drain(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	wg.Wait()
 }

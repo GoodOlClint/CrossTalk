@@ -79,7 +79,8 @@ type HarnessBinder interface {
 // AgentCloser is optionally implemented by a Backend holding per-agent
 // listeners. CloseAgent runs while the agent's locks are still held, before
 // the descriptor is removed, and also when a registration fails after
-// BindHarness; it must tolerate an agent it never finished binding.
+// BindHarness; it must tolerate an agent it never finished binding. It waits
+// on Agent.Drain within its budget, since the journal closes after it returns.
 // An error wrapping ErrCloseTimeout means a handler may still dispatch or
 // write, so the agent's locks and descriptor are kept until process exit.
 type AgentCloser interface {
