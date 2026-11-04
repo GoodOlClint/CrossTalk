@@ -515,6 +515,20 @@ func TestNativeReplyCorrelation(t *testing.T) {
 	}
 }
 
+func TestCloseRouteLeavesOnlyOutstandingDelivery(t *testing.T) {
+	e := newEnv(t)
+	a1, a2 := newMsg(msg.Ask, "q1"), newMsg(msg.Ask, "q2")
+	e.recv(A2A, alice, a1)
+	e.recv(A2A, alice, a2)
+	if !e.r.CloseRoute(a1.MessageID) || e.r.CloseRoute(a1.MessageID) {
+		t.Fatal("CloseRoute should report true once")
+	}
+	r := e.native(ownSession, "answer")
+	if r.State != adapter.Accepted || r.InReplyTo == nil || *r.InReplyTo != a2.MessageID {
+		t.Fatalf("%+v", r)
+	}
+}
+
 // Test 13 (core): with A and C both outstanding, a native reply reaches
 // neither; once only one is outstanding it reaches that one.
 func TestNativeReplyNeverCrossesSenders(t *testing.T) {

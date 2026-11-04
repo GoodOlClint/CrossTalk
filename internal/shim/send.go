@@ -256,6 +256,7 @@ func (s *Shim) Reply(ctx context.Context, from *mcpserver.Agent, messageID, text
 	if err := st.agent.Journal().Append(st.obligation(r, key, journal.StatePending, true)); err != nil {
 		return mcpserver.Result{}, err
 	}
+	st.rcv.CloseRoute(orig.MessageID)
 	var hookErr error
 	if s.opt.OnReply != nil {
 		hookErr = s.opt.OnReply(ctx, st, orig, r)

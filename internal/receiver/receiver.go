@@ -353,6 +353,22 @@ func (r *Receiver) closeRoute(rt route) {
 	r.mu.Unlock()
 }
 
+// CloseRoute removes the open route for a delivered message id and journals
+// it closed; it reports whether one existed.
+func (r *Receiver) CloseRoute(messageID string) bool {
+	r.mu.Lock()
+	idx := slices.IndexFunc(r.routes, func(o route) bool { return o.MessageID == messageID })
+	if idx < 0 {
+		r.mu.Unlock()
+		return false
+	}
+	rt := r.routes[idx]
+	r.routes = slices.Delete(r.routes, idx, idx+1)
+	r.mu.Unlock()
+	r.j.Append(journal.Record{Type: journal.TypeRoute, Session: rt.Session, MessageID: rt.MessageID, Sender: rt.Sender, State: journal.StateClosed})
+	return true
+}
+
 // takeRoute removes and returns the only open route into session; with zero
 // or several outstanding deliveries it returns false and consumes nothing (F6).
 func (r *Receiver) takeRoute(session string) (route, bool) {

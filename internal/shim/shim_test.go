@@ -299,6 +299,16 @@ func TestReplyRoutesThroughJournal(t *testing.T) {
 		t.Fatalf("alice's journal in_reply_to %q, want %s", inReplyTo, askID)
 	}
 
+	var routeStates []string
+	for _, r := range journalRecords(t, w, bobID) {
+		if r.Type == journal.TypeRoute && r.MessageID == askID {
+			routeStates = append(routeStates, r.State)
+		}
+	}
+	if !slices.Equal(routeStates, []string{journal.StateOpen, journal.StateClosed}) {
+		t.Fatalf("route states after reply %v", routeStates)
+	}
+
 	if out := nb.ok(thread("T-bob"), "reply", map[string]any{"message_id": askID, "text": "4 again"}); out["state"] != "accepted" {
 		t.Fatalf("second reply %v", out)
 	}
