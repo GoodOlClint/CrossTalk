@@ -106,7 +106,12 @@ func (w *Wire) startA2A(_ context.Context, st *shim.AgentState) (shim.A2AListene
 	if _, err := udsingress.EnsureKey(tok); err != nil {
 		return shim.A2AListener{}, fmt.Errorf("wire: own token: %w", err)
 	}
+	tasks, err := a2a.NewJournalTaskStore(a.Journal(), journal.Options{})
+	if err != nil {
+		return shim.A2AListener{}, fmt.Errorf("wire: task replay: %w", err)
+	}
 	srv := a2a.NewServer(a2a.Config{
+		Tasks:    tasks,
 		Receiver: agentReceiver{st},
 		Profile: func() a2a.Profile {
 			d := a.Descriptor()
@@ -124,6 +129,7 @@ func (w *Wire) startA2A(_ context.Context, st *shim.AgentState) (shim.A2AListene
 		},
 		Logger: w.log.With("agent", id),
 	})
+	reconcile(srv, a.Journal(), w.log.With("agent", id))
 	url, err := srv.Listen()
 	if err != nil {
 		srv.Close()
@@ -149,6 +155,22 @@ func (w *Wire) startA2A(_ context.Context, st *shim.AgentState) (shim.A2AListene
 		<-done
 		return err
 	}}, nil
+}
+
+// reconcile applies dispatch outcomes the journal holds for tasks still open
+// after replay. It runs after receiver.Recover, which turns a claim with no
+// outcome into unknown. A later outcome change has no receiver hook yet; the
+// code that records one must call Server.Resolve for that message_id.
+func reconcile(srv *a2a.Server, j *journal.Journal, log *slog.Logger) {
+	for _, id := range srv.PendingMessageIDs() {
+		r, ok := j.DispatchState(id)
+		if !ok || r.Type != journal.TypeOutcome {
+			continue
+		}
+		if err := srv.Resolve(id, adapter.State(r.State), ""); err != nil {
+			log.Warn("wire: task reconcile", "message_id", id, "err", err)
+		}
+	}
 }
 
 // resolvePeer accepts a sender's own token only at the path this package
