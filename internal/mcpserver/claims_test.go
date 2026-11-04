@@ -145,3 +145,12 @@ func TestClaimRemoteTargetGoesThroughBackend(t *testing.T) {
 	e.fb.ClaimErr = rejected("not_owner")
 	e.mustErr(thread("C"), "release", map[string]any{"name": "d"}, CodeRejected, "not_owner")
 }
+
+func TestClaimInformErrorCarriesHint(t *testing.T) {
+	e := claimEnv(t)
+	e.fb.SendErr = rejected("agent_held")
+	out := e.mustOK(thread("A"), "claim", map[string]any{"name": "b"})
+	if s, _ := out["inform_error"].(string); !strings.Contains(s, "claude mcp remove") {
+		t.Fatalf("inform_error %v", out)
+	}
+}
