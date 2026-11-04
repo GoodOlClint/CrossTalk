@@ -310,14 +310,80 @@ func TestAgentCard(t *testing.T) {
 	var doc struct {
 		Metadata map[string]map[string]string `json:"metadata"`
 	}
+	if strings.Contains(string(raw), "cwd") {
+		t.Error("card carries cwd")
+	}
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		t.Fatal(err)
 	}
-	if got := doc.Metadata[MetaKey]; got["role"] != "primary" || got["harness"] != "claude" || got["cwd"] != "/work/self" {
+	if got := doc.Metadata[MetaKey]; got["role"] != "primary" || got["harness"] != "claude" {
 		t.Errorf("metadata.crosstalk = %v", got)
 	}
 	if strings.Contains(string(raw), e.peerTok) || strings.Contains(card.Description, "/work/self") {
 		t.Error("card leaks the token or puts cwd in the description")
+	}
+}
+
+// Test 17 (a), ADR 0011.
+func TestAgentCardExposure(t *testing.T) {
+	e := newEnv(t, receiver.Limits{}, Limits{}, nil)
+	port := strings.TrimPrefix(e.url, "http://127.0.0.1:")
+	do := func(method, path, host string) *http.Response {
+		t.Helper()
+		req, err := http.NewRequest(method, e.url+path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Origin", "http://evil.example")
+		req.Header.Set("Access-Control-Request-Method", "GET")
+		if host != "" {
+			req.Host = host
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { resp.Body.Close() })
+		return resp
+	}
+	noCORS := func(what string, resp *http.Response) {
+		t.Helper()
+		for k := range resp.Header {
+			if strings.HasPrefix(strings.ToLower(k), "access-control-") || strings.EqualFold(k, "Vary") {
+				t.Errorf("%s: header %s present", what, k)
+			}
+		}
+	}
+	for _, path := range []string{"/.well-known/agent-card.json"} {
+		for _, host := range []string{"", "127.0.0.1:" + port, "localhost:" + port, "[::1]:" + port} {
+			resp := do(http.MethodGet, path, host)
+			raw, _ := io.ReadAll(resp.Body)
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("GET %s host %q = %d", path, host, resp.StatusCode)
+			}
+			noCORS("GET "+path, resp)
+			if strings.Contains(string(raw), "cwd") {
+				t.Errorf("GET %s carries cwd: %s", path, raw)
+			}
+			if !json.Valid(raw) {
+				t.Errorf("GET %s body is not JSON", path)
+			}
+		}
+		resp := do(http.MethodOptions, path, "")
+		if resp.StatusCode != http.StatusNoContent {
+			t.Errorf("OPTIONS %s = %d", path, resp.StatusCode)
+		}
+		noCORS("OPTIONS "+path, resp)
+		for _, m := range []string{http.MethodGet, http.MethodOptions} {
+			resp := do(m, path, "evil.example")
+			if resp.StatusCode != http.StatusMisdirectedRequest {
+				t.Errorf("%s %s with foreign Host = %d", m, path, resp.StatusCode)
+			}
+			noCORS(m+" foreign host", resp)
+		}
+	}
+	if resp := do(http.MethodGet, "/.well-known/agent.json", ""); resp.StatusCode != http.StatusNotFound {
+		t.Errorf("legacy card path = %d", resp.StatusCode)
 	}
 }
 

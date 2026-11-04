@@ -206,7 +206,7 @@ func (s *Server) Listen() (string, error) {
 	}
 	mux := http.NewServeMux()
 	mux.Handle("/{$}", limitBody(a2asrv.NewJSONRPCHandler(h)))
-	mux.Handle(a2asrv.WellKnownAgentCardPath, a2asrv.NewAgentCardHandler(cardProducer{s: s}))
+	mux.Handle(a2asrv.WellKnownAgentCardPath, loopbackCard(a2asrv.NewAgentCardHandler(cardProducer{s: s})))
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -215,6 +215,52 @@ func (s *Server) Listen() (string, error) {
 	s.url = url
 	s.srv = &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second, ErrorLog: slog.NewLogLogger(s.cfg.Logger.Handler(), slog.LevelWarn)}
 	return url, nil
+}
+
+func loopbackHost(hostport string) bool {
+	h := hostport
+	if sh, _, err := net.SplitHostPort(hostport); err == nil {
+		h = sh
+	}
+	h = strings.TrimSuffix(strings.TrimPrefix(h, "["), "]")
+	return h == "127.0.0.1" || h == "::1" || strings.EqualFold(h, "localhost")
+}
+
+// loopbackCard serves the card to loopback Host values only and removes every
+// CORS header the SDK handler sets (ADR 0011).
+func loopbackCard(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !loopbackHost(r.Host) {
+			http.Error(w, "misdirected request", http.StatusMisdirectedRequest)
+			return
+		}
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(&corsStripper{ResponseWriter: w}, r)
+	})
+}
+
+type corsStripper struct{ http.ResponseWriter }
+
+func (c *corsStripper) strip() {
+	h := c.Header()
+	for k := range h {
+		if strings.HasPrefix(strings.ToLower(k), "access-control-") || strings.EqualFold(k, "Vary") {
+			delete(h, k)
+		}
+	}
+}
+
+func (c *corsStripper) WriteHeader(code int) {
+	c.strip()
+	c.ResponseWriter.WriteHeader(code)
+}
+
+func (c *corsStripper) Write(b []byte) (int, error) {
+	c.strip()
+	return c.ResponseWriter.Write(b)
 }
 
 func limitBody(next http.Handler) http.Handler {
@@ -435,7 +481,7 @@ func (c cardProducer) CardJSON(context.Context) ([]byte, error) {
 	if c.s.cfg.Profile != nil {
 		p = c.s.cfg.Profile()
 	}
-	m["metadata"] = map[string]any{MetaKey: map[string]any{"role": p.Role, "harness": p.Harness, "cwd": p.Cwd}}
+	m["metadata"] = map[string]any{MetaKey: map[string]any{"role": p.Role, "harness": p.Harness}}
 	return json.Marshal(m)
 }
 
