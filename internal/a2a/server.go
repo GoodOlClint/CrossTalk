@@ -99,6 +99,10 @@ type Config struct {
 	ResolveSender func(principal string) (receiver.Sender, bool)
 	// Tasks persists tasks; nil keeps them in memory for this Server only.
 	Tasks TaskStore
+	// OnAskClosed, when set, receives every message id of an ask task once
+	// it is terminal (completed, failed, canceled), and of every terminal
+	// ask task replayed by NewServer. It runs without the task lock held.
+	OnAskClosed func(messageIDs []string)
 }
 
 type Server struct {
@@ -147,6 +151,9 @@ func NewServer(c Config) *Server {
 		if t, ok := s.tasks.byMessage(id); ok {
 			s.armDeadline(t)
 		}
+	}
+	for _, t := range s.tasks.terminalAsks() {
+		s.askClosed(t)
 	}
 	return s
 }
@@ -321,7 +328,19 @@ func (s *Server) Close() error {
 // CompleteAsk completes the ask task for messageID with replyText as its
 // final message (§8 reply).
 func (s *Server) CompleteAsk(messageID, replyText string) error {
-	return s.tasks.completeAsk(messageID, replyText)
+	t, err := s.tasks.completeAsk(messageID, replyText)
+	if err != nil {
+		return err
+	}
+	s.askClosed(t)
+	return nil
+}
+
+// AskOpen reports whether messageID is a handle (first message or a
+// continuation) of an ask task (known), the task's id, and whether the task
+// is still open; a reply to a known, closed ask must not be sent.
+func (s *Server) AskOpen(messageID string) (taskID string, open, known bool) {
+	return s.tasks.askOpen(messageID)
 }
 
 // Resolve applies a delivery outcome learned after the receive returned (a

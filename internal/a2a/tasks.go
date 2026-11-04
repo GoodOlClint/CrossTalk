@@ -28,6 +28,7 @@ type task struct {
 	contextID string
 	principal string
 	messageID string
+	handles   []string
 	kind      msg.Kind
 	state     sdk.TaskState
 	delivery  string
@@ -175,6 +176,9 @@ func (st *store) remove(t *task) {
 	defer st.mu.Unlock()
 	delete(st.byID, t.id)
 	delete(st.byMsg, t.messageID)
+	for _, h := range t.handles {
+		delete(st.byMsg, h)
+	}
 	if err := st.ts.Save(t.record(journal.StateRemoved, nil)); err != nil {
 		st.log.Warn("a2a: task removal not journaled", "task", t.id, "err", err)
 	}
@@ -298,9 +302,14 @@ func (st *store) markUnknown(t *task) {
 	_ = st.saveLocked(t, nil)
 }
 
-func (st *store) appendHistory(t *task, m *sdk.Message) error {
+// appendContinuation records a continuation message of t and makes its
+// message id a handle that resolves to t.
+func (st *store) appendContinuation(t *task, m *sdk.Message) error {
 	st.mu.Lock()
 	defer st.mu.Unlock()
+	if o, ok := st.byMsg[m.ID]; ok && o != t {
+		return badMessage("message_id is in use by another task")
+	}
 	prev := *t
 	t.history = append(t.history, m)
 	t.updated = time.Now().UTC()
@@ -308,15 +317,57 @@ func (st *store) appendHistory(t *task, m *sdk.Message) error {
 		t.history, t.updated = prev.history, prev.updated
 		return err
 	}
+	st.index(t, m.ID)
 	return nil
 }
 
-func (st *store) completeAsk(messageID, text string) error {
+func (st *store) index(t *task, handle string) {
+	if handle == "" || handle == t.messageID || slices.Contains(t.handles, handle) {
+		return
+	}
+	t.handles = append(t.handles, handle)
+	st.byMsg[handle] = t
+}
+
+// askOpen reports whether messageID is a handle of an ask task, that task's
+// id, and whether the task is still open.
+func (st *store) askOpen(messageID string) (taskID string, open, known bool) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	t, ok := st.byMsg[messageID]
 	if !ok || t.kind != msg.Ask {
-		return ErrNoSuchAsk
+		return "", false, false
+	}
+	return string(t.id), !t.state.Terminal(), true
+}
+
+func (st *store) messageIDs(t *task) []string {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	return append([]string{t.messageID}, t.handles...)
+}
+
+func (st *store) terminalAsks() []*task {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	var out []*task
+	for _, t := range st.byID {
+		if t.kind == msg.Ask && t.state.Terminal() {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+func (st *store) completeAsk(messageID, text string) (*task, error) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	t, ok := st.byMsg[messageID]
+	if !ok || t.kind != msg.Ask {
+		return nil, ErrNoSuchAsk
+	}
+	if t.state == sdk.TaskStateCompleted && t.status != nil && messageText(t.status) == text {
+		return t, nil
 	}
 	reply := &sdk.Message{ID: msg.NewUUIDv7(), Role: sdk.MessageRoleAgent, ContextID: t.contextID, TaskID: t.id, Parts: sdk.ContentParts{sdk.NewTextPart(text)}}
 	delivery := ""
@@ -325,12 +376,12 @@ func (st *store) completeAsk(messageID, text string) error {
 	}
 	done, err := st.updateLocked(t, sdk.TaskStateCompleted, delivery, "", reply)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if !done {
-		return ErrAskClosed
+		return nil, ErrAskClosed
 	}
-	return nil
+	return t, nil
 }
 
 func (st *store) snapshot(t *task, historyLength *int) *sdk.Task {
@@ -588,7 +639,9 @@ func (s *Server) armDeadline(t *task) {
 		return
 	}
 	expire := func() {
-		_, _ = s.tasks.update(t, sdk.TaskStateFailed, "", ReasonDeadline, failedStatus(t, "failed", ReasonDeadline))
+		if done, _ := s.tasks.update(t, sdk.TaskStateFailed, "", ReasonDeadline, failedStatus(t, "failed", ReasonDeadline)); done {
+			s.askClosed(t)
+		}
 	}
 	if d := time.Until(t.deadline); d > 0 {
 		s.tasks.setTimer(t, d, expire)
@@ -610,9 +663,23 @@ func (s *Server) apply(t *task, res receiver.Result) {
 	if state == sdk.TaskStateFailed {
 		status = failedStatus(t, res.State, reason)
 	}
-	if _, err := s.tasks.update(t, state, delivery, reason, status); err != nil {
+	done, err := s.tasks.update(t, state, delivery, reason, status)
+	if err != nil {
 		s.tasks.markUnknown(t)
+		return
 	}
+	if done && state.Terminal() {
+		s.askClosed(t)
+	}
+}
+
+// askClosed closes the routes of a terminal ask task; it must run without
+// the task store's lock held.
+func (s *Server) askClosed(t *task) {
+	if t.kind != msg.Ask || s.cfg.OnAskClosed == nil {
+		return
+	}
+	s.cfg.OnAskClosed(s.tasks.messageIDs(t))
 }
 
 func (h *handler) continuation(ctx context.Context, snd receiver.Sender, m msg.Message, wire *sdk.Message, wait bool) (sdk.SendMessageResult, error) {
@@ -648,7 +715,10 @@ func (h *handler) continuation(ctx context.Context, snd receiver.Sender, m msg.M
 	}
 	wire.Metadata[MetaKey] = ct
 	if !res.Duplicate {
-		if err := s.tasks.appendHistory(t, wire); err != nil {
+		if err := s.tasks.appendContinuation(t, wire); err != nil {
+			if errors.Is(err, errBadMessage) {
+				return nil, err
+			}
 			return nil, sdk.NewError(sdk.ErrInternalError, "message could not be recorded")
 		}
 	}
@@ -713,6 +783,7 @@ func (h *handler) CancelTask(ctx context.Context, req *sdk.CancelTaskRequest) (*
 	if !ok {
 		return nil, sdk.ErrTaskNotCancelable
 	}
+	s.askClosed(t)
 	return s.tasks.snapshot(t, nil), nil
 }
 

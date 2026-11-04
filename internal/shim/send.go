@@ -20,6 +20,72 @@ import (
 // its own session, such as an ask's deadline notice (§8).
 const PrincipalCrossTalk = "crosstalk"
 
+const (
+	ReasonAskClosed      = "ask_closed"
+	ReasonAlreadyReplied = "already_replied"
+)
+
+// ErrAskClosed is what Options.OnReply returns when the ask's task reached a
+// terminal state before the reply could complete it.
+var ErrAskClosed = errors.New("shim: ask is closed")
+
+// AskTransport is a Transport that knows the ask tasks of the agents it
+// serves: known reports that messageID is a handle of an ask task, taskID
+// names that task, and open that it is not terminal.
+type AskTransport interface {
+	AskOpen(agentID, messageID string) (taskID string, open, known bool)
+}
+
+func askClosed(orig msg.Message) *mcpserver.Error {
+	return &mcpserver.Error{Code: mcpserver.CodeRejected, Reason: ReasonAskClosed, Message: "ask is closed; send your answer with send_message to " + orig.From}
+}
+
+func (st *AgentState) askTask(messageID string) (taskID string, closed bool) {
+	at, ok := st.shim.opt.Transport.(AskTransport)
+	if !ok {
+		return "", false
+	}
+	taskID, open, known := at.AskOpen(st.agent.ID(), messageID)
+	if !known {
+		return "", false
+	}
+	return taskID, !open
+}
+
+// priorReply returns the reply already journaled for the ask task taskID,
+// or, without a task, for the inbound messageID, with its obligation's
+// latest state.
+func (st *AgentState) priorReply(taskID, messageID string) (msg.Message, string, bool) {
+	j := st.agent.Journal()
+	rs, err := j.Records()
+	if err != nil {
+		return msg.Message{}, "", false
+	}
+	for _, rec := range rs {
+		if rec.Type != journal.TypeObligation || len(rec.Message) == 0 {
+			continue
+		}
+		if !(taskID != "" && rec.TaskID == taskID) && rec.InReplyTo != messageID {
+			continue
+		}
+		var r msg.Message
+		if json.Unmarshal(rec.Message, &r) != nil || r.InReplyTo == nil {
+			continue
+		}
+		l, _ := j.Latest(rec)
+		return r, l.State, true
+	}
+	return msg.Message{}, "", false
+}
+
+func (st *AgentState) storedResult(r msg.Message) mcpserver.Result {
+	res := mcpserver.Result{MessageID: r.MessageID, State: adapter.Accepted}
+	if o, ok := st.agent.Journal().Latest(journal.Record{Type: journal.TypeOutbound, MessageID: r.MessageID}); ok {
+		res.State, res.Reason = adapter.State(o.State), o.Reason
+	}
+	return res
+}
+
 func itoa(i int) string { return strconv.Itoa(i) }
 
 func (st *AgentState) newMessage(to string, k msg.Kind, d msg.Delivery, text string) msg.Message {
@@ -36,7 +102,7 @@ func (st *AgentState) outbound(m msg.Message, to string, state adapter.State, re
 
 // outboundTask also keeps the far side's task id, when the Transport reports one.
 func (st *AgentState) outboundTask(m msg.Message, to string, state adapter.State, reason string, withBody bool, taskID string) error {
-	r := journal.Record{Type: journal.TypeOutbound, MessageID: m.MessageID, To: to, Kind: string(m.Kind), State: string(state), Reason: reason, TaskID: taskID}
+	r := journal.Record{Type: journal.TypeOutbound, MessageID: m.MessageID, To: to, Kind: string(m.Kind), State: string(state), Reason: reason, TaskID: taskID, ContextID: m.ContextID}
 	if m.InReplyTo != nil {
 		r.InReplyTo = *m.InReplyTo
 	}
@@ -186,7 +252,7 @@ func (st *AgentState) rearmDeadlines() {
 		}
 	}
 	for id, ask := range asks {
-		if s := adapter.State(latest[id].State); s == adapter.Rejected || s == adapter.Unreachable || st.replied(id) {
+		if s := adapter.State(latest[id].State); s == adapter.Rejected || s == adapter.Unreachable || st.replied(id) || st.noticed(id) || st.legacyReceipt(ask, latest[id].To) {
 			continue
 		}
 		remaining := ask.SentAt.Add(time.Duration(ask.DeadlineSeconds) * time.Second).Sub(st.shim.now())
@@ -218,20 +284,58 @@ func (st *AgentState) expire(ask msg.Message) {
 	})
 }
 
-// replied reports whether any journaled inbound answers messageID.
+// replied reports whether a reply receipt exists for the outbound ask
+// messageID: an admitted reply from the asked peer in the ask's context.
 func (st *AgentState) replied(messageID string) bool {
 	rs, err := st.agent.Journal().Records()
 	if err != nil {
 		return false
 	}
 	for _, r := range rs {
-		if r.Type != journal.TypeDedupe || len(r.Message) == 0 {
+		if r.Type == journal.TypeReceipt && r.InReplyTo == messageID {
+			return true
+		}
+	}
+	return false
+}
+
+// noticed reports whether this agent's session was already told that the
+// ask messageID expired.
+func (st *AgentState) noticed(messageID string) bool {
+	rs, err := st.agent.Journal().Records()
+	if err != nil {
+		return false
+	}
+	for _, r := range rs {
+		var m msg.Message
+		if r.Type == journal.TypeDedupe && r.Sender == PrincipalCrossTalk && len(r.Message) > 0 && json.Unmarshal(r.Message, &m) == nil && m.InReplyTo != nil && *m.InReplyTo == messageID {
+			return true
+		}
+	}
+	return false
+}
+
+// legacyReceipt accepts, for a journal written before reply receipts, an
+// admitted inbound body from peer answering ask in its context, and records
+// it as a receipt so the fallback runs once.
+func (st *AgentState) legacyReceipt(ask msg.Message, peer string) bool {
+	j := st.agent.Journal()
+	rs, err := j.Records()
+	if err != nil || !isAgentID(peer) {
+		return false
+	}
+	for _, r := range rs {
+		if r.Type != journal.TypeDedupe || r.Sender != peer || len(r.Message) == 0 {
 			continue
 		}
 		var m msg.Message
-		if json.Unmarshal(r.Message, &m) == nil && m.InReplyTo != nil && *m.InReplyTo == messageID {
-			return true
+		if json.Unmarshal(r.Message, &m) != nil || m.InReplyTo == nil || *m.InReplyTo != ask.MessageID || m.ContextID != ask.ContextID {
+			continue
 		}
+		if l, ok := j.Latest(r); !ok || l.State == string(adapter.Rejected) {
+			continue
+		}
+		return j.Append(journal.Record{Type: journal.TypeReceipt, MessageID: m.MessageID, InReplyTo: ask.MessageID, Sender: peer, ContextID: ask.ContextID}) == nil
 	}
 	return false
 }
@@ -281,12 +385,17 @@ func isAgentID(k string) bool {
 }
 
 // Reply answers an inbound message; the destination is the stored original's
-// verified sender, never the model's text (§8, §5 F4).
+// verified sender, never the model's text (§8, §5 F4). There is one reply
+// per ask task (any of its message ids) or, without a task, per inbound
+// message (ADR 0010): a byte-identical retry returns the first result, or
+// resumes it while its obligation is still pending.
 func (s *Shim) Reply(ctx context.Context, from *mcpserver.Agent, messageID, text string) (mcpserver.Result, error) {
 	st, err := s.state(from)
 	if err != nil {
 		return mcpserver.Result{}, err
 	}
+	st.replyMu.Lock()
+	defer st.replyMu.Unlock()
 	orig, key, ok := st.inbound(messageID)
 	if !ok {
 		return mcpserver.Result{}, &mcpserver.Error{Code: mcpserver.CodeInvalid, Reason: ReasonNoSuchMessage}
@@ -294,32 +403,62 @@ func (s *Shim) Reply(ctx context.Context, from *mcpserver.Agent, messageID, text
 	if key == receiver.LabelUnverified {
 		return mcpserver.Result{}, &mcpserver.Error{Code: string(adapter.Unreachable), Reason: ReasonSenderUnverified}
 	}
+	taskID, closed := st.askTask(orig.MessageID)
+	if prev, state, ok := st.priorReply(taskID, orig.MessageID); ok {
+		switch {
+		case state == journal.StateClosed || prev.Text() != text && closed:
+			return mcpserver.Result{}, askClosed(orig)
+		case prev.Text() != text:
+			return mcpserver.Result{}, &mcpserver.Error{Code: mcpserver.CodeRejected, Reason: ReasonAlreadyReplied, Message: "this ask already has a different reply " + prev.MessageID + "; send further answers with send_message to " + orig.From}
+		case state == journal.StatePending:
+			return st.completeReply(ctx, orig, prev, key, taskID)
+		}
+		return st.storedResult(prev), nil
+	}
+	if closed {
+		return mcpserver.Result{}, askClosed(orig)
+	}
+	if isAgentID(key) && orig.Kind != msg.Ask && !st.rcv.RouteOpen(orig.MessageID) {
+		return mcpserver.Result{}, &mcpserver.Error{Code: mcpserver.CodeInvalid, Reason: ReasonNoSuchMessage}
+	}
 	r := st.newMessage(orig.From, msg.Inform, msg.Immediate, text)
 	irt := orig.MessageID
 	r.InReplyTo, r.ContextID = &irt, orig.ContextID
-	if err := st.agent.Journal().Append(st.obligation(r, key, journal.StatePending, true)); err != nil {
+	if err := st.agent.Journal().Append(st.obligation(r, key, journal.StatePending, true, taskID)); err != nil {
 		return mcpserver.Result{}, err
 	}
-	st.rcv.CloseRoute(orig.MessageID)
-	var hookErr error
-	if s.opt.OnReply != nil {
-		hookErr = s.opt.OnReply(ctx, st, orig, r)
-	}
-	return st.sendReply(ctx, r, key, hookErr), nil
+	return st.completeReply(ctx, orig, r, key, taskID)
 }
 
-func (st *AgentState) obligation(r msg.Message, to, state string, withBody bool) journal.Record {
-	rec := journal.Record{Type: journal.TypeObligation, MessageID: r.MessageID, InReplyTo: *r.InReplyTo, To: to, State: state}
+// completeReply completes the ask's task through OnReply, closes the route
+// once that succeeded, and sends r.
+func (st *AgentState) completeReply(ctx context.Context, orig, r msg.Message, key, taskID string) (mcpserver.Result, error) {
+	var hookErr error
+	if st.shim.opt.OnReply != nil {
+		hookErr = st.shim.opt.OnReply(ctx, st, orig, r)
+	}
+	if errors.Is(hookErr, ErrAskClosed) {
+		st.agent.Journal().Append(st.obligation(r, key, journal.StateClosed, false, taskID))
+		return mcpserver.Result{}, askClosed(orig)
+	}
+	if hookErr == nil {
+		st.rcv.CloseRoute(orig.MessageID)
+	}
+	return st.sendReply(ctx, r, key, hookErr, taskID), nil
+}
+
+func (st *AgentState) obligation(r msg.Message, to, state string, withBody bool, taskID string) journal.Record {
+	rec := journal.Record{Type: journal.TypeObligation, MessageID: r.MessageID, InReplyTo: *r.InReplyTo, To: to, State: state, TaskID: taskID}
 	if withBody {
 		rec.Message, _ = json.Marshal(r)
 	}
 	return rec
 }
 
-func (st *AgentState) sendReply(ctx context.Context, r msg.Message, key string, hookErr error) mcpserver.Result {
+func (st *AgentState) sendReply(ctx context.Context, r msg.Message, key string, hookErr error, askTask string) mcpserver.Result {
 	res := mcpserver.Result{MessageID: r.MessageID}
 	delivered := func() {
-		st.agent.Journal().Append(st.obligation(r, key, journal.StateDelivered, false))
+		st.agent.Journal().Append(st.obligation(r, key, journal.StateDelivered, false, askTask))
 	}
 	if !isAgentID(key) {
 		switch {
@@ -380,7 +519,7 @@ func (st *AgentState) retryObligations() {
 		if st.ctx.Err() != nil {
 			return
 		}
-		st.sendReply(st.ctx, r, rec.To, nil)
+		st.sendReply(st.ctx, r, rec.To, nil, rec.TaskID)
 	}
 }
 

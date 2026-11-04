@@ -834,7 +834,7 @@ func TestTerminalWriteFailureIsNotCompleted(t *testing.T) {
 	}
 	durable := len(ts.Load())
 	ts.fail = true
-	if err := st.completeAsk(m.MessageID, "answer"); err == nil {
+	if _, err := st.completeAsk(m.MessageID, "answer"); err == nil {
 		t.Fatal("completeAsk succeeded despite failed persistence")
 	}
 	if got := st.snapshot(task, nil); got.Status.State.Terminal() || len(got.History) != 1 {
@@ -854,5 +854,77 @@ func TestTerminalWriteFailureIsNotCompleted(t *testing.T) {
 	ct, _ := got.Metadata[MetaKey].(map[string]any)
 	if got.Status.State != sdk.TaskStateWorking || ct["state"] != string(adapter.Unknown) || ct["reason"] != receiver.ReasonJournal {
 		t.Fatalf("outcome write failure not reported unknown/journal: %v %v", got.Status.State, ct)
+	}
+}
+
+func TestAskClosedHookOnTerminalOutsideLock(t *testing.T) {
+	var mu sync.Mutex
+	closed := map[string]bool{}
+	var e *env
+	e = newEnv(t, receiver.Limits{}, Limits{}, func(s *Server) {
+		s.cfg.OnAskClosed = func(ids []string) {
+			for _, id := range ids {
+				_, open, known := s.AskOpen(id)
+				mu.Lock()
+				closed[id] = known && !open
+				mu.Unlock()
+			}
+		}
+	})
+	cl, ctx := e.peer()
+	isClosed := func(id string) bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return closed[id]
+	}
+
+	d := textMsg("anyone?", map[string]any{"kind": "ask", "deadline_seconds": 1})
+	if _, err := send(t, cl, ctx, d, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, open, known := e.srv.AskOpen(d.ID); !open || !known {
+		t.Fatalf("fresh ask open=%v known=%v", open, known)
+	}
+	waitFor(t, "deadline closes the ask", func() bool { return isClosed(d.ID) })
+
+	m := textMsg("which branch?", map[string]any{"kind": "ask"})
+	task, err := send(t, cl, ctx, m, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitState(t, cl, ctx, task.ID, sdk.TaskStateWorking)
+	if isClosed(m.ID) {
+		t.Fatal("working ask reported closed")
+	}
+	if err := e.srv.CompleteAsk(m.ID, "main"); err != nil {
+		t.Fatal(err)
+	}
+	if !isClosed(m.ID) {
+		t.Fatal("completed ask did not run the hook before CompleteAsk returned")
+	}
+
+	in := textMsg("fyi", nil)
+	if _, err := send(t, cl, ctx, in, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, known := e.srv.AskOpen(in.ID); known {
+		t.Fatal("an inform is reported as an ask")
+	}
+	mu.Lock()
+	_, hooked := closed[in.ID]
+	mu.Unlock()
+	if hooked {
+		t.Fatal("a completed inform closed its route")
+	}
+}
+
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
