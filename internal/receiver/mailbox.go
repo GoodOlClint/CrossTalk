@@ -199,7 +199,9 @@ func (r *Receiver) Mailbox(after string, limit int) ([]Entry, error) {
 // no evidence to reconcile with) or unreachable when it was bound to another
 // conversation. Open routes for the current conversation are reloaded;
 // routes and accepted-but-unclaimed messages bound to another conversation
-// are closed and unreachable.
+// are closed and unreachable. A submitted message of this conversation with
+// no claim and no task record (a uds-ingress message; a2a.Resume owns the
+// rest) becomes unknown so receive_message surfaces it.
 func (r *Receiver) Recover(rp journal.Replay) error {
 	self := r.self()
 	cur := journal.Binding{HarnessEndpoint: self.Binding.HarnessEndpoint, SessionRef: self.Binding.SessionRef}
@@ -211,6 +213,12 @@ func (r *Receiver) Recover(rp journal.Replay) error {
 	senders := map[string][]string{}
 	for _, k := range order {
 		senders[k.id] = append(senders[k.id], k.sender)
+	}
+	tasked := map[string]bool{}
+	for _, rec := range rs {
+		if rec.Type == journal.TypeTask && rec.MessageID != "" {
+			tasked[rec.MessageID] = true
+		}
 	}
 	var errs []error
 	for _, d := range rp.Dispatching {
@@ -239,6 +247,11 @@ func (r *Receiver) Recover(rp journal.Replay) error {
 				continue
 			}
 			errs = append(errs, r.j.SetDedupeState(u.Sender, u.MessageID, string(adapter.Unreachable)))
+		case u.Type == journal.TypeDedupe && u.State == journal.StateSubmitted && !tasked[u.MessageID]:
+			if _, claimed := r.j.DispatchState(u.MessageID); claimed {
+				continue
+			}
+			errs = append(errs, r.j.SetDedupeState(u.Sender, u.MessageID, string(adapter.Unknown)))
 		}
 	}
 	return errors.Join(errs...)

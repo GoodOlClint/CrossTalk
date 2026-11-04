@@ -239,7 +239,7 @@ Source: `~/Documents/Codex/2026-11-04/crosstalk-design-review-1.9.md` (18 findin
 | R9 | major | Pending cap counts concurrent `Receive` calls, not unresolved tasks; admission runs after the task is created | accept | reserve against unresolved tasks before task creation; release on terminal or reconcile |
 | R10 | major | Unbounded metadata persisted; 17 MiB record makes the journal unreadable | accept | 256 KiB request-body cap before decode; persisted record cap equal to the reader's limit; both admission errors, no task created |
 | WA1 | major (wave-a review) | Known-length requests over the body cap returned bare HTTP 413, which the client maps to `unknown` | accept | `limitBody` answers with a JSON-RPC invalid-request error; test pins `rejected` |
-| WA2 | minor (wave-a review) | Pending cap bounds task ids, not all unresolved messages; continuations and native ingress are not counted | accept as scope note (§5) | an overall unresolved-message bound is a separate policy decision, parked for the operator |
+| WA2 | minor (wave-a review) | Pending cap bounds task ids, not all unresolved messages; continuations and native ingress are not counted | ACCEPTED, not to be built (operator ruling 2026-11-04) | no overall backlog bound: a native sender cannot see rejection, so a bound becomes silent loss |
 | R11 | major | Codex discovery and `Bind` use different endpoint sets; null `canAcceptDirectInput` treated as true | accept (Codex package, Codex implements) | one normalized endpoint source; missing evidence is `unreachable` |
 | R12 | major | Settle poll and transports lack per-request deadlines; UDS close waits on handlers before cancelling | accept | per-request deadlines inside the 2 s settle budget; cancel handler contexts before waiting; write deadlines on websocket |
 | R13 | major | Claude envelope drops `in_reply_to` and `kind` | accept | add `in-reply-to` and `kind` attributes to the envelope; parity test across harnesses |
@@ -249,7 +249,15 @@ Source: `~/Documents/Codex/2026-11-04/crosstalk-design-review-1.9.md` (18 findin
 | R17 | minor | `after` pages only problem states, tool help says full journal | accept as doc change | tool help and §8 say: cursor over the full journal, default state filter always applies |
 | R18 | minor | Normative text still describes removed mechanisms (Claude ack, turn/steer evidence, native routing tests 1/13/21/30, ADR 0001/0003/0004 clauses) | accept | reconcile in the cleanup sweep; ADRs 0001, 0003, 0004 and 0008 edited in place; conformance gate stays listed as open |
 
-Status 2026-11-04: R1 (s15), R2 (s16) and R3 (s17) are implemented on main with the probes turned into tests. Known gaps left for the sweep: R1 still ignores write errors after the outcome is durable (route close, post-send outbound appends); R2 resumes only A2A tasks, a submitted uds-ingress dedupe record with no task is not resumed because no sender evidence is retained; a resumed sender that is no longer registered is dispatched with its agent id only.
+Status 2026-11-04: R1 (s15), R2 (s16) and R3 (s17) are implemented on main with the probes turned into tests. Known gap left for the sweep: a resumed sender that is no longer registered is dispatched with its agent id only.
+
+Operator rulings 2026-11-04. FIXED: the journal short-write wedge (a failed append truncates back to the pre-append size, so a torn line can no longer glue onto the next record; if the truncate fails the next append retries it or refuses) and R2 surfacing (on replay a submitted uds-ingress dedupe record of the current conversation with no dispatch claim and no task record becomes `unknown` and appears in `receive_message`; it is not re-injected; A2A first messages always have a task record and stay with `a2a.Resume`). ACCEPTED, not to be built:
+
+- WA2: no overall backlog bound (see the row above).
+- R1: post-durable writes (route close, post-send outbound appends) stay ignored.
+- Asks with no deadline are kept; the 32 open-ask limit is the back-pressure.
+- A rejected continuation on a terminal task is not journaled.
+- Inform routes sweep on admission, on lookup and on Recover; there is no timer.
 
 Order of work when implementation resumes: s15–s17 (blockers) first, then R4–R6 together (reply transaction), then R7–R10, R12, R13; R11 goes to Codex; R14–R18 land with the cleanup sweep.
 
