@@ -294,7 +294,7 @@ func TestPassThroughTools(t *testing.T) {
 	}
 	e.mustOK(me, "send_message", map[string]any{"to": "bob", "text": "do", "kind": "command", "delivery": "next_turn"})
 	e.mustOK(me, "reply", map[string]any{"message_id": "m-1", "text": "answer"})
-	e.fb.SetMailbox(codexID("T-1"), MailboxEntry{MessageID: "m-2", From: "bob", State: "uncorrelated"})
+	e.fb.SetMailbox(codexID("T-1"), MailboxEntry{MessageID: "m-2", From: "bob", State: "bounced"})
 	out = e.mustOK(me, "receive_message", map[string]any{"limit": 5})
 	if ms, ok := out["messages"].([]any); !ok || len(ms) != 1 {
 		t.Fatalf("receive_message %v", out)

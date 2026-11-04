@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -38,7 +40,6 @@ const (
 	ReasonTooManyPending    = "too_many_pending"
 	ReasonCanceled          = "canceled"
 	ReasonDuplicateDispatch = "duplicate_dispatch"
-	ReasonNoForwarder       = "no_forwarder"
 	ReasonJournal           = "journal"
 )
 
@@ -106,10 +107,6 @@ type Recipient struct {
 	Binding adapter.Binding
 }
 
-type Forwarder interface {
-	Forward(ctx context.Context, m msg.Message, toAgentID string) (adapter.State, error)
-}
-
 type Limits struct {
 	MaxMessageBytes int
 	MaxPending      int
@@ -118,27 +115,27 @@ type Limits struct {
 var DefaultLimits = Limits{MaxMessageBytes: 64 << 10, MaxPending: 256}
 
 type Config struct {
-	Journal   *journal.Journal
-	Adapter   adapter.Adapter
-	Self      func() Recipient
-	Forwarder Forwarder
-	Limits    Limits
-	Now       func() time.Time
+	Journal *journal.Journal
+	Adapter adapter.Adapter
+	Self    func() Recipient
+	Limits  Limits
+	Now     func() time.Time
 }
 
 type route struct {
 	Session   string
 	MessageID string
 	Sender    string
+	Name      string
+	Kind      msg.Kind
 }
 
 type Receiver struct {
-	j       *journal.Journal
-	ad      adapter.Adapter
-	self    func() Recipient
-	forward Forwarder
-	limits  Limits
-	now     func() time.Time
+	j      *journal.Journal
+	ad     adapter.Adapter
+	self   func() Recipient
+	limits Limits
+	now    func() time.Time
 
 	mu      sync.Mutex
 	pending int
@@ -157,7 +154,7 @@ func New(c Config) *Receiver {
 	if c.Now == nil {
 		c.Now = time.Now
 	}
-	return &Receiver{j: c.Journal, ad: c.Adapter, self: c.Self, forward: c.Forwarder, limits: c.Limits, now: c.Now}
+	return &Receiver{j: c.Journal, ad: c.Adapter, self: c.Self, limits: c.Limits, now: c.Now}
 }
 
 func rejected(id, reason string) Result {
@@ -249,7 +246,7 @@ func (r *Receiver) Receive(ctx context.Context, in Inbound) Result {
 		return reject(ReasonDuplicateDispatch)
 	}
 
-	rt := route{Session: self.Binding.SessionRef, MessageID: m.MessageID, Sender: in.Sender.AgentID}
+	rt := route{Session: self.Binding.SessionRef, MessageID: m.MessageID, Sender: in.Sender.AgentID, Name: in.Sender.Name, Kind: m.Kind}
 	routed := in.Sender.registered()
 	if routed {
 		r.openRoute(rt)
@@ -340,16 +337,16 @@ func (r *Receiver) unreserve() {
 }
 
 func (r *Receiver) openRoute(rt route) {
-	r.j.Append(journal.Record{Type: journal.TypeRoute, Session: rt.Session, MessageID: rt.MessageID, Sender: rt.Sender, State: journal.StateOpen})
+	r.j.Append(journal.Record{Type: journal.TypeRoute, Session: rt.Session, MessageID: rt.MessageID, Sender: rt.Sender, To: rt.Name, Kind: string(rt.Kind), State: journal.StateOpen})
 	r.mu.Lock()
 	r.routes = append(r.routes, rt)
 	r.mu.Unlock()
 }
 
 func (r *Receiver) closeRoute(rt route) {
-	r.j.Append(journal.Record{Type: journal.TypeRoute, Session: rt.Session, MessageID: rt.MessageID, Sender: rt.Sender, State: journal.StateClosed})
+	r.j.Append(journal.Record{Type: journal.TypeRoute, Session: rt.Session, MessageID: rt.MessageID, Sender: rt.Sender, To: rt.Name, Kind: string(rt.Kind), State: journal.StateClosed})
 	r.mu.Lock()
-	r.routes = slices.DeleteFunc(r.routes, func(o route) bool { return o == rt })
+	r.routes = slices.DeleteFunc(r.routes, func(o route) bool { return o.Session == rt.Session && o.MessageID == rt.MessageID })
 	r.mu.Unlock()
 }
 
@@ -365,62 +362,51 @@ func (r *Receiver) CloseRoute(messageID string) bool {
 	rt := r.routes[idx]
 	r.routes = slices.Delete(r.routes, idx, idx+1)
 	r.mu.Unlock()
-	r.j.Append(journal.Record{Type: journal.TypeRoute, Session: rt.Session, MessageID: rt.MessageID, Sender: rt.Sender, State: journal.StateClosed})
+	r.j.Append(journal.Record{Type: journal.TypeRoute, Session: rt.Session, MessageID: rt.MessageID, Sender: rt.Sender, To: rt.Name, Kind: string(rt.Kind), State: journal.StateClosed})
 	return true
 }
 
-// soleRoute returns the only open route into session without consuming it;
-// with zero or several outstanding deliveries it returns false (F6). Only the
-// reply tool, which names a message id, closes a route.
-func (r *Receiver) soleRoute(session string) (route, bool) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	idx := -1
-	for i, rt := range r.routes {
-		if rt.Session != session {
-			continue
-		}
-		if idx >= 0 {
-			return route{}, false
-		}
-		idx = i
+// nativeReply handles a native frame from this agent's own session. The frame
+// carries no correlation id, so it is never forwarded: it is journaled as
+// bounced and the session is told, through its own harness, which inbound
+// messages it can answer with the reply tool (ADR 0009). The bounce opens no
+// route and completes nothing.
+func (r *Receiver) nativeReply(ctx context.Context, key string, m msg.Message, self Recipient) Result {
+	r.j.SetDedupeState(key, m.MessageID, string(adapter.Bounced))
+	res := Result{MessageID: m.MessageID, State: adapter.Bounced}
+	st, _ := r.ad.Inject(ctx, r.bounce(m, self.Binding.SessionRef), adapter.Delivery{Mode: msg.Immediate, Target: self.Binding, VerifiedSender: true})
+	if st != adapter.Accepted && st != adapter.Queued {
+		res.Reason = string(st)
 	}
-	if idx < 0 {
-		return route{}, false
-	}
-	return r.routes[idx], true
+	return res
 }
 
-// nativeReply handles a native frame from this agent's own session: a reply
-// to an earlier delivery. The destination comes only from the journaled
-// route record, never from the reply text (§5 F4, C8). A native reply carries
-// no correlation id, so it is forwarded as an inform with in_reply_to as a
-// hint; it never completes an ask and never closes the route.
-func (r *Receiver) nativeReply(ctx context.Context, key string, m msg.Message, self Recipient) Result {
-	rt, ok := r.soleRoute(self.Binding.SessionRef)
-	if !ok {
-		r.j.SetDedupeState(key, m.MessageID, string(adapter.Uncorrelated))
-		return Result{MessageID: m.MessageID, State: adapter.Uncorrelated}
+func (r *Receiver) bounce(native msg.Message, session string) msg.Message {
+	first, _, _ := strings.Cut(native.Text(), "\n")
+	if rs := []rune(first); len(rs) > 200 {
+		first = string(rs[:200])
 	}
-	irt := rt.MessageID
-	m.InReplyTo = &irt
-	m.To = rt.Sender
-	r.storeMessage(key, m, journal.StateSubmitted)
-	if r.forward == nil {
-		r.storeMessage(key, m, string(adapter.Unreachable))
-		return Result{MessageID: m.MessageID, State: adapter.Unreachable, Reason: ReasonNoForwarder, InReplyTo: &irt}
+	var b strings.Builder
+	b.WriteString("CrossTalk: your native message was not delivered. Do not reply to this message natively.\n")
+	fmt.Fprintf(&b, "Undelivered text began: %s\n", first)
+	r.mu.Lock()
+	var open []route
+	for _, rt := range r.routes {
+		if rt.Session == session {
+			open = append(open, rt)
+		}
 	}
-	if ok, err := r.j.Claim(m.MessageID); err != nil || !ok {
-		r.j.SetDedupeState(key, m.MessageID, string(adapter.Rejected))
-		return rejected(m.MessageID, ReasonJournal)
+	r.mu.Unlock()
+	if len(open) == 0 {
+		b.WriteString("No open inbound messages; use send_message(to=<name>) to start a conversation.")
+	} else {
+		b.WriteString("Open inbound messages you can answer with the reply tool:")
+		for _, rt := range open {
+			fmt.Fprintf(&b, "\n- message_id=%s from=%s kind=%s", rt.MessageID, rt.Name, rt.Kind)
+		}
 	}
-	st, _ := r.forward.Forward(ctx, m, rt.Sender)
-	if !st.Injectable() {
-		st = adapter.Unknown
-	}
-	r.j.Resolve(m.MessageID, string(st))
-	r.j.SetDedupeState(key, m.MessageID, string(st))
-	return Result{MessageID: m.MessageID, State: st, InReplyTo: &irt}
+	id := msg.NewUUIDv7()
+	return msg.Message{MessageID: id, ContextID: id, From: "crosstalk", To: native.To, Kind: msg.Inform, Delivery: msg.Immediate, SentAt: r.now().UTC(), Parts: []msg.Part{{Type: "text", Text: b.String()}}}
 }
 
 func (r *Receiver) storeMessage(key string, m msg.Message, state string) {

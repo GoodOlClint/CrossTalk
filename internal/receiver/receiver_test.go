@@ -24,33 +24,9 @@ type env struct {
 	dir  string
 	j    *journal.Journal
 	fake *adapter.Fake
-	fw   *fakeForwarder
 	r    *Receiver
 	mu   sync.Mutex
 	me   Recipient
-}
-
-type fakeForwarder struct {
-	mu   sync.Mutex
-	sent []forwarded
-}
-
-type forwarded struct {
-	m  msg.Message
-	to string
-}
-
-func (f *fakeForwarder) Forward(_ context.Context, m msg.Message, to string) (adapter.State, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.sent = append(f.sent, forwarded{m, to})
-	return adapter.Accepted, nil
-}
-
-func (f *fakeForwarder) all() []forwarded {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return append([]forwarded(nil), f.sent...)
 }
 
 func jbind(b adapter.Binding, inst string) journal.Binding {
@@ -58,7 +34,7 @@ func jbind(b adapter.Binding, inst string) journal.Binding {
 }
 
 func newEnv(t *testing.T) *env {
-	e := &env{t: t, dir: t.TempDir(), fake: adapter.NewFake(adapter.Claude), fw: &fakeForwarder{}}
+	e := &env{t: t, dir: t.TempDir(), fake: adapter.NewFake(adapter.Claude)}
 	e.me = Recipient{AgentID: selfID, Name: "bob", Role: registry.RolePrimary, Binding: selfBinding}
 	e.open(selfBinding, "inst-1")
 	return e
@@ -74,7 +50,7 @@ func (e *env) open(b adapter.Binding, inst string) journal.Replay {
 	e.me.Binding = b
 	e.mu.Unlock()
 	e.j = j
-	e.r = New(Config{Journal: j, Adapter: e.fake, Self: e.self, Forwarder: e.fw})
+	e.r = New(Config{Journal: j, Adapter: e.fake, Self: e.self})
 	return rp
 }
 
@@ -361,11 +337,8 @@ func TestRecoverOtherConversationUnreachable(t *testing.T) {
 	if st, _ := e.j.Dedupe(alice.AgentID, m.MessageID); st != "unreachable" {
 		t.Fatalf("state %q", st)
 	}
-	if r := e.native(Sender{Verified: true, AgentID: selfID, Name: "bob"}, "reply"); r.State != adapter.Uncorrelated {
+	if r := e.native(Sender{Verified: true, AgentID: selfID, Name: "bob"}, "reply"); r.State != adapter.Bounced || !strings.Contains(e.fake.Writes()[e.writes()-1].Message.Text(), "No open inbound messages") {
 		t.Fatalf("old route used in new conversation: %+v", r)
-	}
-	if len(e.fw.all()) != 0 {
-		t.Fatal("forwarded")
 	}
 }
 
@@ -470,55 +443,59 @@ func TestNativeFramesFreshIDNoDedupe(t *testing.T) {
 	}
 }
 
-// §5 F4/F6/C8, tests 5 and 13 (core): a native reply from the bound session
-// correlates only when exactly one delivery is outstanding, and never
-// consumes the route: a second native reply still correlates, and only
-// CloseRoute (the reply tool) closes it.
-func TestNativeReplyCorrelation(t *testing.T) {
+// ADR 0009, tests 5 and 13 (core): a native frame from the bound session is
+// never forwarded; it is bounced back into the same session with the open
+// inbound messages listed, and the routes stay open for the reply tool.
+func TestNativeReplyBounce(t *testing.T) {
 	e := newEnv(t)
 	m := newMsg(msg.Ask, "question")
 	if r := e.recv(A2A, alice, m); r.State != adapter.Accepted {
 		t.Fatal(r)
 	}
 	r := e.native(ownSession, "answer")
-	if r.State != adapter.Accepted || r.InReplyTo == nil || *r.InReplyTo != m.MessageID {
+	if r.State != adapter.Bounced || r.InReplyTo != nil {
 		t.Fatalf("%+v", r)
 	}
-	fw := e.fw.all()
-	if len(fw) != 1 || fw[0].to != alice.AgentID || *fw[0].m.InReplyTo != m.MessageID || fw[0].m.Parts[0].Text != "answer" {
-		t.Fatalf("forwarded %+v", fw)
+	w := e.fake.Writes()
+	if len(w) != 2 {
+		t.Fatalf("writes %d", len(w))
 	}
-	if e.writes() != 1 {
-		t.Fatal("reply was injected into its own session")
+	bt := w[1].Message.Text()
+	for _, want := range []string{"message_id=" + m.MessageID, "from=alice", "kind=ask", "answer"} {
+		if !strings.Contains(bt, want) {
+			t.Fatalf("bounce lacks %q: %s", want, bt)
+		}
 	}
-	if r := e.native(ownSession, "second answer"); r.State != adapter.Accepted || *r.InReplyTo != m.MessageID {
-		t.Fatalf("native reply consumed the route: %+v", r)
+	if w[1].Message.From != "crosstalk" || w[1].Delivery.Target != selfBinding || !w[1].Delivery.VerifiedSender {
+		t.Fatalf("bounce %+v", w[1])
 	}
 	if !e.r.CloseRoute(m.MessageID) {
-		t.Fatal("route should still be open for the reply tool")
+		t.Fatal("bounce closed the route")
 	}
-	if r := e.native(ownSession, "third answer"); r.State != adapter.Uncorrelated {
-		t.Fatalf("closed route reused: %+v", r)
+	e.native(ownSession, "no routes")
+	if bt := e.fake.Writes()[2].Message.Text(); !strings.Contains(bt, "No open inbound messages") {
+		t.Fatalf("%s", bt)
 	}
 
 	a1, a2 := newMsg(msg.Ask, "q1"), newMsg(msg.Ask, "q2")
 	e.recv(A2A, alice, a1)
 	e.recv(A2A, alice, a2)
 	r = e.native(ownSession, "which?")
-	if r.State != adapter.Uncorrelated || r.InReplyTo != nil {
+	if r.State != adapter.Bounced || r.InReplyTo != nil {
 		t.Fatalf("two outstanding: %+v", r)
 	}
-	if len(e.fw.all()) != 2 {
-		t.Fatal("ambiguous reply forwarded")
+	bt = e.fake.Writes()[len(e.fake.Writes())-1].Message.Text()
+	if !strings.Contains(bt, "message_id="+a1.MessageID) || !strings.Contains(bt, "message_id="+a2.MessageID) {
+		t.Fatalf("%s", bt)
 	}
 	mb, _ := e.r.Mailbox("", 0)
-	var unc []Entry
+	var bounced []Entry
 	for _, en := range mb {
-		if en.State == "uncorrelated" {
-			unc = append(unc, en)
+		if en.State == "bounced" {
+			bounced = append(bounced, en)
 		}
 	}
-	if len(unc) != 2 || unc[1].Message.Parts[0].Text != "which?" || unc[1].InReplyTo != nil {
+	if len(bounced) != 3 || bounced[2].Message.Parts[0].Text != "which?" || bounced[2].InReplyTo != nil {
 		t.Fatalf("mailbox %+v", mb)
 	}
 }
@@ -531,31 +508,24 @@ func TestCloseRouteLeavesOnlyOutstandingDelivery(t *testing.T) {
 	if !e.r.CloseRoute(a1.MessageID) || e.r.CloseRoute(a1.MessageID) {
 		t.Fatal("CloseRoute should report true once")
 	}
-	r := e.native(ownSession, "answer")
-	if r.State != adapter.Accepted || r.InReplyTo == nil || *r.InReplyTo != a2.MessageID {
-		t.Fatalf("%+v", r)
+	e.native(ownSession, "answer")
+	bt := e.fake.Writes()[2].Message.Text()
+	if strings.Contains(bt, a1.MessageID) || !strings.Contains(bt, a2.MessageID) {
+		t.Fatalf("%s", bt)
 	}
 }
 
-// Test 13 (core): with A and C both outstanding, a native reply reaches
-// neither; once only one is outstanding it reaches that one.
 func TestNativeReplyNeverCrossesSenders(t *testing.T) {
 	e := newEnv(t)
 	ma, mc := newMsg(msg.Inform, "from a"), newMsg(msg.Inform, "from c")
 	e.recv(A2A, alice, ma)
 	e.recv(A2A, carol, mc)
-	if r := e.native(ownSession, "to whom?"); r.State != adapter.Uncorrelated {
+	if r := e.native(ownSession, "to whom?"); r.State != adapter.Bounced {
 		t.Fatalf("%+v", r)
 	}
-	if len(e.fw.all()) != 0 {
-		t.Fatal("forwarded")
-	}
-	e.r.closeRoute(route{Session: selfBinding.SessionRef, MessageID: ma.MessageID, Sender: alice.AgentID})
-	if r := e.native(ownSession, "to c"); r.State != adapter.Accepted || *r.InReplyTo != mc.MessageID {
-		t.Fatalf("%+v", r)
-	}
-	if fw := e.fw.all(); len(fw) != 1 || fw[0].to != carol.AgentID {
-		t.Fatalf("%+v", fw)
+	bt := e.fake.Writes()[2].Message.Text()
+	if !strings.Contains(bt, "from=alice kind=inform") || !strings.Contains(bt, "from=carol kind=inform") {
+		t.Fatalf("%s", bt)
 	}
 }
 
@@ -568,8 +538,10 @@ func TestRouteSurvivesRestart(t *testing.T) {
 	if err := e.r.Recover(rp); err != nil {
 		t.Fatal(err)
 	}
-	if r := e.native(ownSession, "a"); r.State != adapter.Accepted || *r.InReplyTo != m.MessageID {
-		t.Fatalf("%+v", r)
+	e.native(ownSession, "a")
+	bt := e.fake.Writes()[1].Message.Text()
+	if !strings.Contains(bt, "message_id="+m.MessageID+" from=alice kind=ask") {
+		t.Fatalf("%s", bt)
 	}
 }
 
@@ -579,12 +551,14 @@ func TestUnreachableClosesRoute(t *testing.T) {
 	e.recv(A2A, alice, newMsg(msg.Inform, "x"))
 	m := newMsg(msg.Inform, "y")
 	e.recv(A2A, carol, m)
-	if r := e.native(ownSession, "a"); r.State != adapter.Accepted || *r.InReplyTo != m.MessageID {
-		t.Fatalf("undelivered message kept a route open: %+v", r)
+	e.native(ownSession, "a")
+	bt := e.fake.Writes()[1].Message.Text()
+	if strings.Contains(bt, "from=alice") || !strings.Contains(bt, "message_id="+m.MessageID) {
+		t.Fatalf("undelivered message kept a route open: %s", bt)
 	}
 }
 
-// §8 receive_message: only unreachable|unknown|uncorrelated, in journal
+// §8 receive_message: only unreachable|unknown|bounced, in journal
 // order, with after/limit pagination.
 func TestMailboxFilterAndPagination(t *testing.T) {
 	e := newEnv(t)

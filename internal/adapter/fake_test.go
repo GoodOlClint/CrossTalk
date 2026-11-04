@@ -23,7 +23,7 @@ func TestStateInjectable(t *testing.T) {
 			t.Errorf("%s not injectable", s)
 		}
 	}
-	for _, s := range []State{Uncorrelated, "dispatching", ""} {
+	for _, s := range []State{Bounced, "dispatching", ""} {
 		if s.Injectable() {
 			t.Errorf("%q injectable", s)
 		}
@@ -171,12 +171,12 @@ func TestFakeRegister(t *testing.T) {
 	}
 }
 
-func TestFakeRejectsUncorrelatedScript(t *testing.T) {
+func TestFakeRejectsBouncedScript(t *testing.T) {
 	f := NewFake(Codex)
-	f.ScriptInject(Outcome{State: Uncorrelated})
+	f.ScriptInject(Outcome{State: Bounced})
 	defer func() {
 		if recover() == nil {
-			t.Fatal("scripting uncorrelated as an inject result did not panic")
+			t.Fatal("scripting bounced as an inject result did not panic")
 		}
 	}()
 	_, _ = f.Inject(context.Background(), message("m"), target("t"))

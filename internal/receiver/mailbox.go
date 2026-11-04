@@ -32,7 +32,7 @@ type Entry struct {
 
 // MailboxStates are the states receive_message returns by default (§8);
 // accepted and queued are delivered by the harness itself.
-var MailboxStates = []adapter.State{adapter.Unreachable, adapter.Unknown, adapter.Uncorrelated}
+var MailboxStates = []adapter.State{adapter.Unreachable, adapter.Unknown, adapter.Bounced}
 
 func inMailbox(state string) bool {
 	for _, s := range MailboxStates {
@@ -85,7 +85,7 @@ type mailKey struct {
 }
 
 // Mailbox returns, in journal order, the inbound messages whose latest state
-// is unreachable, unknown or uncorrelated, and the outbound messages whose
+// is unreachable, unknown or bounced, and the outbound messages whose
 // latest state is unknown. after is a message_id cursor over the whole
 // journal; limit <= 0 means no limit.
 func (r *Receiver) Mailbox(after string, limit int) ([]Entry, error) {
@@ -215,11 +215,11 @@ func (r *Receiver) Recover(rp journal.Replay) error {
 		case u.Type == journal.TypeRoute && u.State == journal.StateOpen:
 			if u.Binding.SameConversation(cur) && u.Session == self.Binding.SessionRef {
 				r.mu.Lock()
-				r.routes = append(r.routes, route{Session: u.Session, MessageID: u.MessageID, Sender: u.Sender})
+				r.routes = append(r.routes, route{Session: u.Session, MessageID: u.MessageID, Sender: u.Sender, Name: u.To, Kind: msg.Kind(u.Kind)})
 				r.mu.Unlock()
 				continue
 			}
-			errs = append(errs, r.j.Append(journal.Record{Type: journal.TypeRoute, Session: u.Session, MessageID: u.MessageID, Sender: u.Sender, State: journal.StateClosed}))
+			errs = append(errs, r.j.Append(journal.Record{Type: journal.TypeRoute, Session: u.Session, MessageID: u.MessageID, Sender: u.Sender, To: u.To, Kind: u.Kind, State: journal.StateClosed}))
 		case u.Type == journal.TypeDedupe && u.State == journal.StateSubmitted && !u.Binding.SameConversation(cur):
 			if _, claimed := r.j.DispatchState(u.MessageID); claimed {
 				continue

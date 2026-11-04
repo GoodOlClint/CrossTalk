@@ -128,11 +128,10 @@ func (s *Shim) Bind(ctx context.Context, a *mcpserver.Agent) (mcpserver.BindInfo
 		return mcpserver.BindInfo{}, errors.New("shim: Bind before BindHarness")
 	}
 	st.rcv = receiver.New(receiver.Config{
-		Journal:   a.Journal(),
-		Adapter:   st.injector(st.harness),
-		Self:      st.self,
-		Forwarder: forwarder{st},
-		Now:       s.opt.Now,
+		Journal: a.Journal(),
+		Adapter: st.injector(st.harness),
+		Self:    st.self,
+		Now:     s.opt.Now,
 	})
 	if err := st.rcv.Recover(a.Replay()); err != nil {
 		return mcpserver.BindInfo{}, err

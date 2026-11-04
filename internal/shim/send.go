@@ -373,31 +373,6 @@ func (st *AgentState) retryObligations() {
 	}
 }
 
-type forwarder struct{ st *AgentState }
-
-// Forward routes a native reply from this agent's own session to the
-// original sender recorded in the route (§5 F4); receiver.nativeReply has
-// already journaled it. OnReply is not run: only the reply tool completes an
-// ask.
-func (f forwarder) Forward(ctx context.Context, m msg.Message, toAgentID string) (adapter.State, error) {
-	st := f.st
-	m.From, m.Kind = st.agent.Name(), msg.Inform
-	m.HopChain = []string{msg.Hop(st.agent.ID())}
-	d, ok := st.shim.descriptorByID(toAgentID)
-	if !ok {
-		st.outbound(m, toAgentID, adapter.Unreachable, ReasonNoSuchAgent, true)
-		return adapter.Unreachable, errors.New(ReasonNoSuchAgent)
-	}
-	m.To = d.Name
-	st.outbound(m, d.AgentID, journal.StateSubmitted, "", true)
-	state, reason, taskID := st.viaTransport(ctx, d, m)
-	st.outboundTask(m, d.AgentID, state, reason, false, taskID)
-	if reason != "" {
-		return state, errors.New(reason)
-	}
-	return state, nil
-}
-
 func (s *Shim) Mailbox(ctx context.Context, of *mcpserver.Agent, after string, limit int) ([]mcpserver.MailboxEntry, error) {
 	st, err := s.state(of)
 	if err != nil {

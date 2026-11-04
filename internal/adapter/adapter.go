@@ -14,8 +14,8 @@ const (
 	Rejected    State = "rejected"
 	Unreachable State = "unreachable"
 	Unknown     State = "unknown"
-	// Uncorrelated is a mailbox-entry state only; Inject never returns it.
-	Uncorrelated State = "uncorrelated"
+	// Bounced is a mailbox-entry state only; Inject never returns it.
+	Bounced State = "bounced"
 )
 
 // Injectable reports whether s is a state Inject may return.

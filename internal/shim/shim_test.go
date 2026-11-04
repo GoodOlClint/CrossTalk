@@ -318,22 +318,16 @@ func TestReplyRoutesThroughJournal(t *testing.T) {
 	}
 }
 
-func TestNativeReplyForwardedToOriginalSender(t *testing.T) {
+func TestNativeReplyBouncedToOwnSession(t *testing.T) {
 	w := newWorld(t)
 	alice := w.claude(4001, "sess-alice", "alice")
 	bob := w.claude(4002, "sess-bob", "bob")
 	na := w.node(alice.pid, w.lb, nil)
-	nb := w.node(bob.pid, w.lb, nil)
-	nb.sh.udsPeerPID = func(*net.UnixConn) (int, error) { return bob.pid, nil }
-	nb.ok(nil, "receive_message", map[string]any{})
+	w.node(bob.pid, w.lb, nil)
+	na.sh.udsPeerPID = func(*net.UnixConn) (int, error) { return alice.pid, nil }
+	na.ok(nil, "receive_message", map[string]any{})
 
-	if out := na.ok(nil, "send_message", send("bob", "ping")); out["state"] != "accepted" {
-		t.Fatalf("send %v", out)
-	}
-	if len(bob.got()) != 1 {
-		t.Fatalf("bob got %q", bob.got())
-	}
-	st := nb.sh.Agent(bob.agentID())
+	st := na.sh.Agent(alice.agentID())
 	key, err := udsingress.EnsureKey(udsingress.KeyPath(st.UDSPath()))
 	if err != nil {
 		t.Fatal(err)
@@ -346,12 +340,15 @@ func TestNativeReplyForwardedToOriginalSender(t *testing.T) {
 	c.Write([]byte(`{"type":"auth","token":"` + key + `"}` + "\n" + `{"type":"user","message":{"role":"user","content":"pong"}}` + "\n"))
 	ack := make([]byte, 512)
 	nr, _ := c.Read(ack)
-	if !strings.Contains(string(ack[:nr]), `"state":"accepted"`) {
-		t.Fatalf("native reply ack %s", ack[:nr])
+	if !strings.Contains(string(ack[:nr]), `"state":"bounced"`) {
+		t.Fatalf("native frame ack %s", ack[:nr])
 	}
 	got := alice.got()
-	if len(got) != 1 || !strings.Contains(got[0], `from-name="bob"`) || !strings.Contains(got[0], "pong") {
+	if len(got) != 1 || !strings.Contains(got[0], "not delivered") {
 		t.Fatalf("alice got %q", got)
+	}
+	if len(bob.got()) != 0 {
+		t.Fatalf("bob got %q", bob.got())
 	}
 }
 
