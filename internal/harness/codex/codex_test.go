@@ -178,6 +178,59 @@ func TestNotSteerableAppendsWithoutWake(t *testing.T) {
 	}
 }
 
+func TestNotSteerableRealFrame(t *testing.T) {
+	for _, kind := range []string{"Review", "Compact"} {
+		r := newRig(t, activeThread("active-turn"))
+		r.srv.Hook = func(_ int, m string, _ json.RawMessage) appservertest.Reply {
+			if m == "turn/start" {
+				return appservertest.Reply{Handled: true, Err: &appserver.RPCError{Code: -32603, Message: "failed to submit turn input: ActiveTurnNotSteerable { turn_kind: " + kind + " }"}}
+			}
+			return appservertest.Reply{}
+		}
+		st, err := r.a.Inject(ctx(t), message("x"), r.delivery(true, msg.Immediate))
+		if st != adapter.Queued || err != nil || len(r.srv.CallsTo("thread/inject_items")) != 1 {
+			t.Fatalf("%s: %s, %v, injects=%d", kind, st, err, len(r.srv.CallsTo("thread/inject_items")))
+		}
+	}
+}
+
+func TestUnrelatedInternalErrorStaysUnreachable(t *testing.T) {
+	r := newRig(t, activeThread("active-turn"))
+	r.srv.Hook = func(_ int, m string, _ json.RawMessage) appservertest.Reply {
+		if m == "turn/start" {
+			return appservertest.Reply{Handled: true, Err: &appserver.RPCError{Code: -32603, Message: "failed to submit turn input: something else"}}
+		}
+		return appservertest.Reply{}
+	}
+	st, err := r.a.Inject(ctx(t), message("x"), r.delivery(true, msg.Immediate))
+	if st != adapter.Unreachable || err == nil || len(r.srv.CallsTo("thread/inject_items")) != 0 {
+		t.Fatalf("%s, %v", st, err)
+	}
+}
+
+func TestSuccessResultNeverClassifiesNotSteerable(t *testing.T) {
+	results := map[string]map[string]any{
+		"string-value": {"turn": map[string]any{"id": "t1"}, "items": []any{map[string]any{"text": "activeTurnNotSteerable"}}},
+		"map-key":      {"turn": map[string]any{"id": "t1"}, "activeTurnNotSteerable": map[string]any{"turnKind": "review"}},
+		"turn-error":   {"turn": map[string]any{"id": "t1", "error": map[string]any{"codexErrorInfo": map[string]any{"activeTurnNotSteerable": map[string]any{"turnKind": "review"}}}}},
+	}
+	for name, res := range results {
+		t.Run(name, func(t *testing.T) {
+			r := newRig(t, idleThread())
+			r.srv.Hook = func(_ int, m string, _ json.RawMessage) appservertest.Reply {
+				if m == "turn/start" {
+					return appservertest.Reply{Handled: true, Result: res}
+				}
+				return appservertest.Reply{}
+			}
+			st, err := r.a.Inject(ctx(t), message("x"), r.delivery(true, msg.Immediate))
+			if st != adapter.Accepted || err != nil || len(r.srv.CallsTo("thread/inject_items")) != 0 {
+				t.Fatalf("%s, %v, injects=%d", st, err, len(r.srv.CallsTo("thread/inject_items")))
+			}
+		})
+	}
+}
+
 func TestDispatchFailureNeverRetries(t *testing.T) {
 	for _, mode := range []msg.Delivery{msg.Immediate, msg.NextTurn} {
 		method := "turn/start"

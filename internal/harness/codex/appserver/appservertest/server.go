@@ -353,6 +353,13 @@ func NotSteerableError(kind string) *appserver.RPCError {
 	return &appserver.RPCError{Code: CodeInvalidRequest, Message: MsgNotSteerable, Data: data}
 }
 
+// NotSteerableStartError is the refusal live codex-cli 0.166.0 returns for
+// turn/start during a review or compact turn: no data, key only in message.
+func NotSteerableStartError(kind string) *appserver.RPCError {
+	k := strings.ToUpper(kind[:1]) + kind[1:]
+	return &appserver.RPCError{Code: -32603, Message: "failed to submit turn input: ActiveTurnNotSteerable { turn_kind: " + k + " }"}
+}
+
 func activeTurn(t *Thread) string {
 	for _, tr := range t.Turns {
 		if tr.Status == appserver.TurnInProgress {
@@ -480,7 +487,7 @@ func (s *Server) handle(method string, raw json.RawMessage) (any, *appserver.RPC
 			return nil, invalid("invalid named tool output")
 		}
 		if activeTurn(t) != "" && t.NotSteerable != "" {
-			return nil, NotSteerableError(t.NotSteerable)
+			return nil, NotSteerableStartError(t.NotSteerable)
 		}
 		id := activeTurn(t)
 		if p.ToolOutput != nil {

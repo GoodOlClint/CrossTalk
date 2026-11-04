@@ -10,21 +10,23 @@ import (
 
 const notSteerableKey = "activeTurnNotSteerable"
 
-// NotSteerable reports whether a turn/steer or turn/start outcome carries
-// activeTurnNotSteerable, and its turnKind. The key is searched anywhere in
-// error.data, error.message and the result, because its wire placement is
-// taken from capture fixtures rather than assumed (§6 F1).
-func NotSteerable(result json.RawMessage, err error) (turnKind string, ok bool) {
+// NotSteerable reports whether a turn/steer or turn/start RPC error is the
+// activeTurnNotSteerable refusal. turn/steer carries it as a key under
+// error.data; turn/start carries it only in error.message, in Rust debug
+// casing (ActiveTurnNotSteerable { turn_kind: Review }). Only an error can
+// classify; a successful result never does.
+func NotSteerable(err error) (turnKind string, ok bool) {
 	var rpc *appserver.RPCError
-	if errors.As(err, &rpc) {
-		if k, ok := findKey(rpc.Data); ok {
-			return k, true
-		}
-		if strings.Contains(rpc.Message, notSteerableKey) {
-			return "", true
-		}
+	if !errors.As(err, &rpc) {
+		return "", false
 	}
-	return findKey(result)
+	if k, ok := findKey(rpc.Data); ok {
+		return k, true
+	}
+	if strings.Contains(strings.ToLower(rpc.Message), strings.ToLower(notSteerableKey)) {
+		return "", true
+	}
+	return "", false
 }
 
 func findKey(raw json.RawMessage) (string, bool) {
