@@ -175,6 +175,7 @@ func (s *Shim) Bind(ctx context.Context, a *mcpserver.Agent) (mcpserver.BindInfo
 		info.A2AURL, info.CredentialRef = l.URL, l.CredentialRef
 	}
 	go st.retryObligations()
+	st.rearmDeadlines()
 	return info, nil
 }
 
@@ -215,8 +216,10 @@ func (s *Shim) closeState(st *AgentState) error {
 			errs = append(errs, err)
 		}
 		<-st.serve
-		if err := os.Remove(st.udsPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-			errs = append(errs, err)
+		for _, p := range []string{st.udsPath, udsingress.KeyPath(st.udsPath)} {
+			if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
+				errs = append(errs, err)
+			}
 		}
 	}
 	if st.cancel != nil {

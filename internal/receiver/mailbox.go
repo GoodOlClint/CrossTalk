@@ -11,10 +11,18 @@ import (
 
 var ErrUnknownCursor = errors.New("receiver: after names no journaled message")
 
+const (
+	DirectionInbound  = "inbound"
+	DirectionOutbound = "outbound"
+)
+
 type Entry struct {
+	Direction  string       `json:"direction"`
 	MessageID  string       `json:"message_id"`
 	TaskID     *string      `json:"task_id"`
 	From       string       `json:"from"`
+	To         string       `json:"to,omitempty"`
+	Reason     string       `json:"reason,omitempty"`
 	InReplyTo  *string      `json:"in_reply_to"`
 	State      string       `json:"state"`
 	InstanceID string       `json:"instance_id"`
@@ -65,15 +73,54 @@ func dedupeEntries(rs []journal.Record) ([]dedupeKey, map[dedupeKey]*entryState)
 	return order, idx
 }
 
-// Mailbox returns, in journal order, the messages whose latest state is
-// unreachable, unknown or uncorrelated. after is a message_id cursor over
-// the whole journal; limit <= 0 means no limit.
+type outboundState struct {
+	latest  journal.Record
+	taskID  string
+	message json.RawMessage
+}
+
+type mailKey struct {
+	dedupeKey
+	out bool
+}
+
+// Mailbox returns, in journal order, the inbound messages whose latest state
+// is unreachable, unknown or uncorrelated, and the outbound messages whose
+// latest state is unknown. after is a message_id cursor over the whole
+// journal; limit <= 0 means no limit.
 func (r *Receiver) Mailbox(after string, limit int) ([]Entry, error) {
 	rs, err := r.j.Records()
 	if err != nil {
 		return nil, err
 	}
-	order, idx := dedupeEntries(rs)
+	_, idx := dedupeEntries(rs)
+	outs := map[string]*outboundState{}
+	var order []mailKey
+	seen := map[dedupeKey]bool{}
+	for _, rec := range rs {
+		switch rec.Type {
+		case journal.TypeDedupe:
+			if k := (dedupeKey{rec.Sender, rec.MessageID}); !seen[k] {
+				seen[k] = true
+				order = append(order, mailKey{dedupeKey: k})
+			}
+		case journal.TypeOutbound:
+			o := outs[rec.MessageID]
+			if o == nil {
+				o = &outboundState{}
+				outs[rec.MessageID] = o
+				order = append(order, mailKey{dedupeKey: dedupeKey{id: rec.MessageID}, out: true})
+			}
+			o.latest = rec
+			if rec.TaskID != "" {
+				o.taskID = rec.TaskID
+			}
+			if len(rec.Message) > 0 {
+				o.message = rec.Message
+			}
+		}
+	}
+	self := r.self().Name
 	start := 0
 	if after != "" {
 		start = -1
@@ -87,12 +134,39 @@ func (r *Receiver) Mailbox(after string, limit int) ([]Entry, error) {
 		}
 	}
 	var out []Entry
-	for _, k := range order[start:] {
+	for _, mk := range order[start:] {
+		k := mk.dedupeKey
+		if mk.out {
+			o := outs[k.id]
+			if o.latest.State != string(adapter.Unknown) {
+				continue
+			}
+			en := Entry{Direction: DirectionOutbound, MessageID: k.id, From: self, To: o.latest.To, State: o.latest.State, Reason: o.latest.Reason, InstanceID: o.latest.Binding.InstanceID, SessionRef: o.latest.Binding.SessionRef}
+			if o.taskID != "" {
+				t := o.taskID
+				en.TaskID = &t
+			}
+			if o.latest.InReplyTo != "" {
+				irt := o.latest.InReplyTo
+				en.InReplyTo = &irt
+			}
+			if len(o.message) > 0 {
+				var m msg.Message
+				if json.Unmarshal(o.message, &m) == nil {
+					en.Message = &m
+				}
+			}
+			out = append(out, en)
+			if limit > 0 && len(out) == limit {
+				break
+			}
+			continue
+		}
 		e := idx[k]
 		if !inMailbox(e.latest.State) {
 			continue
 		}
-		en := Entry{MessageID: k.id, From: k.sender, State: e.latest.State, InstanceID: e.binding.InstanceID, SessionRef: e.binding.SessionRef}
+		en := Entry{Direction: DirectionInbound, MessageID: k.id, From: k.sender, State: e.latest.State, InstanceID: e.binding.InstanceID, SessionRef: e.binding.SessionRef}
 		if len(e.message) > 0 {
 			var m msg.Message
 			if json.Unmarshal(e.message, &m) == nil {

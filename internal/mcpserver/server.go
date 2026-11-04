@@ -449,7 +449,7 @@ func (s *Server) addTools() {
 
 	boundTool(s, &mcp.Tool{
 		Name:        "receive_message",
-		Description: "Pull mailbox entries the harness did not deliver (unreachable, unknown, uncorrelated); after pages the full journal.",
+		Description: "Pull mailbox entries the harness did not deliver (inbound unreachable, unknown, uncorrelated) and your own sends still unknown, e.g. pending far-side tasks (direction outbound); after pages the full journal.",
 		InputSchema: schemaFor[receiveIn](func(sch *jsonschema.Schema) {
 			zero := 0.0
 			sch.Properties["limit"].Minimum = &zero

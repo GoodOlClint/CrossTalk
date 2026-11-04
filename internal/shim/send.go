@@ -31,13 +31,13 @@ func (st *AgentState) newMessage(to string, k msg.Kind, d msg.Delivery, text str
 	}
 }
 
-func (st *AgentState) outbound(m msg.Message, to string, state adapter.State, withBody bool) {
-	st.outboundTask(m, to, state, withBody, "")
+func (st *AgentState) outbound(m msg.Message, to string, state adapter.State, reason string, withBody bool) {
+	st.outboundTask(m, to, state, reason, withBody, "")
 }
 
 // outboundTask also keeps the far side's task id, when the Transport reports one.
-func (st *AgentState) outboundTask(m msg.Message, to string, state adapter.State, withBody bool, taskID string) {
-	r := journal.Record{Type: journal.TypeOutbound, MessageID: m.MessageID, To: to, Kind: string(m.Kind), State: string(state), TaskID: taskID}
+func (st *AgentState) outboundTask(m msg.Message, to string, state adapter.State, reason string, withBody bool, taskID string) {
+	r := journal.Record{Type: journal.TypeOutbound, MessageID: m.MessageID, To: to, Kind: string(m.Kind), State: string(state), Reason: reason, TaskID: taskID}
 	if m.InReplyTo != nil {
 		r.InReplyTo = *m.InReplyTo
 	}
@@ -79,7 +79,7 @@ func (st *AgentState) viaTransport(ctx context.Context, to registry.Descriptor, 
 func (st *AgentState) deliver(ctx context.Context, m msg.Message) mcpserver.Result {
 	res := mcpserver.Result{MessageID: m.MessageID}
 	finish := func(to string, state adapter.State, reason string) mcpserver.Result {
-		st.outbound(m, to, state, false)
+		st.outbound(m, to, state, reason, false)
 		res.State, res.Reason = state, reason
 		return res
 	}
@@ -91,9 +91,9 @@ func (st *AgentState) deliver(ctx context.Context, m msg.Message) mcpserver.Resu
 		if d.AgentID == st.agent.ID() {
 			return finish(d.AgentID, adapter.Rejected, ReasonSelf)
 		}
-		st.outbound(m, d.AgentID, journal.StateSubmitted, true)
+		st.outbound(m, d.AgentID, journal.StateSubmitted, "", true)
 		state, reason, taskID := st.viaTransport(ctx, d, m)
-		st.outboundTask(m, d.AgentID, state, false, taskID)
+		st.outboundTask(m, d.AgentID, state, reason, false, taskID)
 		res.State, res.Reason = state, reason
 		return res
 	}
@@ -105,7 +105,7 @@ func (st *AgentState) deliver(ctx context.Context, m msg.Message) mcpserver.Resu
 		return finish(m.To, state, reason)
 	}
 	to := string(b.Harness) + ":" + b.SessionRef
-	st.outbound(m, to, journal.StateSubmitted, true)
+	st.outbound(m, to, journal.StateSubmitted, "", true)
 	state, err = ad.Inject(ctx, m, adapter.Delivery{Mode: m.Delivery, Target: b, VerifiedSender: true})
 	if !state.Injectable() {
 		state = adapter.Unknown
@@ -140,18 +140,55 @@ func (s *Shim) Ask(ctx context.Context, from *mcpserver.Agent, req mcpserver.Ask
 	m.DeadlineSeconds = req.DeadlineSeconds
 	res := st.deliver(ctx, m)
 	if req.DeadlineSeconds > 0 && res.State != adapter.Rejected && res.State != adapter.Unreachable {
-		st.armDeadline(m)
+		st.armDeadline(m, time.Duration(m.DeadlineSeconds)*time.Second)
 	}
 	return res, nil
 }
 
-func (st *AgentState) armDeadline(ask msg.Message) {
+func (st *AgentState) armDeadline(ask msg.Message, after time.Duration) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	if st.closed {
 		return
 	}
-	st.deadline[ask.MessageID] = time.AfterFunc(time.Duration(ask.DeadlineSeconds)*time.Second, func() { st.expire(ask) })
+	st.deadline[ask.MessageID] = time.AfterFunc(after, func() { st.expire(ask) })
+}
+
+// rearmDeadlines restores the timers of this conversation's unanswered asks
+// after a restart; the deadline is the journaled sent_at plus
+// deadline_seconds, and an ask already past it expires at once.
+func (st *AgentState) rearmDeadlines() {
+	rs, err := st.agent.Journal().Records()
+	if err != nil {
+		return
+	}
+	cur := journal.Binding{HarnessEndpoint: st.binding.HarnessEndpoint, SessionRef: st.binding.SessionRef}
+	asks := map[string]msg.Message{}
+	latest := map[string]journal.Record{}
+	for _, rec := range rs {
+		if rec.Type != journal.TypeOutbound {
+			continue
+		}
+		latest[rec.MessageID] = rec
+		var m msg.Message
+		if _, ok := asks[rec.MessageID]; ok || len(rec.Message) == 0 || json.Unmarshal(rec.Message, &m) != nil {
+			continue
+		}
+		if m.Kind == msg.Ask && m.DeadlineSeconds > 0 && rec.Binding.SameConversation(cur) {
+			asks[rec.MessageID] = m
+		}
+	}
+	for id, ask := range asks {
+		if s := adapter.State(latest[id].State); s == adapter.Rejected || s == adapter.Unreachable || st.replied(id) {
+			continue
+		}
+		remaining := ask.SentAt.Add(time.Duration(ask.DeadlineSeconds) * time.Second).Sub(st.shim.now())
+		if remaining <= 0 {
+			go st.expire(ask)
+			continue
+		}
+		st.armDeadline(ask, remaining)
+	}
 }
 
 // expire tells this agent's own session that an ask got no reply in time
@@ -292,14 +329,14 @@ func (st *AgentState) sendReply(ctx context.Context, r msg.Message, key string, 
 	d, ok := st.shim.descriptorByID(key)
 	if !ok {
 		res.State, res.Reason = adapter.Unreachable, ReasonNoSuchAgent
-		st.outbound(r, key, res.State, false)
+		st.outbound(r, key, res.State, res.Reason, false)
 		return res
 	}
 	r.To = d.Name
-	st.outbound(r, d.AgentID, journal.StateSubmitted, true)
+	st.outbound(r, d.AgentID, journal.StateSubmitted, "", true)
 	var taskID string
 	res.State, res.Reason, taskID = st.viaTransport(ctx, d, r)
-	st.outboundTask(r, d.AgentID, res.State, false, taskID)
+	st.outboundTask(r, d.AgentID, res.State, res.Reason, false, taskID)
 	if res.State == adapter.Accepted || res.State == adapter.Queued {
 		delivered()
 	}
@@ -355,13 +392,13 @@ func (f forwarder) Forward(ctx context.Context, m msg.Message, toAgentID string)
 	}
 	d, ok := st.shim.descriptorByID(toAgentID)
 	if !ok {
-		st.outbound(m, toAgentID, adapter.Unreachable, true)
+		st.outbound(m, toAgentID, adapter.Unreachable, ReasonNoSuchAgent, true)
 		return adapter.Unreachable, errors.New(ReasonNoSuchAgent)
 	}
 	m.To = d.Name
-	st.outbound(m, d.AgentID, journal.StateSubmitted, true)
+	st.outbound(m, d.AgentID, journal.StateSubmitted, "", true)
 	state, reason, taskID := st.viaTransport(ctx, d, m)
-	st.outboundTask(m, d.AgentID, state, false, taskID)
+	st.outboundTask(m, d.AgentID, state, reason, false, taskID)
 	if reason != "" {
 		return state, errors.New(reason)
 	}
@@ -382,7 +419,7 @@ func (s *Shim) Mailbox(ctx context.Context, of *mcpserver.Agent, after string, l
 	}
 	out := make([]mcpserver.MailboxEntry, 0, len(es))
 	for _, e := range es {
-		me := mcpserver.MailboxEntry{MessageID: e.MessageID, TaskID: e.TaskID, InReplyTo: e.InReplyTo, From: e.From, State: adapter.State(e.State), InstanceID: e.InstanceID, SessionRef: e.SessionRef}
+		me := mcpserver.MailboxEntry{Direction: e.Direction, MessageID: e.MessageID, TaskID: e.TaskID, InReplyTo: e.InReplyTo, From: e.From, To: e.To, Reason: e.Reason, State: adapter.State(e.State), InstanceID: e.InstanceID, SessionRef: e.SessionRef}
 		if e.Message != nil {
 			me.Text = claude.Body(*e.Message)
 		}
