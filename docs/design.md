@@ -8,7 +8,7 @@ Terms: harness = the agent CLI (Claude Code, Codex). Session = one running harne
 
 Goal: any agent on this machine can send a message to any other by name and the receiver gets it inside its running session, without a human and without screen scraping, across harnesses.
 
-Non-goals for v1: spawning or wrapping agent processes (ADR 0006; spawning stays with herdr and a separate delegate tool), cross-machine messaging, kind=control (stop/shutdown), isolation against hostile same-user processes.
+Non-goals for v1: spawning or wrapping agent processes (ADR 0006; spawning stays with herdr and a separate delegate tool), cross-machine messaging (remote A2A is vNext, after the repo goes public), kind=control (stop/shutdown), isolation against hostile same-user processes.
 
 ## 2. Components
 

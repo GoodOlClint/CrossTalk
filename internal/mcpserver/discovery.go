@@ -29,7 +29,7 @@ func (s *Server) listAgentsTool(ctx context.Context, req *mcp.CallToolRequest, _
 	var notice, self string
 	if c, err := s.resolve(ctx, req); err == nil && c.bound() {
 		if a, n, e := s.agent(ctx, c); e != nil {
-			notice = "not registered: " + e.Error()
+			notice = "not registered: " + describe(e)
 		} else {
 			a.Done()
 			notice, self = n, a.ID()

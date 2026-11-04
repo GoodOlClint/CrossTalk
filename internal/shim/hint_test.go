@@ -84,6 +84,18 @@ func TestAgentHeldHintSaysWhatToRemove(t *testing.T) {
 	}
 }
 
+func TestListAgentsNoticeCarriesAgentHeldHint(t *testing.T) {
+	w := newWorld(t)
+	alice := w.claude(4001, "sess-alice", "alice")
+	n1 := w.node(alice.pid, nil, nil)
+	n2 := w.node(alice.pid, nil, nil)
+	n1.ok(nil, "receive_message", map[string]any{})
+	notice, _ := n2.ok(nil, "list_agents", map[string]any{})["notice"].(string)
+	if !strings.Contains(notice, "agent_held") || !strings.Contains(notice, "claude mcp remove") {
+		t.Fatalf("notice %q", notice)
+	}
+}
+
 func TestReplyToFirstContactInformHintsSendMessage(t *testing.T) {
 	w := newWorld(t)
 	alice := w.claude(4001, "sess-alice", "alice")
