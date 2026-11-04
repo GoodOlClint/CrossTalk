@@ -15,7 +15,7 @@ Cross-harness agent messaging: the shim (`crosstalk mcp`, an MCP server the harn
 
 ## Messaging limits
 
-There is no limit on how many messages a session sends, and nothing bounds spend (ADR 0014). Each send starts a fresh one-element hop chain; `hopCheck` on the receiver still guards an A2A client that supplies its own chain. Each agent counts its sends per peer and, at 30, 60, 120, 240 and so on, adds a nudge to the tool result asking the model to check whether the exchange is progressing (it refuses nothing); the count is in memory and resets on restart. It misses fan-out (one message to many peers, each below the threshold), restarts (the count resets), failed sends (not counted), `crosstalk send` and any client that goes around the shim, native bounces, and Claude's own SendMessage. Design §4.
+There is no limit on how many messages a session sends, and nothing bounds spend (ADR 0014). Each send starts a fresh one-element hop chain; `hopCheck` on the receiver still guards an A2A client that supplies its own chain. Each agent counts its sends per peer and, at 30, 60, 120, 240 and so on, adds a nudge to the tool result asking the model to check whether the exchange is progressing (it refuses nothing); the count is in memory and resets on restart. It misses fan-out (one message to many peers, each below the threshold), restarts (the count resets), failed sends (not counted), `crosstalk send` and any client that goes around the shim, native bounces, and Claude's own SendMessage. Relay is not closed either: the notice does not stop a peer asking a session to message a third one, only the skill does (design §7). Design §4.
 
 ## Canonical pipelines
 

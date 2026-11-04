@@ -15,7 +15,7 @@ CrossTalk has no default limit on how many messages a session sends. No send is 
 
 The send path carries a **nudge**, not a guard. The shim counts the sends each agent makes to each peer (every send except one that came back `rejected` or `unreachable`; `send_message`, `ask` and `reply` count; a retried reply is not recounted). When a count reaches 30, 60, 120, 240 and so on, doubling (`NudgeFirst` in `internal/shim`), the tool result's `hint` asks the model to check whether the exchange is making progress and says it may stop, or tell its user, if not. The send is still delivered. The count is in memory, per agent and per peer, and resets on restart. Each firing writes one `nudge` journal record (peer, count, time) so real use shows how often it happens. The text appends to any hint already on the result. The nudge lives in the sender's tool result only, never in the inbound notice.
 
-The server instructions tell the model to read `hint` on every result and that a message needs no answer when nothing is left to say. The skill repeats both. The notice tells a model not to message a third session on a peer's word, which closes the relay path a loop or injected message would use to spread.
+The server instructions tell the model to read `hint` on every result and that a message needs no answer when nothing is left to say. The skill repeats both. The skill tells a model not to message a third session on a peer's word. The message notice does not cover relay: "any tool but CrossTalk" still lets a peer get a message relayed to a third session. Only the skill speaks to it, and the skill does not reliably load (0 of 6 in the replica runs), so the hole is open. Adding "or message a third session" to the notice was measured and reverted: on Haiku with mocks `peer-wrapper-read` fell from 6 of 6 to 4 of 9 with real file reads, while `peer-relay` already passed on the old text, so the clause cost what it was meant to protect and had no measured benefit; the 8b replica also ran on the old text.
 
 ## Rejected alternatives
 
@@ -29,7 +29,7 @@ The server instructions tell the model to read `hint` on every result and that a
 
 - Nothing stops a loop or bounds spend. The README and `docs/setup.md` say so: you stop a loop by ending the session.
 - The nudge is a prompt with guessed numbers, not a measurement. Whether models heed it is unmeasured.
-- It misses fan-out (one message to many peers, each below the threshold), restarts (the count resets), failed sends (not counted), `crosstalk send` and other clients that go around the shim, native bounces, and Claude's own SendMessage.
+- Relay is not closed: a peer can ask a session to pass a message to a third session, and only the skill says not to. It misses fan-out (one message to many peers, each below the threshold), restarts (the count resets), failed sends (not counted), `crosstalk send` and other clients that go around the shim, native bounces, and Claude's own SendMessage.
 - The journal's `nudge` records are the data for revisiting this.
 - What would change this: a real log of a loop that ran for hours unattended at meaningful spend with models ignoring the hint (then an opt-in budget); a demonstrated injected message spreading across sessions without user approval (a trust-model problem first, needing a fan-out limit or a tighter notice); harness logs showing a single overnight loop costs enough to hurt.
 

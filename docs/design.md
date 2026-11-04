@@ -131,6 +131,8 @@ Codex adapter (ADR 0007): `inject(delivery)` uses the endpoint recorded in `harn
 
 ## 7. Trust and policy
 
+Relay (wave 2): The message notice does not cover relay: "any tool but CrossTalk" still lets a peer get a message relayed to a third session. Only the skill speaks to it, and the skill does not reliably load (0 of 6 in the replica runs), so the hole is open. Adding "or message a third session" to the notice was measured and reverted: on Haiku with mocks `peer-wrapper-read` fell from 6 of 6 to 4 of 9 with real file reads, while `peer-relay` already passed on the old text, so the clause cost what it was meant to protect and had no measured benefit; the 8b replica also ran on the old text.
+
 Identity comes from transport (peer pid / A2A auth) matched to registration, never from envelope attributes. Envelope attributes are display only and are reconstructed by the receiver from the verified identity.
 
 | kind | to a subagent | to a primary |
