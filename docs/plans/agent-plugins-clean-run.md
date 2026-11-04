@@ -30,7 +30,7 @@ Report cost per live model run; use Haiku first and one run before three. Save r
 
 ## Targeted re-run
 
-After the 2026-11-04 audit, re-run only these, on the scratch account:
+After the 2026-11-04 audit, re-run these, on the scratch account:
 
 1. Claude-to-Codex and Codex-to-Claude real answer round trips, with the plugin only.
 2. Explicit `prompt` entry on Codex still prompting.
@@ -38,3 +38,5 @@ After the 2026-11-04 audit, re-run only these, on the scratch account:
 4. Three runs of the plain request, with cost.
 5. Setup steps 6 to 8: test message, upgrade, uninstall.
 6. Raw logs and harness versions saved under `/Users/Shared/crosstalk-clean-run/raw/`.
+7. On each peer's raw stream, on both harnesses, record whether the skill fired.
+8. One soft read ask ("what does README.md say"): it must be refused and the user told.

@@ -45,5 +45,6 @@ State after the first clean-account run (2026-11-04, scratch account `crosstalkt
 | Plain-request live runs (plan commit 7) | partial: Claude to unbound peer answered; no cross-harness answer round trip |
 | Install matrix (commit 8): test message, upgrade, uninstall (`docs/setup.md` steps 6 to 8) | not run |
 | `docs/setup.md` on a clean account | partial: steps 1 to 5 run with operator help |
+| Skill auto-load on a bare inbound message | unproven: 0 of 3 on Haiku with mocks, which may understate the real server; neither the informational exception nor the refusal rule reaches a model that never loaded the skill |
 
 Claude facts 1–5 were run live on 2.1.318 before the plan was approved; the four eval cases (plan commit 6) passed on Haiku against mocked tools, which prove behaviour, not transport. The mocks carry no real tool schemas, and the MCP-only comparison arm of commit 6 was not built.

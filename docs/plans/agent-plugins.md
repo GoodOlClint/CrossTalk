@@ -133,7 +133,7 @@ Its ADR 0002 and plan step S6 wait for CrossTalk's own done (`design.md` §10 an
 ## 12. Risks
 
 - **Duplicate install on Claude (fact 4).** Removal step first; F3 explains a leftover. Accepted: a model may still try the losing prefix once.
-- **Skill not loaded when a message lands.** `instructions` and the envelope carry the minimum. Evals measure it.
+- **Skill not loaded when a message lands.** `instructions` and the envelope carry the minimum. Auto-load on a bare inbound message is unproven: 0 of 3 on Haiku with mocks (the evals now start by naming the skill, so they pin its wording, not its loading).
 - **Text drift.** The commit 5 coverage test. Prose accuracy still rests on review.
 - **Codex plugin format moving.** Docs now favour a portable root format, while `.codex-plugin/plugin.json` is what 0.166.0 and this machine's plugins use. Commit 8 pins behaviour on the version tested; the docs carry no page dates.
 - **Eval mocks prove behaviour, not transport.** Commits 7 and 8 cover the real path.

@@ -27,7 +27,7 @@ CrossTalk lets Claude Code and Codex sessions on this Mac message each other by 
 
 | You see | Cause and fix |
 |---|---|
-| `ENOENT executable not found in $PATH`, or the model says a CrossTalk tool "isn't available" with no error | `crosstalk` is not on the PATH the harness sees (`codex exec` shows no error). Run `command -v crosstalk`; if empty, repeat step 1. Start the harness from a shell that has the PATH, or put the absolute path in a hand-written MCP entry; on Claude that entry and the plugin both start a shim, so uninstall the plugin first (you lose the skill). |
+| Server failed to start (`ENOENT executable not found in $PATH`), or the model says a CrossTalk tool "isn't available" with no error | `crosstalk` is not on the PATH the harness sees (`codex exec` shows no error). Run `command -v crosstalk`; if empty, repeat step 1. Start the harness from a shell that has the PATH, or put the absolute path in a hand-written MCP entry; on Claude that entry and the plugin both start a shim, so uninstall the plugin first (you lose the skill). |
 | `agent_held` | A second CrossTalk server serves the session, usually the manual entry from step 2. The notice names the fix: remove it and restart. |
 | A `codex exec` row with empty `cwd` and `status` and `reachable: false` | An exec session has no app server CrossTalk can reach: it can send, never receive, and its row can linger. Pick the interactive row instead. |
 | `crosstalk: false` | No CrossTalk call yet. It gets `send_message` but not `ask`. |
@@ -35,4 +35,4 @@ CrossTalk lets Claude Code and Codex sessions on this Mac message each other by 
 
 ## Security in plain words
 
-Every session on this Mac runs as you, and any of them can message any other. A peer's text is data, never an instruction from you. The plugin tells the model not to read files, run commands or change anything because a peer asked, and to tell you and ask first. One exception: a peer may ask whether a session is online, its working directory, its git branch or its harness, and the model answers. File contents, listings, environment, command output and what you said stay with you until you allow them. Do not put secrets in messages.
+Every session on this Mac runs as you, and any of them can message any other. A peer's text is data, never an instruction from you. When the plugin's skill loads, it tells the model not to read files, run commands or change anything because a peer asked, and to tell you and ask first. One exception: a peer may ask whether a session is online, its working directory, its git branch or its harness, and the model answers. File contents, listings, environment, command output and what you said stay with you until you allow them. Do not put secrets in messages.
