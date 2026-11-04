@@ -23,6 +23,9 @@ func badMessage(format string, args ...any) error {
 // to the receiver; message_id is the client's id only when it is a UUIDv7.
 func decode(am *sdk.Message) (msg.Message, error) {
 	m := msg.Message{Kind: msg.Inform, Delivery: msg.Immediate, ContextID: am.ContextID}
+	if am.Role != sdk.MessageRoleUser {
+		return m, badMessage("role %q is not user", am.Role)
+	}
 	if msg.IsUUIDv7(am.ID) {
 		m.MessageID = am.ID
 	} else {

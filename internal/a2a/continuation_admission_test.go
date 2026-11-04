@@ -222,3 +222,24 @@ func TestTaskTerminalDuringContinuationReceiveClosesItsRoute(t *testing.T) {
 		t.Fatalf("routes closed after the continuation was received: %v", closed)
 	}
 }
+
+func TestAgentRoleContinuationRejectedBeforeDelivery(t *testing.T) {
+	e := newEnv(t, receiver.Limits{}, Limits{}, nil)
+	cl, ctx := e.peer()
+	_, second := openAsk(t, e)
+	second.Role = sdk.MessageRoleAgent
+	_, err := send(t, cl, ctx, second, true)
+	if err == nil {
+		t.Fatal("agent-role continuation was accepted")
+	}
+	if st := errorState(err); st != adapter.Rejected {
+		t.Fatalf("agent-role continuation mapped to %q, want rejected: %v", st, err)
+	}
+	if _, _, open := e.srv.AskOpen(second.ID); open {
+		t.Fatal("rejected continuation was indexed as an ask handle")
+	}
+	replayed := newStore(e.srv.tasks.ts, e.srv.tasks.log)
+	if _, _, open := replayed.askOpen(second.ID); open {
+		t.Fatal("rejected continuation resolves after replay")
+	}
+}
