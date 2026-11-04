@@ -63,14 +63,14 @@ func TestMCPExitsCleanlyOnClosedStdin(t *testing.T) {
 }
 
 func TestCodexEndpointsFromEnv(t *testing.T) {
-	t.Setenv("CROSSTALK_CODEX_ENDPOINTS", "unix:///tmp/a.sock"+string(os.PathListSeparator)+"unix:///tmp/b.sock")
+	t.Setenv("CROSSTALK_CODEX_ENDPOINTS", "unix:///tmp/a.sock, ws://127.0.0.1:4500 ,unix:///tmp/b.sock")
 	hs, err := harnesses(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	ad := hs[0].(*codex.Harness).Threads.(*codex.Adapter)
 	got := ad.KnownEndpoints()
-	for _, want := range []string{"unix:///tmp/a.sock", "unix:///tmp/b.sock"} {
+	for _, want := range []string{"unix:///tmp/a.sock", "ws://127.0.0.1:4500", "unix:///tmp/b.sock"} {
 		if !slices.Contains(got, want) {
 			t.Fatalf("KnownEndpoints %v lacks %s", got, want)
 		}

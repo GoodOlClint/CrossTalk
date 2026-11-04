@@ -545,6 +545,9 @@ func (s *Shim) Reply(ctx context.Context, from *mcpserver.Agent, messageID, text
 	if mcpserver.IsAgentID(key) && orig.Kind != msg.Ask && !st.rcv.RouteOpen(orig.MessageID) {
 		return mcpserver.Result{}, &mcpserver.Error{Code: mcpserver.CodeInvalid, Reason: ReasonNoSuchMessage, Hint: hintNoRouteExpired}
 	}
+	if !st.withinLoopCap(key) {
+		return mcpserver.Result{}, &mcpserver.Error{Code: mcpserver.CodeRejected, Reason: ReasonLoopCap}
+	}
 	r := st.newMessage(orig.From, msg.Inform, msg.Immediate, text)
 	irt, ctxID := st.replyTarget(orig)
 	r.InReplyTo, r.ContextID = &irt, ctxID

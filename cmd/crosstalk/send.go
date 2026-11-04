@@ -15,6 +15,9 @@ import (
 	"github.com/GoodOlClint/crosstalk/internal/udsingress"
 )
 
+// sendTimeout outlasts the Codex inject timeout (30s), the slowest delivery.
+var sendTimeout = 45 * time.Second
+
 type sendAck struct {
 	MessageID string `json:"message_id"`
 	State     string `json:"state"`
@@ -51,7 +54,7 @@ func sendTo(d registry.Descriptor, text string) (sendAck, error) {
 		return ack, err
 	}
 	defer c.Close()
-	c.SetDeadline(time.Now().Add(15 * time.Second))
+	c.SetDeadline(time.Now().Add(sendTimeout))
 	auth, _ := json.Marshal(map[string]string{"type": "auth", "token": key})
 	user, _ := json.Marshal(map[string]any{"type": "user", "message": map[string]string{"role": "user", "content": text}})
 	if _, err := c.Write(append(append(auth, '\n'), append(user, '\n')...)); err != nil {
@@ -59,7 +62,7 @@ func sendTo(d registry.Descriptor, text string) (sendAck, error) {
 	}
 	line, err := bufio.NewReader(c).ReadBytes('\n')
 	if err != nil {
-		return ack, errors.New("no answer from the agent; its token or socket was refused")
+		return ack, errors.New("no answer from the agent: the message may still be delivered, or its token was refused; do not retry blindly, a retry can deliver it twice")
 	}
 	return ack, json.Unmarshal(line, &ack)
 }

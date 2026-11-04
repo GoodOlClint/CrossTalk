@@ -39,7 +39,7 @@ CROSSTALK_CODEX_ENDPOINTS = "unix:///Users/you/.codex/crosstalk-tab.sock"
 codex --remote "unix://$S"
 ```
 
-`CROSSTALK_CODEX_ENDPOINTS` is a colon-separated list of Codex app-server endpoints that CrossTalk queries besides the managed daemon.
+`CROSSTALK_CODEX_ENDPOINTS` is a comma-separated list of Codex app-server endpoints (`unix://PATH` or `ws://HOST:PORT`) that CrossTalk queries besides the managed daemon.
 
 ## If something is wrong
 

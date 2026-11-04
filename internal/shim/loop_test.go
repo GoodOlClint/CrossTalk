@@ -60,3 +60,35 @@ func TestNativeSendsStopAtLoopCap(t *testing.T) {
 	}
 	t.Fatal("100 sends to one native session without a stop")
 }
+
+func TestReplyChainStopsAtLoopCap(t *testing.T) {
+	w := newWorld(t)
+	alice := w.claude(4001, "sess-alice", "alice")
+	w.codex.addThread("T-bob", "bob")
+	na := w.node(alice.pid, w.lb, nil)
+	nb := w.node(1, w.lb, nil)
+	na.ok(nil, "receive_message", map[string]any{})
+	nb.ok(thread("T-bob"), "receive_message", map[string]any{})
+
+	id := na.ok(nil, "send_message", send("bob", "start"))["message_id"]
+	bobTurn := true
+	for i := 0; i < 100; i++ {
+		var n *node
+		var meta map[string]any
+		if bobTurn {
+			n, meta = nb, thread("T-bob")
+		} else {
+			n, meta = na, nil
+		}
+		isErr, out := n.call(meta, "reply", map[string]any{"message_id": id, "text": "again"})
+		if out["reason"] == ReasonLoopCap {
+			return
+		}
+		if isErr || out["state"] == "rejected" || out["message_id"] == nil {
+			t.Fatalf("reply %d: %v", i, out)
+		}
+		id = out["message_id"]
+		bobTurn = !bobTurn
+	}
+	t.Fatal("100 replies without a stop")
+}

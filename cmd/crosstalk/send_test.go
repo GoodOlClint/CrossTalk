@@ -78,3 +78,34 @@ func TestPickTarget(t *testing.T) {
 		t.Fatal("unknown name accepted")
 	}
 }
+
+type slowReceiver struct{ recordingReceiver }
+
+func (r *slowReceiver) Receive(ctx context.Context, in receiver.Inbound) receiver.Result {
+	time.Sleep(600 * time.Millisecond)
+	return r.recordingReceiver.Receive(ctx, in)
+}
+
+func TestSendTimeoutAfterWriteIsUnknownOutcome(t *testing.T) {
+	d, err := os.MkdirTemp("/tmp", "xt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(d) })
+	s := &udsingress.Server{Path: filepath.Join(d, "a.sock"), Directory: noDir{}, Receiver: &slowReceiver{}, ReadTimeout: 2 * time.Second}
+	if err := s.Listen(); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error)
+	go func() { done <- s.Serve(ctx) }()
+	t.Cleanup(func() { cancel(); <-done })
+
+	old := sendTimeout
+	sendTimeout = 100 * time.Millisecond
+	defer func() { sendTimeout = old }()
+	_, err = sendTo(registry.Descriptor{UDSPath: s.Path}, "x")
+	if err == nil || !strings.Contains(err.Error(), "may still be delivered") {
+		t.Fatalf("err %v", err)
+	}
+}

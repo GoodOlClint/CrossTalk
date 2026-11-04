@@ -8,7 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
-	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -66,12 +66,23 @@ func harnesses(stateDir string) ([]harness.Harness, error) {
 	}
 	ci := appserver.ClientInfo{Name: "crosstalk", Version: mcpserver.Version}
 	cx := codex.NewHarness(codex.HarnessOptions{
-		Adapter:    &codex.Adapter{Logger: slog.Default(), ClientInfo: ci, Endpoints: filepath.SplitList(os.Getenv("CROSSTALK_CODEX_ENDPOINTS"))},
+		Adapter:    &codex.Adapter{Logger: slog.Default(), ClientInfo: ci, Endpoints: endpointList(os.Getenv("CROSSTALK_CODEX_ENDPOINTS"))},
 		Logger:     slog.Default(),
 		ClientInfo: ci,
 		Directory:  registry.New(stateDir),
 	})
 	return []harness.Harness{cx, cl}, nil
+}
+
+// endpointList splits a comma-separated list; ws:// endpoints contain colons.
+func endpointList(v string) []string {
+	var out []string
+	for _, e := range strings.Split(v, ",") {
+		if e = strings.TrimSpace(e); e != "" {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 func runMCP(stderr io.Writer) int {
