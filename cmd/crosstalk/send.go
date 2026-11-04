@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/GoodOlClint/crosstalk/internal/mcpserver"
 	"github.com/GoodOlClint/crosstalk/internal/registry"
 	"github.com/GoodOlClint/crosstalk/internal/udsingress"
 )
@@ -17,9 +18,10 @@ var sendTimeout = 45 * time.Second
 type sendAck = udsingress.Ack
 
 func pickTarget(ds []registry.Descriptor, to string) (registry.Descriptor, error) {
+	id := mcpserver.IsAgentID(to)
 	var hit []registry.Descriptor
 	for _, d := range ds {
-		if d.AgentID == to || d.Name == to {
+		if id && d.AgentID == to || !id && d.Name == to {
 			hit = append(hit, d)
 		}
 	}

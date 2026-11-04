@@ -63,12 +63,27 @@ func TestSendGoesThroughTheReceiverChainAsUnverified(t *testing.T) {
 	}
 }
 
-func TestPickTarget(t *testing.T) {
-	ds := []registry.Descriptor{{AgentID: "a1", Name: "alice"}, {AgentID: "b1", Name: "dup"}, {AgentID: "b2", Name: "dup"}}
-	if d, err := pickTarget(ds, "alice"); err != nil || d.AgentID != "a1" {
+func TestPickTargetKeepsIDsAndNamesApart(t *testing.T) {
+	id := "0123456789abcdef"
+	ds := []registry.Descriptor{{AgentID: "fedcba9876543210", Name: id}, {AgentID: "1111111111111111", Name: "alice"}}
+	if d, err := pickTarget(ds, id); err == nil {
+		t.Fatalf("an absent id matched the session named %s: %v", id, d)
+	}
+	ds = append(ds, registry.Descriptor{AgentID: id, Name: "bob"})
+	if d, err := pickTarget(ds, id); err != nil || d.Name != "bob" {
+		t.Fatalf("live id colliding with a name: %v %v", d, err)
+	}
+	if d, err := pickTarget(ds, "alice"); err != nil || d.AgentID != "1111111111111111" {
 		t.Fatalf("by name %v %v", d, err)
 	}
-	if d, err := pickTarget(ds, "b2"); err != nil || d.AgentID != "b2" {
+}
+
+func TestPickTarget(t *testing.T) {
+	ds := []registry.Descriptor{{AgentID: "aaaaaaaaaaaaaaa1", Name: "alice"}, {AgentID: "bbbbbbbbbbbbbbb1", Name: "dup"}, {AgentID: "bbbbbbbbbbbbbbb2", Name: "dup"}}
+	if d, err := pickTarget(ds, "alice"); err != nil || d.AgentID != "aaaaaaaaaaaaaaa1" {
+		t.Fatalf("by name %v %v", d, err)
+	}
+	if d, err := pickTarget(ds, "bbbbbbbbbbbbbbb2"); err != nil || d.AgentID != "bbbbbbbbbbbbbbb2" {
 		t.Fatalf("by id %v %v", d, err)
 	}
 	if _, err := pickTarget(ds, "dup"); err == nil {
