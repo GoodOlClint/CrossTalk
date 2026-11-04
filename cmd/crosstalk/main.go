@@ -28,6 +28,7 @@ const usage = `usage: crosstalk <command>
 
 commands:
   mcp      run the shim as an MCP server over stdio
+  send     send a text to an agent by name, for plain scripts
   capture  record raw Codex app-server frames for fixtures
   version  print the version
 `
@@ -40,6 +41,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	switch args[0] {
 	case "mcp":
 		return runMCP(stderr)
+	case "send":
+		return runSend(args[1:], os.Stdin, stdout, stderr)
 	case "capture":
 		return runCapture(args[1:], stdout, stderr)
 	case "version":

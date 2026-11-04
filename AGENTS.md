@@ -32,7 +32,7 @@ Every ADR in this repo is provisional (operator ruling, 2026-11-04). An ADR may 
 
 ## Status
 
-v1 implemented on main. Agent plugins and the skill are on `feat/agent-plugins` (ADR 0013; `docs/setup.md`); their live clean-account runs are not done (`docs/plans/agent-plugins-clean-run.md`). `docs/design.md` is still a draft under operator review, and its §11 tests gate "done" for v1 (test 17, the SDK conformance gate, is open).
+v1 implemented on main, with the agent plugins and the skill (ADR 0013; `docs/setup.md`); their live clean-account runs are not done (`docs/plans/agent-plugins-clean-run.md`). Wave 2 on `feat/wave2` adds the A2A hop chain on forwards plus the `loop_cap` send cap (design §4), `CROSSTALK_CODEX_ENDPOINTS`, the notice on pulled messages and `crosstalk send` (design §5). `docs/design.md` is still a draft under operator review, and its §11 tests gate "done" for v1 (test 17, the SDK conformance gate, is open).
 
 The repo is private. It goes public only after CI is in place (operator ruling, 2026-11-04), and after username paths and the stale README are fixed at HEAD. The operator flips the visibility. Commit author email stays as is; no history rewrite.
 
