@@ -120,7 +120,7 @@ func unresolved(latest Record) bool {
 		}
 	case TypeDispatch:
 		return true
-	case TypeOutcome:
+	case TypeOutcome, TypeOutbound:
 		return latest.State == StateUnknown
 	case TypeRoute:
 		return latest.State == StateOpen
