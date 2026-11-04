@@ -28,6 +28,7 @@ Cross-harness agent messaging: the shim (`crosstalk mcp`, an MCP server the harn
 
 Read `docs/decisions/` before architectural changes. `docs/design.md` is the design document; its §11 tests gate "done" for v1.
 
+Every ADR in this repo is provisional (operator ruling, 2026-11-04). An ADR may be edited in place, with no supersession step and no operator hard stop, when the design or code moves; keep it matching what the code does.
 ## Status
 
 Design phase. No implementation code until the design doc is approved by the operator (greenfield gate).
