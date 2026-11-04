@@ -246,6 +246,8 @@ Source: `~/Documents/Codex/2026-11-04/crosstalk-design-review-1.9.md` (18 findin
 | R17 | minor | `after` pages only problem states, tool help says full journal | accept as doc change | tool help and §8 say: cursor over the full journal, default state filter always applies |
 | R18 | minor | Normative text still describes removed mechanisms (Claude ack, turn/steer evidence, native routing tests 1/13/21/30, ADR 0001/0003/0004 clauses) | accept | reconcile in the cleanup sweep; supersession notes on ADRs 0001, 0003, 0004; conformance gate stays listed as open |
 
+Status 2026-11-04: R1 (s15), R2 (s16) and R3 (s17) are implemented on main with the probes turned into tests. Known gaps left for the sweep: R1 still ignores write errors after the outcome is durable (route close, post-send outbound appends); R2 resumes only A2A tasks, a submitted uds-ingress dedupe record with no task is not resumed because no sender evidence is retained; a resumed sender that is no longer registered is dispatched with its agent id only.
+
 Order of work when implementation resumes: s15–s17 (blockers) first, then R4–R6 together (reply transaction), then R7–R10, R12, R13; R11 goes to Codex; R14–R18 land with the cleanup sweep.
 
 ## Changelog
