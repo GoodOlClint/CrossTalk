@@ -32,13 +32,13 @@ type Entry struct {
 
 // MailboxStates are the states receive_message returns by default (§8);
 // accepted and queued are delivered by the harness itself.
-var MailboxStates = []adapter.State{adapter.Unreachable, adapter.Unknown, adapter.Bounced}
+var MailboxStates = []adapter.State{adapter.Unreachable, adapter.Unknown, adapter.Bounced, adapter.State(journal.StateRecovered)}
 
 // Admitted reports whether a dedupe state is one the receiver writes only
 // after the message passed hop, policy and size admission and was claimed
-// for dispatch. submitted precedes policy; rejected, canceled, bounced and
-// unreachable (also written by Recover for unclaimed messages) are not
-// evidence of admission.
+// for dispatch. submitted precedes policy; rejected, canceled, bounced,
+// recovered and unreachable (the last two written by Recover for unclaimed
+// messages) are not evidence of admission.
 func Admitted(state string) bool {
 	switch adapter.State(state) {
 	case adapter.Accepted, adapter.Queued, adapter.Unknown:
@@ -98,7 +98,7 @@ type mailKey struct {
 }
 
 // Mailbox returns, in journal order, the inbound messages whose latest state
-// is unreachable, unknown or bounced, and the outbound messages whose
+// is unreachable, unknown, bounced or recovered, and the outbound messages whose
 // latest state is unknown. after is a message_id cursor over the whole
 // journal; limit <= 0 means no limit.
 func (r *Receiver) Mailbox(after string, limit int) ([]Entry, error) {
@@ -199,9 +199,8 @@ func (r *Receiver) Mailbox(after string, limit int) ([]Entry, error) {
 // no evidence to reconcile with) or unreachable when it was bound to another
 // conversation. Open routes for the current conversation are reloaded;
 // routes and accepted-but-unclaimed messages bound to another conversation
-// are closed and unreachable. A submitted message of this conversation with
-// no claim and no task record (a uds-ingress message; a2a.Resume owns the
-// rest) becomes unknown so receive_message surfaces it.
+// are closed and unreachable. A submitted message with no claim takes the
+// state strandedState gives it.
 func (r *Receiver) Recover(rp journal.Replay) error {
 	self := r.self()
 	cur := journal.Binding{HarnessEndpoint: self.Binding.HarnessEndpoint, SessionRef: self.Binding.SessionRef}
@@ -242,17 +241,35 @@ func (r *Receiver) Recover(rp journal.Replay) error {
 				continue
 			}
 			errs = append(errs, r.j.Append(journal.Record{Type: journal.TypeRoute, Session: u.Session, MessageID: u.MessageID, Sender: u.Sender, To: u.To, Kind: u.Kind, State: journal.StateClosed}))
-		case u.Type == journal.TypeDedupe && u.State == journal.StateSubmitted && !u.Binding.SameConversation(cur):
+		case u.Type == journal.TypeDedupe && u.State == journal.StateSubmitted:
 			if _, claimed := r.j.DispatchState(u.MessageID); claimed {
 				continue
 			}
-			errs = append(errs, r.j.SetDedupeState(u.Sender, u.MessageID, string(adapter.Unreachable)))
-		case u.Type == journal.TypeDedupe && u.State == journal.StateSubmitted && !tasked[u.MessageID]:
-			if _, claimed := r.j.DispatchState(u.MessageID); claimed {
-				continue
+			if st := r.strandedState(u, u.Binding.SameConversation(cur), tasked[u.MessageID], self); st != "" {
+				errs = append(errs, r.j.SetDedupeState(u.Sender, u.MessageID, st))
 			}
-			errs = append(errs, r.j.SetDedupeState(u.Sender, u.MessageID, string(adapter.Unknown)))
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// strandedState returns the dedupe state for a submitted record with no
+// dispatch claim, or "" to leave it submitted. A record with a task record or
+// a task_id came through A2A: a first message belongs to a2a.Resume, and a
+// continuation stays submitted because its SendMessage failed with the crash.
+// Any other record came through uds, whose policy reads only the kind, so an
+// empty Sender stands in for the identity the journal does not keep.
+func (r *Receiver) strandedState(u journal.Record, sameConversation, tasked bool, self Recipient) string {
+	var m msg.Message
+	parsed := json.Unmarshal(u.Message, &m) == nil
+	viaA2A := tasked || parsed && m.TaskID != nil
+	switch {
+	case viaA2A && sameConversation:
+		return ""
+	case !viaA2A && (!parsed || r.admission(UDS, m, Sender{}, self) != ""):
+		return string(adapter.Rejected)
+	case !sameConversation:
+		return string(adapter.Unreachable)
+	}
+	return journal.StateRecovered
 }

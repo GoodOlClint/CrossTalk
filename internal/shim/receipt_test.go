@@ -10,6 +10,7 @@ import (
 	"github.com/GoodOlClint/crosstalk/internal/adapter"
 	"github.com/GoodOlClint/crosstalk/internal/identity"
 	"github.com/GoodOlClint/crosstalk/internal/journal"
+	"github.com/GoodOlClint/crosstalk/internal/mcpserver"
 	"github.com/GoodOlClint/crosstalk/internal/msg"
 	"github.com/GoodOlClint/crosstalk/internal/receiver"
 )
@@ -155,4 +156,76 @@ func TestLegacyReceiptNeedsAdmittedState(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRecoveredReplyDoesNotSettleAsk(t *testing.T) {
+	cases := []struct {
+		name     string
+		text     string
+		surfaced bool
+	}{
+		{"within limits", "late answer", true},
+		{"oversized", strings.Repeat("x", receiver.DefaultLimits.MaxMessageBytes+1), false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			w := newWorld(t)
+			alice := w.claude(4001, "sess-alice", "alice")
+			w.codex.addThread("T-bob", "bob")
+			t0 := time.Date(2026, 11, 3, 13, 0, 0, 0, time.UTC)
+			na := w.node(alice.pid, pendingTransport{taskID: "task-far"}, func(o *Options) { o.Now = fakeClock(t0) })
+			nb := w.node(1, w.lb, nil)
+			nb.ok(thread("T-bob"), "receive_message", map[string]any{})
+			askID := na.ok(nil, "ask", map[string]any{"to": "bob", "text": "slow?", "deadline_seconds": 60})["message_id"].(string)
+			stranded := answer(askID, askID, c.text)
+			body, err := json.Marshal(stranded)
+			if err != nil {
+				t.Fatal(err)
+			}
+			peer := identity.AgentID("codex", "T-bob")
+			if err := na.sh.Agent(alice.agentID()).agent.Journal().Append(journal.Record{Type: journal.TypeDedupe, Sender: peer, MessageID: stranded.MessageID, State: journal.StateSubmitted, Message: body}); err != nil {
+				t.Fatal(err)
+			}
+			na.stop()
+
+			n := w.node(alice.pid, nil, func(o *Options) { o.Now = fakeClock(t0.Add(2 * time.Minute)) })
+			got := n.ok(nil, "receive_message", map[string]any{})
+			waitFor(t, "the asker's expiry notice", func() bool { return len(alice.got()) == 1 })
+			for _, r := range journalRecords(t, w, alice.agentID()) {
+				if r.Type == journal.TypeReceipt {
+					t.Fatalf("a recovered message wrote receipt %+v", r)
+				}
+			}
+			surfaced := false
+			for _, e := range got["messages"].([]any) {
+				entry := e.(map[string]any)
+				if entry["message_id"] == stranded.MessageID {
+					surfaced = entry["state"] == "recovered"
+				}
+			}
+			if surfaced != c.surfaced {
+				t.Fatalf("surfaced %v, want %v: %v", surfaced, c.surfaced, got)
+			}
+		})
+	}
+}
+
+func TestRecoveredInformHasNoReplyRoute(t *testing.T) {
+	w := newWorld(t)
+	alice := w.claude(4001, "sess-alice", "alice")
+	na := w.node(alice.pid, w.lb, nil)
+	na.ok(nil, "receive_message", map[string]any{})
+	stranded := msg.Message{MessageID: msg.NewUUIDv7(), ContextID: "ctx", Kind: msg.Inform, Parts: []msg.Part{{Type: "text", Text: "stranded"}}}
+	body, err := json.Marshal(stranded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer := identity.AgentID("codex", "T-bob")
+	if err := na.sh.Agent(alice.agentID()).agent.Journal().Append(journal.Record{Type: journal.TypeDedupe, Sender: peer, MessageID: stranded.MessageID, State: journal.StateSubmitted, Message: body}); err != nil {
+		t.Fatal(err)
+	}
+	na.stop()
+	n := w.node(alice.pid, nil, nil)
+	n.ok(nil, "receive_message", map[string]any{})
+	n.fails(nil, "reply", map[string]any{"message_id": stranded.MessageID, "text": "hello"}, mcpserver.CodeInvalid, ReasonNoSuchMessage)
 }

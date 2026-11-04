@@ -134,6 +134,26 @@ func continueAsk(t *testing.T, dir string, alice, bob *node, askID, text string)
 	return id, taskID
 }
 
+func TestContinuationDedupeBodyNamesItsTask(t *testing.T) {
+	dir, alice, bob := pair(t)
+	askID := alice.ok("ask", map[string]any{"to": "bob", "text": "first?"})["message_id"].(string)
+	contID, taskID := continueAsk(t, dir, alice, bob, askID, "revised?")
+	for _, r := range records(t, dir, bob.id()) {
+		if r.Type != journal.TypeDedupe || r.MessageID != contID || len(r.Message) == 0 {
+			continue
+		}
+		var m msg.Message
+		if err := json.Unmarshal(r.Message, &m); err != nil {
+			t.Fatal(err)
+		}
+		if m.TaskID == nil || *m.TaskID != taskID {
+			t.Fatalf("task_id %v, want %s", m.TaskID, taskID)
+		}
+		return
+	}
+	t.Fatalf("no dedupe body for continuation %s", contID)
+}
+
 func TestReplyToContinuationIDCompletesWholeTask(t *testing.T) {
 	dir, alice, bob := pair(t)
 	askID := alice.ok("ask", map[string]any{"to": "bob", "text": "first?"})["message_id"].(string)
