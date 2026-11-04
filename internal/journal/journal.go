@@ -153,16 +153,27 @@ type dependencies struct {
 	tasks    map[string]bool
 }
 
-// liveSet also keeps an accepted outbound ask until some record answers it
-// (names it in in_reply_to): the asker has no local task record for it and
-// its deadline re-arm reads this record.
+// PrincipalCrossTalk is the dedupe sender of notices the shim injects into
+// its own session, among them an ask's deadline expiry.
+const PrincipalCrossTalk = "crosstalk"
+
+// liveSet also keeps an accepted outbound ask until a receipt record from its
+// peer names it or an admitted expiry notice answers it: the asker has no
+// local task record for it, and its deadline re-arm and receipt validation
+// read this record. Reply bodies alone never settle it.
 func liveSet(records []Record, latest map[string]Record) dependencies {
 	d := dependencies{messages: map[string]bool{}, tasks: map[string]bool{}}
 	answered := map[string]bool{}
 	for _, r := range records {
-		if r.InReplyTo != "" {
-			answered[r.InReplyTo] = true
-		} else if len(r.Message) > 0 {
+		switch {
+		case r.Type == TypeReceipt && r.InReplyTo != "":
+			if o, ok := latest[Record{Type: TypeOutbound, MessageID: r.InReplyTo}.key()]; ok && o.To == r.Sender {
+				answered[r.InReplyTo] = true
+			}
+		case r.Type == TypeDedupe && r.Sender == PrincipalCrossTalk && len(r.Message) > 0:
+			if s := latest[r.key()].State; s != "accepted" && s != "queued" {
+				continue
+			}
 			var m struct {
 				InReplyTo *string `json:"in_reply_to"`
 			}

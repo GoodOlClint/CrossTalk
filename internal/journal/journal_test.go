@@ -393,11 +393,76 @@ func TestRetentionKeepsUnansweredOutboundAsk(t *testing.T) {
 		t.Error("resolved outbound older than retention kept")
 	}
 
-	j2.Append(Record{Type: TypeDedupe, Sender: "bobid", MessageID: "answer", State: "accepted", Message: json.RawMessage(`{"message_id":"answer","in_reply_to":"out","kind":"inform"}`)})
+	j2.Append(Record{Type: TypeDedupe, Sender: "bob", MessageID: "answer", State: "accepted", Message: json.RawMessage(`{"message_id":"answer","in_reply_to":"out","kind":"inform"}`)})
+	j2.Append(Record{Type: TypeReceipt, MessageID: "answer", InReplyTo: "out", Sender: "bob"})
 	j2.Close()
 	j3, _ := reopenAfter(t, dir, now, 50*time.Hour)
 	if _, ok := j3.Latest(Record{Type: TypeOutbound, MessageID: "out"}); ok {
 		t.Error("outbound ask kept after it was answered")
+	}
+}
+
+func weekAsk(j *Journal) {
+	j.Append(Record{Type: TypeOutbound, MessageID: "ask", To: "peer", Kind: "ask", State: "accepted", ContextID: "ask", Message: json.RawMessage(`{"message_id":"ask","context_id":"ask","kind":"ask","deadline_seconds":604800}`)})
+}
+
+func TestRetentionIgnoresReplyBodiesWithoutReceipt(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	j, _ := open(t, dir, Options{Now: func() time.Time { return now }})
+	weekAsk(j)
+	j.Append(Record{Type: TypeDedupe, MessageID: "wrong", Sender: "other-peer", State: "rejected", Message: json.RawMessage(`{"message_id":"wrong","in_reply_to":"ask","context_id":"ask"}`)})
+	j.Append(Record{Type: TypeDedupe, MessageID: "legacy", Sender: "peer", State: "accepted", Message: json.RawMessage(`{"message_id":"legacy","in_reply_to":"ask","context_id":"ask"}`)})
+	j.Append(Record{Type: TypeObligation, MessageID: "own-reply", InReplyTo: "ask", To: "peer", State: StateDelivered})
+	j.Append(Record{Type: TypeReceipt, MessageID: "spoof", InReplyTo: "ask", Sender: "other-peer", ContextID: "ask"})
+	j.Close()
+
+	j2, _ := reopenAfter(t, dir, now, 48*time.Hour)
+	if _, ok := j2.Latest(Record{Type: TypeOutbound, MessageID: "ask"}); !ok {
+		t.Fatal("unanswered week-long ask pruned on reply bodies or a receipt from another peer")
+	}
+}
+
+func TestRetentionPrunesAskAfterReceipt(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	j, _ := open(t, dir, Options{Now: func() time.Time { return now }})
+	weekAsk(j)
+	j.Append(Record{Type: TypeReceipt, MessageID: "answer", InReplyTo: "ask", Sender: "peer", ContextID: "ask"})
+	j.Close()
+
+	j2, _ := reopenAfter(t, dir, now, 12*time.Hour)
+	if _, ok := j2.Latest(Record{Type: TypeOutbound, MessageID: "ask"}); !ok {
+		t.Fatal("answered ask pruned inside the retention window")
+	}
+	j2.Close()
+	j3, _ := reopenAfter(t, dir, now, 48*time.Hour)
+	if _, ok := j3.Latest(Record{Type: TypeOutbound, MessageID: "ask"}); ok {
+		t.Error("ask with a receipt kept past retention")
+	}
+}
+
+func TestRetentionPrunesAskAfterAdmittedExpiryNotice(t *testing.T) {
+	for _, tc := range []struct {
+		state string
+		kept  bool
+	}{{"accepted", false}, {"queued", false}, {"rejected", true}, {StateSubmitted, true}} {
+		t.Run(tc.state, func(t *testing.T) {
+			dir := t.TempDir()
+			now := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+			j, _ := open(t, dir, Options{Now: func() time.Time { return now }})
+			weekAsk(j)
+			j.Append(Record{Type: TypeDedupe, MessageID: "notice", Sender: PrincipalCrossTalk, State: StateSubmitted, Message: json.RawMessage(`{"message_id":"notice","in_reply_to":"ask","kind":"inform"}`)})
+			if tc.state != StateSubmitted {
+				j.SetDedupeState(PrincipalCrossTalk, "notice", tc.state)
+			}
+			j.Close()
+
+			j2, _ := reopenAfter(t, dir, now, 48*time.Hour)
+			if _, ok := j2.Latest(Record{Type: TypeOutbound, MessageID: "ask"}); ok != tc.kept {
+				t.Errorf("ask kept = %t, want %t", ok, tc.kept)
+			}
+		})
 	}
 }
 
