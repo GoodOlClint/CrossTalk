@@ -23,3 +23,4 @@ Status of captured frames: to be committed before `go mod init`. Until then the 
 | 7 | Claude-visible record (R2): publish a `~/.claude/sessions/<pid>.json` + key pair for a shim and record what Claude does with it. | §3 decision, uds ingress (test 11) |
 | 9 | Harness-provided identity (ADR 0006): capture `params._meta` of a model-issued `tools/call` from a Codex thread on 0.166.0 with a metadata-echo MCP server (expect `threadId`, `sessionId`), and confirm a Claude MCP child's parent pid maps to `~/.claude/sessions/<ppid>.json`. | Codex adapter, §3 binding |
 - [11 harness landscape](11-harness-landscape.md) — which other harnesses can take in-session delivery; recommended early set OpenCode, Gemini CLI (+Qwen Code), Pi; ACP is not an attach surface.
+- [12 Antigravity CLI](12-antigravity-cli.md) — measured MCP identity, hook payloads, injection forms and Stop re-entry on agy 1.5.0; backs ADR 0012.
