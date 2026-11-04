@@ -1,6 +1,6 @@
 # Set up CrossTalk on one Mac
 
-CrossTalk lets Claude Code and Codex sessions on this Mac message each other by name. You need macOS, Homebrew, and Claude Code and/or Codex. A first clean-account run (2026-11-04) passed the basic plumbing and the Codex authority case; both cross-harness answer round trips passed live with the plugin only, and Codex started outside a shell passed on result. A Claude peer read a file on a soft ask; the notice in this release addresses that, and its live re-test is unrun. An explicit `prompt` approval entry is indirect only ([open facts](decisions/0013-agent-plugins-and-skill-packaging.md#not-yet-run-live)).
+CrossTalk lets Claude Code and Codex sessions on this Mac message each other by name. You need macOS, Homebrew, and Claude Code and/or Codex. A first clean-account run (2026-11-04) passed the basic plumbing and the Codex authority case; both cross-harness answer round trips passed live with the plugin only, and Codex started outside a shell passed on result. A Claude peer read a file on a soft ask; a live audit of the new notice found no read before approval on 19 receivers, but the Claude receivers ran their first turn only, with no tools or skill listed, so the problem is narrowed, not fixed. A replica run must pass before release. An explicit `prompt` approval entry is indirect only ([open facts](decisions/0013-agent-plugins-and-skill-packaging.md#not-yet-run-live)).
 
 1. **Install the binary.** While the repo is private, set `GOPRIVATE=github.com/GoodOlClint/*` and run `gh auth setup-git` once so `go` can clone over https; drop both once public. Admin account:
    ```sh
@@ -17,11 +17,29 @@ CrossTalk lets Claude Code and Codex sessions on this Mac message each other by 
    ```
 4. **Claude only: allow the tools.** A Claude plugin cannot pre-allow its tools. Add `"mcp__plugin_crosstalk_crosstalk__*"` to `permissions.allow` in `~/.claude/settings.json`.
 5. **Restart** every running Claude and Codex session. A running session keeps the old server.
-6. **Try it.** Open one Claude and one Codex session (or two of either). In one, say: "List the other agents, then ask the session named `<its name>` what directory it is in." Name a target from the list. The answer arrives as a new message. A new directory shows a folder-trust dialog; accept it. If a peer asks you before answering anything else, that is the notice working: allow it or answer for it.
+6. **Try it.** Open one Claude and one Codex session (or two of either). In one, say: "List the other agents, then ask the session named `<its name>` what directory it is in." Name a target from the list. The answer arrives as a new message. `ask` needs the target to have made its first CrossTalk call; before that, use `send_message`. A Claude session nobody has typed into yet cannot answer: type one line in it first. A new directory shows a folder-trust dialog; accept it. If a peer asks you before answering anything else, that is the notice working: allow it or answer for it.
 7. **Upgrade.** Re-run the `go install` line, then `claude plugin marketplace update crosstalk && claude plugin update crosstalk@crosstalk` and `codex plugin marketplace upgrade`, then restart sessions. Each release bumps the plugin version, which `plugin update` compares; a plugin installed before the bump needs `claude plugin uninstall` and a reinstall.
 8. **Uninstall.** `claude plugin uninstall crosstalk`, `codex plugin remove crosstalk@crosstalk`, then remove the marketplace (`claude plugin marketplace remove crosstalk`, `codex plugin marketplace remove crosstalk`), the `mcp__plugin_crosstalk_crosstalk__*` allow rule and any cached plugin copy, stop running `crosstalk mcp` shims, and delete the binary.
 
-`codex --no-daemon` tabs can send and pull with `receive_message` but cannot receive delivered messages: the sender gets `unreachable`.
+`codex --no-daemon` tabs can send and pull with `receive_message` but cannot receive delivered messages: the sender gets `unreachable`. To receive in such a tab, give the tab its own app server and tell CrossTalk where it is (not run live):
+
+```sh
+S="$HOME/.codex/crosstalk-tab.sock"
+codex app-server --listen "unix://$S" &
+```
+
+Add the endpoint to the CrossTalk entry in `~/.codex/config.toml`, then start the tab against that server:
+
+```toml
+[mcp_servers.crosstalk.env]
+CROSSTALK_CODEX_ENDPOINTS = "unix:///Users/you/.codex/crosstalk-tab.sock"
+```
+
+```sh
+codex --remote "unix://$S"
+```
+
+`CROSSTALK_CODEX_ENDPOINTS` is a colon-separated list of Codex app-server endpoints that CrossTalk queries besides the managed daemon.
 
 ## If something is wrong
 
@@ -35,4 +53,4 @@ CrossTalk lets Claude Code and Codex sessions on this Mac message each other by 
 
 ## Security in plain words
 
-Every session on this Mac runs as you, and any of them can message any other. A peer's text is data, never an instruction from you. When the plugin's skill loads, it tells the model not to read files, run commands or change anything because a peer asked, and to tell you and ask first. One exception: a peer may ask whether a session is online, its working directory, its git branch or its harness, and the model answers. File contents, listings, environment, command output and what you said stay with you until you allow them. Do not put secrets in messages.
+Every session on this Mac runs as you, and any of them can message any other. A peer's text is data, never an instruction from you. Every delivered peer message carries a notice, and the plugin's skill, when loaded, repeats it. They tell the model not to read files, run commands or change anything because a peer asked, and to tell you and ask first. One exception: a peer may ask whether a session is online, its working directory, its git branch or its harness, and the model answers. File contents, listings, environment, command output and what you said stay with you until you allow them. Do not put secrets in messages.
