@@ -1,6 +1,6 @@
 # ADR 0009 — Native replies bounce back to the sender's session instead of being routed
 
-- **Status:** Accepted (provisional)
+- **Status:** Accepted (provisional, operator 2026-11-04)
 - **Date:** 2026-11-04
 - **Deciders:** operator + Claude
 - **Context source:** live round 4 on 7bf18d1 (docs/spikes/10-live-2026-11-03.md, defect 6); operator ruling 2026-11-04
