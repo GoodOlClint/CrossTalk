@@ -1,4 +1,4 @@
-# ADR 0008 — Harness support is a plugin interface, never shim code
+# ADR 0008 — Each harness is one package behind a shared interface; adding one never edits another
 
 - **Status:** Accepted (provisional, operator 2026-11-03)
 - **Date:** 2026-11-03
@@ -11,7 +11,7 @@ Design §2 already says "adding a harness = one adapter: register(), inject(mess
 
 ## Decision
 
-Everything a harness contributes lives behind one interface in `internal/harness`, and the shim, mcpserver and A2A code never name a concrete harness.
+"Pluggable" here means an in-process Go interface with a compile-time list, not a runtime plugin: every release ships all supported harnesses in the one binary (operator, 2026-11-03). The bar is that adding a harness is one new package plus one line in `cmd/crosstalk`, with no change to the existing harness packages and no harness-specific code in the shim. Everything a harness contributes lives behind one interface in `internal/harness`, and the shim, mcpserver and A2A code never name a concrete harness.
 
 ```go
 type Harness interface {
