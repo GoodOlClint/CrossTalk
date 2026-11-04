@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"slices"
 	"sync"
+	"time"
 
 	"github.com/GoodOlClint/crosstalk/internal/adapter"
 	"github.com/GoodOlClint/crosstalk/internal/harness/codex/appserver"
@@ -29,9 +30,11 @@ type Adapter struct {
 	ControlSocket string
 	// Endpoints are further known endpoints (harness_endpoint values from
 	// descriptors), queried alongside ControlSocket (§3 CQ10).
-	Endpoints  []string
-	Logger     *slog.Logger
-	ClientInfo appserver.ClientInfo
+	Endpoints []string
+	Logger    *slog.Logger
+	// InjectTimeout bounds one Inject; 0 means DefaultInjectTimeout.
+	InjectTimeout time.Duration
+	ClientInfo    appserver.ClientInfo
 
 	mu       sync.Mutex
 	bindings map[string]adapter.Binding

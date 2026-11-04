@@ -290,3 +290,52 @@ func (r *rawWriter) Write(p []byte) (int, error) {
 	q[0] = r.hdr0
 	return r.w.Write(q)
 }
+
+func TestWriteDeadlineWhenPeerNeverReads(t *testing.T) {
+	old := appserver.WriteTimeout
+	appserver.WriteTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { appserver.WriteTimeout = old })
+
+	dir, err := os.MkdirTemp("/tmp", "ws")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "s.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		c, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		buf := make([]byte, 4096)
+		n, _ := c.Read(buf)
+		key := ""
+		for _, l := range strings.Split(string(buf[:n]), "\r\n") {
+			if v, ok := strings.CutPrefix(l, "Sec-WebSocket-Key: "); ok {
+				key = v
+			}
+		}
+		c.Write([]byte("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: " + appserver.AcceptKey(key) + "\r\n\r\n"))
+		time.Sleep(10 * time.Second)
+	}()
+
+	c, err := appserver.Dial(ctx(t), sock, appserver.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	start := time.Now()
+	err = c.Notify("x", strings.Repeat("a", 32<<20))
+	if !errors.Is(err, appserver.ErrNotSent) {
+		t.Fatalf("Notify err = %v, want ErrNotSent", err)
+	}
+	if el := time.Since(start); el > 2*time.Second {
+		t.Fatalf("write blocked %v past a %v deadline", el, appserver.WriteTimeout)
+	}
+}

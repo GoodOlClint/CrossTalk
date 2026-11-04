@@ -14,10 +14,14 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // ControlSocketRel is the managed daemon socket, relative to the home directory.
 const ControlSocketRel = ".codex/app-server-control/app-server-control.sock"
+
+// WriteTimeout bounds every websocket write, including the close frame.
+var WriteTimeout = 5 * time.Second
 
 var (
 	// ErrNotSent: the request never fully reached the server; nothing was delivered.
@@ -154,6 +158,7 @@ func (c *Client) Endpoint() string { return c.endpoint }
 
 func (c *Client) Close() error {
 	c.wmu.Lock()
+	c.conn.SetWriteDeadline(time.Now().Add(WriteTimeout))
 	_ = WriteFrame(c.conn, OpClose, nil, true)
 	c.wmu.Unlock()
 	err := c.conn.Close()
@@ -170,7 +175,16 @@ func (c *Client) write(raw []byte) error {
 	if c.opt.OnFrame != nil {
 		c.opt.OnFrame(DirOut, raw)
 	}
-	return WriteFrame(c.conn, OpText, raw, true)
+	return c.writeFrame(OpText, raw)
+}
+
+func (c *Client) writeFrame(op byte, payload []byte) error {
+	c.conn.SetWriteDeadline(time.Now().Add(WriteTimeout))
+	err := WriteFrame(c.conn, op, payload, true)
+	if err != nil {
+		c.conn.Close()
+	}
+	return err
 }
 
 type inbound struct {
@@ -202,7 +216,7 @@ func (c *Client) readLoop() {
 		}
 		c.wmu.Lock()
 		defer c.wmu.Unlock()
-		return WriteFrame(c.conn, OpPong, payload, true)
+		return c.writeFrame(OpPong, payload)
 	}
 	var err error
 	for {

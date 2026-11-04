@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -132,5 +134,30 @@ func TestEncodeDecodeRoundTrip(t *testing.T) {
 	}
 	if _, err := decode(&sdk.Message{ID: "x", Parts: sdk.ContentParts{sdk.NewDataPart(map[string]any{"a": 1})}}); !errors.Is(err, sdk.ErrInvalidParams) {
 		t.Fatalf("data part: %v", err)
+	}
+}
+
+func TestSendTimesOutWithoutCallerDeadline(t *testing.T) {
+	old := DefaultSendTimeout
+	DefaultSendTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { DefaultSendTimeout = old })
+	done := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-done:
+		}
+	}))
+	defer srv.Close()
+	defer close(done)
+	m := msg.Message{MessageID: "019a3b7e-0000-7000-8000-000000000001", ContextID: "c", From: "a", To: "b",
+		Kind: msg.Inform, Delivery: msg.Immediate, SentAt: time.Now(), Parts: []msg.Part{{Type: "text", Text: "x"}}}
+	start := time.Now()
+	_, _, err := (&Client{}).Send(context.Background(), srv.URL, "tok", m, true)
+	if err == nil {
+		t.Fatal("Send to a silent server returned no error")
+	}
+	if el := time.Since(start); el > 2*time.Second {
+		t.Fatalf("Send took %v past a %v default", el, DefaultSendTimeout)
 	}
 }

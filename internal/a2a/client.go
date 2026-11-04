@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"time"
 
 	sdk "github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2aclient"
@@ -13,6 +14,10 @@ import (
 	"github.com/GoodOlClint/crosstalk/internal/adapter"
 	"github.com/GoodOlClint/crosstalk/internal/msg"
 )
+
+// DefaultSendTimeout bounds a Send whose context carries no deadline. A
+// default-wait send is exempt: its wait is the task's terminal state.
+var DefaultSendTimeout = 10 * time.Second
 
 // Client sends to other shims' A2A servers. Name is the sending agent's
 // name, sent with its own bearer token; empty means the token is the peer
@@ -61,6 +66,11 @@ func (c *Client) Send(ctx context.Context, url, bearerToken string, m msg.Messag
 		return "", adapter.Unreachable, err
 	}
 	defer cl.Destroy()
+	if _, ok := ctx.Deadline(); !ok && returnImmediately {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, DefaultSendTimeout)
+		defer cancel()
+	}
 	res, err := cl.SendMessage(ctx, &sdk.SendMessageRequest{
 		Message: encode(m),
 		Config:  &sdk.SendMessageConfig{ReturnImmediately: returnImmediately},

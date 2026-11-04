@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/GoodOlClint/crosstalk/internal/adapter"
 	"github.com/GoodOlClint/crosstalk/internal/harness/codex/appserver"
@@ -13,7 +14,16 @@ import (
 
 var ErrRefused = errors.New("codex: app-server refused delivery")
 
+// DefaultInjectTimeout bounds one Inject dispatch.
+var DefaultInjectTimeout = 30 * time.Second
+
 func (a *Adapter) Inject(ctx context.Context, m msg.Message, d adapter.Delivery) (adapter.State, error) {
+	to := a.InjectTimeout
+	if to == 0 {
+		to = DefaultInjectTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, to)
+	defer cancel()
 	ep, thread := d.Target.HarnessEndpoint, d.Target.SessionRef
 	if thread == "" {
 		return adapter.Unreachable, ErrNoThread
