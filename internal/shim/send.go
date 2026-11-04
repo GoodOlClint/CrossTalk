@@ -388,7 +388,7 @@ func isAgentID(k string) bool {
 // verified sender, never the model's text (§8, §5 F4). There is one reply
 // per ask task (any of its message ids) or, without a task, per inbound
 // message (ADR 0010): a byte-identical retry returns the first result, or
-// resumes it while its obligation is still pending.
+// resumes the reply transaction while its obligation is not yet delivered.
 func (s *Shim) Reply(ctx context.Context, from *mcpserver.Agent, messageID, text string) (mcpserver.Result, error) {
 	st, err := s.state(from)
 	if err != nil {
@@ -410,8 +410,8 @@ func (s *Shim) Reply(ctx context.Context, from *mcpserver.Agent, messageID, text
 			return mcpserver.Result{}, askClosed(orig)
 		case prev.Text() != text:
 			return mcpserver.Result{}, &mcpserver.Error{Code: mcpserver.CodeRejected, Reason: ReasonAlreadyReplied, Message: "this ask already has a different reply " + prev.MessageID + "; send further answers with send_message to " + orig.From}
-		case state == journal.StatePending:
-			return st.completeReply(ctx, orig, prev, key, taskID)
+		case state != journal.StateDelivered:
+			return st.completeReply(ctx, orig, prev, key, taskID, state)
 		}
 		return st.storedResult(prev), nil
 	}
@@ -427,24 +427,63 @@ func (s *Shim) Reply(ctx context.Context, from *mcpserver.Agent, messageID, text
 	if err := st.agent.Journal().Append(st.obligation(r, key, journal.StatePending, true, taskID)); err != nil {
 		return mcpserver.Result{}, err
 	}
-	return st.completeReply(ctx, orig, r, key, taskID)
+	return st.completeReply(ctx, orig, r, key, taskID, journal.StatePending)
 }
 
-// completeReply completes the ask's task through OnReply, closes the route
-// once that succeeded, and sends r.
-func (st *AgentState) completeReply(ctx context.Context, orig, r msg.Message, key, taskID string) (mcpserver.Result, error) {
-	var hookErr error
-	if st.shim.opt.OnReply != nil {
-		hookErr = st.shim.opt.OnReply(ctx, st, orig, r)
+// Obligation stages after pending (journal.StatePending): the ask's task is
+// completed, then the route is released, then the reply is delivered.
+const (
+	stageCompleted = journal.StateCompleted
+	stageReleased  = "released"
+)
+
+// completeReply runs the reply transaction from the obligation's journaled
+// stage. Each stage is journaled before the next starts, so a failed stage
+// leaves the obligation where a retry or startup replay resumes it.
+func (st *AgentState) completeReply(ctx context.Context, orig, r msg.Message, key, taskID, stage string) (mcpserver.Result, error) {
+	res := mcpserver.Result{MessageID: r.MessageID}
+	advance := func(s string) bool {
+		if err := st.agent.Journal().Append(st.obligation(r, key, s, false, taskID)); err != nil {
+			res.State, res.Reason = adapter.Unknown, receiver.ReasonJournal
+			return false
+		}
+		stage = s
+		return true
 	}
-	if errors.Is(hookErr, ErrAskClosed) {
-		st.agent.Journal().Append(st.obligation(r, key, journal.StateClosed, false, taskID))
-		return mcpserver.Result{}, askClosed(orig)
+	if stage == journal.StatePending {
+		hook := st.shim.opt.OnReply
+		if hook == nil && !isAgentID(key) {
+			res.State, res.Reason = adapter.Unreachable, ReasonNoReplyHook
+			return res, nil
+		}
+		if hook != nil {
+			err := hook(ctx, st, orig, r)
+			if errors.Is(err, ErrAskClosed) {
+				st.agent.Journal().Append(st.obligation(r, key, journal.StateClosed, false, taskID))
+				return mcpserver.Result{}, askClosed(orig)
+			}
+			if err != nil {
+				res.State, res.Reason = adapter.Unknown, err.Error()
+				return res, nil
+			}
+		}
+		if !advance(stageCompleted) {
+			return res, nil
+		}
 	}
-	if hookErr == nil {
+	if stage == stageCompleted {
 		st.rcv.CloseRoute(orig.MessageID)
+		if !advance(stageReleased) {
+			return res, nil
+		}
 	}
-	return st.sendReply(ctx, r, key, hookErr, taskID), nil
+	if !isAgentID(key) {
+		if advance(journal.StateDelivered) {
+			res.State = adapter.Accepted
+		}
+		return res, nil
+	}
+	return st.forwardReply(ctx, r, key, taskID), nil
 }
 
 func (st *AgentState) obligation(r msg.Message, to, state string, withBody bool, taskID string) journal.Record {
@@ -455,21 +494,16 @@ func (st *AgentState) obligation(r msg.Message, to, state string, withBody bool,
 	return rec
 }
 
-func (st *AgentState) sendReply(ctx context.Context, r msg.Message, key string, hookErr error, askTask string) mcpserver.Result {
+// forwardReply sends r to the asker. An outbound record already accepted or
+// queued is the forward's evidence: it is not sent again.
+func (st *AgentState) forwardReply(ctx context.Context, r msg.Message, key, askTask string) mcpserver.Result {
 	res := mcpserver.Result{MessageID: r.MessageID}
 	delivered := func() {
 		st.agent.Journal().Append(st.obligation(r, key, journal.StateDelivered, false, askTask))
 	}
-	if !isAgentID(key) {
-		switch {
-		case st.shim.opt.OnReply == nil:
-			res.State, res.Reason = adapter.Unreachable, ReasonNoReplyHook
-		case hookErr != nil:
-			res.State, res.Reason = adapter.Unknown, hookErr.Error()
-		default:
-			res.State = adapter.Accepted
-			delivered()
-		}
+	if o, ok := st.agent.Journal().Latest(journal.Record{Type: journal.TypeOutbound, MessageID: r.MessageID}); ok && (o.State == string(adapter.Accepted) || o.State == string(adapter.Queued)) {
+		delivered()
+		res.State, res.Reason = adapter.State(o.State), o.Reason
 		return res
 	}
 	d, ok := st.shim.descriptorByID(key)
@@ -492,13 +526,14 @@ func (st *AgentState) sendReply(ctx context.Context, r msg.Message, key string, 
 	return res
 }
 
-// retryObligations resends replies journaled as pending under this
-// conversation; the receiver dedupes on message_id, so a resend of a reply
-// that did arrive is not injected twice (C4).
+// retryObligations resumes every reply obligation of this conversation that
+// is neither delivered nor closed, local-user ones included, from its
+// journaled stage. It runs once the agent's descriptor is published, so the
+// asker can resolve this agent; the receiver dedupes on message_id, so a
+// resend of a reply that did arrive is not injected twice (C4).
 func (st *AgentState) retryObligations() {
-	if st.shim.opt.Transport == nil {
-		return
-	}
+	st.replyMu.Lock()
+	defer st.replyMu.Unlock()
 	j := st.agent.Journal()
 	rs, err := j.Records()
 	if err != nil {
@@ -506,10 +541,11 @@ func (st *AgentState) retryObligations() {
 	}
 	cur := journal.Binding{HarnessEndpoint: st.binding.HarnessEndpoint, SessionRef: st.binding.SessionRef}
 	for _, rec := range rs {
-		if rec.Type != journal.TypeObligation || len(rec.Message) == 0 || !rec.Binding.SameConversation(cur) || !isAgentID(rec.To) {
+		if rec.Type != journal.TypeObligation || len(rec.Message) == 0 || !rec.Binding.SameConversation(cur) {
 			continue
 		}
-		if l, ok := j.Latest(rec); !ok || l.State != journal.StatePending {
+		l, ok := j.Latest(rec)
+		if !ok || l.State == journal.StateDelivered || l.State == journal.StateClosed {
 			continue
 		}
 		var r msg.Message
@@ -519,7 +555,11 @@ func (st *AgentState) retryObligations() {
 		if st.ctx.Err() != nil {
 			return
 		}
-		st.sendReply(st.ctx, r, rec.To, nil, rec.TaskID)
+		orig, _, ok := st.inbound(*r.InReplyTo)
+		if !ok {
+			orig = msg.Message{MessageID: *r.InReplyTo, From: r.To}
+		}
+		st.completeReply(st.ctx, orig, r, rec.To, rec.TaskID, l.State)
 	}
 }
 

@@ -205,6 +205,9 @@ func (s *Server) register(ctx context.Context, a *Agent, c caller) (notice strin
 	if err := g.Publish(d); err != nil {
 		return "", err
 	}
+	if p, ok := s.backend.(Publisher); ok {
+		p.Published(a)
+	}
 	if c.name != "" && g.Name() != c.name {
 		notice = fmt.Sprintf("registered as %q: harness name %q is held by another live agent", g.Name(), c.name)
 	}

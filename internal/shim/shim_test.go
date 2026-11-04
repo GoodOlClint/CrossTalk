@@ -286,7 +286,7 @@ func TestReplyRoutesThroughJournal(t *testing.T) {
 			obl = append(obl, r.State)
 		}
 	}
-	if !slices.Equal(obl, []string{journal.StatePending, journal.StateDelivered}) {
+	if !slices.Equal(obl, []string{journal.StatePending, journal.StateCompleted, stageReleased, journal.StateDelivered}) {
 		t.Fatalf("obligation states %v", obl)
 	}
 	var inReplyTo string

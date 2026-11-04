@@ -66,7 +66,7 @@ func (b Binding) SameConversation(o Binding) bool {
 //	outcome:    MessageID, State
 //	cancel:     MessageID
 //	route:      Session, MessageID, Sender (original sender), State open|closed
-//	obligation: MessageID (the reply), InReplyTo, To, State pending|delivered|closed (the ask closed first)
+//	obligation: MessageID (the reply), InReplyTo, To, TaskID, State pending|completed|released|delivered, or closed (the ask closed first); the first carries Message
 //	claim:      Owner (agent_id), Claimed
 //	outbound:   MessageID, To (agent_id, harness:session_ref, or an unresolved name), Kind, State, Reason, TaskID (far side's), ContextID; the first carries Message, whose deadline_seconds and sent_at fix an ask's deadline
 //	receipt:    MessageID (an admitted inbound reply), InReplyTo (the outbound ask it answers), Sender (the ask's peer agent_id), ContextID (the ask's)

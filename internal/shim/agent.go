@@ -170,9 +170,19 @@ func (s *Shim) Bind(ctx context.Context, a *mcpserver.Agent) (mcpserver.BindInfo
 		st.a2a = l
 		info.A2AURL, info.CredentialRef = l.URL, l.CredentialRef
 	}
-	go st.retryObligations()
 	st.rearmDeadlines()
 	return info, nil
+}
+
+// Published starts replaying a's reply obligations; mcpserver calls it once
+// a's descriptor is published.
+func (s *Shim) Published(a *mcpserver.Agent) {
+	s.mu.Lock()
+	st := s.agents[a.ID()]
+	s.mu.Unlock()
+	if st != nil && st.agent == a && st.started() {
+		go st.retryObligations()
+	}
 }
 
 // CloseAgent stops the agent's listeners and removes its socket while

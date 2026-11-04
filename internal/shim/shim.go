@@ -76,9 +76,10 @@ type Options struct {
 	// StartA2A, when set, starts the agent's A2A server after its receiver
 	// exists and before its descriptor is published.
 	StartA2A func(ctx context.Context, st *AgentState) (A2AListener, error)
-	// OnReply, when set, runs for every reply this agent's session makes
-	// (reply tool or a correlated native reply), after the obligation is
-	// journaled and before the reply is sent; it completes the ask's A2A task.
+	// OnReply, when set, runs for every reply this agent's session makes,
+	// after the obligation is journaled and before the route closes and the
+	// reply is sent; it completes the ask's A2A task. An error leaves the
+	// obligation pending and OnReply runs again on the retry or replay.
 	OnReply          func(ctx context.Context, st *AgentState, original, reply msg.Message) error
 	DiscoveryTimeout time.Duration
 	Now              func() time.Time
@@ -107,6 +108,7 @@ var (
 	_ mcpserver.Binder        = (*Shim)(nil)
 	_ mcpserver.HarnessBinder = (*Shim)(nil)
 	_ mcpserver.AgentCloser   = (*Shim)(nil)
+	_ mcpserver.Publisher     = (*Shim)(nil)
 )
 
 func New(opt Options) (*Shim, error) {

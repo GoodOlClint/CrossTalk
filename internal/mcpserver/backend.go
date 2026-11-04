@@ -84,6 +84,13 @@ type AgentCloser interface {
 	CloseAgent(a *Agent) error
 }
 
+// Publisher is optionally implemented by a Backend with per-agent work that
+// needs the agent's descriptor published first. Published runs after the
+// registration publish succeeds and must not block.
+type Publisher interface {
+	Published(a *Agent)
+}
+
 var ErrCloseTimeout = errors.New("mcpserver: agent handlers did not stop")
 
 type BindInfo struct {
