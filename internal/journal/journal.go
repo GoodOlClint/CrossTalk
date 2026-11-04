@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -31,6 +32,7 @@ const (
 	TypeClaim      Type = "claim"
 	TypeOutbound   Type = "outbound"
 	TypeReceipt    Type = "receipt"
+	TypeNudge      Type = "nudge"
 )
 
 const (
@@ -93,6 +95,7 @@ type Record struct {
 	ContextID string     `json:"context_id,omitempty"`
 	Delivery  string     `json:"delivery,omitempty"`
 	Reason    string     `json:"reason,omitempty"`
+	Count     int        `json:"count,omitempty"`
 	Text      string     `json:"text,omitempty"`
 	Deadline  *time.Time `json:"deadline,omitempty"`
 	// Message is the normalized message a dedupe record was accepted with,
@@ -119,6 +122,8 @@ func (r Record) key() string {
 		return "s\x00" + r.MessageID
 	case TypeReceipt:
 		return "p\x00" + r.InReplyTo + "\x00" + r.MessageID
+	case TypeNudge:
+		return "n\x00" + r.To + "\x00" + strconv.Itoa(r.Count)
 	}
 	return "?\x00" + string(r.Type)
 }

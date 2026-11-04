@@ -24,8 +24,14 @@ const PrincipalCrossTalk = "crosstalk"
 const (
 	ReasonAskClosed      = "ask_closed"
 	ReasonAlreadyReplied = "already_replied"
-	ReasonLoopCap        = "loop_cap"
 )
+
+// NudgeFirst is the send count to one peer at which a result first asks the
+// model to check whether the exchange is progressing; then it doubles. The
+// numbers are guesses, and the nudge refuses nothing.
+const NudgeFirst = 30
+
+const nudgeText = "You have sent this peer %d messages since this server started. This is a count, not a finding. Check whether your last few messages added anything new or moved work forward: if not, you may stop sending and tell your user what is stuck; if work is progressing, carry on. An ask you hold still takes its reply."
 
 const (
 	hintNativeReachable   = "This session has no CrossTalk binding yet, so it takes no ask or command. send_message with the default kind reaches it; if CrossTalk is installed there, its first CrossTalk call binds it, and then ask works."
@@ -131,42 +137,39 @@ func (st *AgentState) newMessage(to string, k msg.Kind, d msg.Delivery, text str
 	}
 }
 
-// reserveSend counts a send to peer against both caps and returns the
-// function that settles it: a send that was not accepted or queued is taken
-// back. Counts are in memory, per agent and per peer; a restart resets them.
-func (st *AgentState) reserveSend(peer string) (settle func(adapter.State), ok bool) {
-	now := st.shim.now()
+func nudgeAt(n int) bool {
+	for t := NudgeFirst; t <= n; t *= 2 {
+		if t == n {
+			return true
+		}
+	}
+	return false
+}
+
+// countSend counts a send to peer unless it came back rejected or
+// unreachable, and returns the nudge hint when the count reaches a
+// threshold. Counts are in memory, per agent and per peer; a restart resets
+// them.
+func (st *AgentState) countSend(peer string, state adapter.State) string {
+	if state == adapter.Rejected || state == adapter.Unreachable {
+		return ""
+	}
 	st.mu.Lock()
-	defer st.mu.Unlock()
-	kept := st.sends[peer][:0:0]
-	recent := 0
-	for _, t := range st.sends[peer] {
-		if age := now.Sub(t); age < SendWindowLong {
-			kept = append(kept, t)
-			if age < SendWindowShort {
-				recent++
-			}
-		}
+	st.sends[peer]++
+	n := st.sends[peer]
+	st.mu.Unlock()
+	if !nudgeAt(n) {
+		return ""
 	}
-	if recent >= SendCapShort || len(kept) >= SendCapLong {
-		st.sends[peer] = kept
-		return nil, false
+	st.agent.Journal().Append(journal.Record{Type: journal.TypeNudge, To: peer, Count: n})
+	return fmt.Sprintf(nudgeText, n)
+}
+
+func joinHint(a, b string) string {
+	if a == "" || b == "" {
+		return a + b
 	}
-	st.sends[peer] = append(kept, now)
-	return func(state adapter.State) {
-		if state == adapter.Accepted || state == adapter.Queued {
-			return
-		}
-		st.mu.Lock()
-		defer st.mu.Unlock()
-		ts := st.sends[peer]
-		for i := len(ts) - 1; i >= 0; i-- {
-			if ts[i].Equal(now) {
-				st.sends[peer] = append(ts[:i:i], ts[i+1:]...)
-				return
-			}
-		}
-	}, true
+	return a + " " + b
 }
 
 func (st *AgentState) outbound(m msg.Message, to string, state adapter.State, reason string, withBody bool) error {
@@ -244,19 +247,14 @@ func (st *AgentState) deliver(ctx context.Context, m msg.Message) mcpserver.Resu
 		if d.AgentID == st.agent.ID() {
 			return finish(d.AgentID, adapter.Rejected, ReasonSelf)
 		}
-		settle, ok := st.reserveSend(d.AgentID)
-		if !ok {
-			return finish(d.AgentID, adapter.Rejected, ReasonLoopCap)
-		}
 		if st.outbound(m, d.AgentID, journal.StateSubmitted, "", true) != nil {
-			settle(adapter.Unreachable)
 			res.State, res.Reason = adapter.Unreachable, receiver.ReasonJournal
 			return res
 		}
 		state, reason, taskID := st.viaTransport(ctx, d, m)
-		settle(state)
 		st.outboundTask(m, d.AgentID, state, reason, false, taskID)
 		res.State, res.Reason = state, reason
+		res.Hint = st.countSend(d.AgentID, state)
 		return res
 	}
 	if m.Kind != msg.Inform {
@@ -279,12 +277,7 @@ func (st *AgentState) deliver(ctx context.Context, m msg.Message) mcpserver.Resu
 		return finish(m.To, state, reason)
 	}
 	to := string(b.Harness) + ":" + b.SessionRef
-	settle, ok := st.reserveSend(to)
-	if !ok {
-		return finish(to, adapter.Rejected, ReasonLoopCap)
-	}
 	if st.outbound(m, to, journal.StateSubmitted, "", true) != nil {
-		settle(adapter.Unreachable)
 		res.State, res.Reason = adapter.Unreachable, receiver.ReasonJournal
 		return res
 	}
@@ -296,11 +289,11 @@ func (st *AgentState) deliver(ctx context.Context, m msg.Message) mcpserver.Resu
 	if err != nil {
 		reason = err.Error()
 	}
-	settle(state)
 	res = finish(to, state, reason)
 	if reason == "" && (state == adapter.Accepted || state == adapter.Queued) {
 		res.Hint = hintNativeOneWay
 	}
+	res.Hint = joinHint(res.Hint, st.countSend(to, state))
 	return res
 }
 
@@ -527,22 +520,15 @@ func (s *Shim) Reply(ctx context.Context, from *mcpserver.Agent, messageID, text
 	if mcpserver.IsAgentID(key) && orig.Kind != msg.Ask && !st.rcv.RouteOpen(orig.MessageID) {
 		return mcpserver.Result{}, &mcpserver.Error{Code: mcpserver.CodeInvalid, Reason: ReasonNoSuchMessage, Hint: hintNoRouteExpired}
 	}
-	settle, ok := st.reserveSend(key)
-	if !ok {
-		return mcpserver.Result{}, &mcpserver.Error{Code: mcpserver.CodeRejected, Reason: ReasonLoopCap}
-	}
 	r := st.newMessage(orig.From, msg.Inform, msg.Immediate, text)
 	irt, ctxID := st.replyTarget(orig)
 	r.InReplyTo, r.ContextID = &irt, ctxID
 	if err := st.agent.Journal().Append(st.obligation(r, key, journal.StatePending, true, taskID)); err != nil {
-		settle(adapter.Unreachable)
 		return mcpserver.Result{}, err
 	}
 	res, err := st.completeReply(ctx, orig, r, key, taskID, journal.StatePending)
-	if err != nil {
-		settle(adapter.Unreachable)
-	} else {
-		settle(res.State)
+	if err == nil {
+		res.Hint = joinHint(res.Hint, st.countSend(key, res.State))
 	}
 	return res, err
 }

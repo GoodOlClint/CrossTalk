@@ -3,7 +3,6 @@ package shim
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -11,72 +10,18 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/GoodOlClint/crosstalk/internal/adapter"
+	"github.com/GoodOlClint/crosstalk/internal/journal"
 	"github.com/GoodOlClint/crosstalk/internal/udsingress"
 )
 
-type tickClock struct {
-	mu sync.Mutex
-	t  time.Time
+const nudgeMarker = "messages since this server started"
+
+func nudged(r map[string]any) bool {
+	h, _ := r["hint"].(string)
+	return strings.Contains(h, nudgeMarker)
 }
 
-func (c *tickClock) now() time.Time { c.mu.Lock(); defer c.mu.Unlock(); return c.t }
-func (c *tickClock) add(d time.Duration) {
-	c.mu.Lock()
-	c.t = c.t.Add(d)
-	c.mu.Unlock()
-}
-
-func newClock() *tickClock { return &tickClock{t: time.Date(2026, 11, 4, 9, 0, 0, 0, time.UTC)} }
-
-func TestSlowPingPongStopsWithinTheHourlyWindow(t *testing.T) {
-	w := newWorld(t)
-	alice := w.claude(4001, "sess-alice", "alice")
-	w.codex.addThread("T-bob", "bob")
-	clk := newClock()
-	na := w.node(alice.pid, w.lb, func(o *Options) { o.Now = clk.now })
-	nb := w.node(1, w.lb, func(o *Options) { o.Now = clk.now })
-	na.ok(nil, "receive_message", map[string]any{})
-	nb.ok(thread("T-bob"), "receive_message", map[string]any{})
-
-	start := clk.now()
-	for round := 0; round < 200; round++ {
-		if r := na.ok(nil, "send_message", send("bob", "ping")); r["reason"] == ReasonLoopCap {
-			if clk.now().Sub(start) >= time.Hour {
-				t.Fatalf("stopped after the hour, round %d", round)
-			}
-			clk.add(61 * time.Minute)
-			if r := na.ok(nil, "send_message", send("bob", "ping")); r["reason"] == ReasonLoopCap {
-				t.Fatalf("still capped an hour later: %v", r)
-			}
-			return
-		}
-		nb.ok(thread("T-bob"), "send_message", send("alice", "pong"))
-		clk.add(31 * time.Second)
-	}
-	t.Fatal("200 slow rounds without a stop")
-}
-
-func TestFailedSendsAreNotCounted(t *testing.T) {
-	w := newWorld(t)
-	alice := w.claude(4001, "sess-alice", "alice")
-	w.codex.addThread("T-bob", "bob")
-	na := w.node(alice.pid, w.lb, nil)
-	nb := w.node(1, w.lb, nil)
-	na.ok(nil, "receive_message", map[string]any{})
-	nb.ok(thread("T-bob"), "receive_message", map[string]any{})
-
-	down := adapter.Outcome{State: adapter.Unreachable, Err: errors.New("down")}
-	for i := 0; i < 70; i++ {
-		w.codex.ScriptInject(down)
-		if r := na.ok(nil, "send_message", send("bob", "retry")); r["reason"] == ReasonLoopCap {
-			t.Fatalf("failed send %d counted: %v", i, r)
-		}
-	}
-	if r := na.ok(nil, "send_message", send("bob", "now")); r["state"] != "accepted" && r["state"] != "queued" {
-		t.Fatalf("send after the peer returned: %v", r)
-	}
-}
+func delivered(r map[string]any) bool { return r["state"] == "accepted" || r["state"] == "queued" }
 
 func TestWorkerStatusToCoordinatorAfterWorkersTalked(t *testing.T) {
 	w := newWorld(t)
@@ -89,15 +34,18 @@ func TestWorkerStatusToCoordinatorAfterWorkersTalked(t *testing.T) {
 	nw.ok(thread("T-w1"), "receive_message", map[string]any{})
 	nw.ok(thread("T-w2"), "receive_message", map[string]any{})
 
-	nc.ok(nil, "send_message", send("w1", "kickoff"))
-	nw.ok(thread("T-w1"), "send_message", send("w2", "which api?"))
-	nw.ok(thread("T-w2"), "send_message", send("w1", "v2"))
-	if r := nw.ok(thread("T-w1"), "send_message", send("coord", "status: done")); r["state"] == "rejected" {
-		t.Fatalf("status report %v", r)
+	for _, s := range []struct {
+		n    *node
+		meta map[string]any
+		to   string
+	}{{nc, nil, "w1"}, {nc, nil, "w2"}, {nw, thread("T-w1"), "w2"}, {nw, thread("T-w2"), "coord"}} {
+		if r := s.n.ok(s.meta, "send_message", send(s.to, "x")); !delivered(r) {
+			t.Fatalf("send to %s: %v", s.to, r)
+		}
 	}
 }
 
-func TestRingStopsOnTheCaps(t *testing.T) {
+func TestNudgeFiresAtEachThresholdAndOnlyThere(t *testing.T) {
 	w := newWorld(t)
 	alice := w.claude(4001, "sess-alice", "alice")
 	w.codex.addThread("T-bob", "bob")
@@ -108,25 +56,108 @@ func TestRingStopsOnTheCaps(t *testing.T) {
 	nbc.ok(thread("T-bob"), "receive_message", map[string]any{})
 	nbc.ok(thread("T-carol"), "receive_message", map[string]any{})
 
-	for i := 0; i < 100; i++ {
-		for _, step := range []struct {
-			n    *node
-			meta map[string]any
-			to   string
-		}{{na, nil, "bob"}, {nbc, thread("T-bob"), "carol"}, {nbc, thread("T-carol"), "alice"}} {
-			r := step.n.ok(step.meta, "send_message", send(step.to, "around"))
-			if r["reason"] == ReasonLoopCap {
-				return
-			}
-			if r["state"] == "rejected" {
-				t.Fatalf("ring step %d to %s: %v", i, step.to, r)
+	var fired []int
+	for i := 1; i <= 245; i++ {
+		r := na.ok(nil, "send_message", send("bob", "x"))
+		if !delivered(r) {
+			t.Fatalf("send %d: %v", i, r)
+		}
+		if nudged(r) {
+			fired = append(fired, i)
+		}
+		if i == 29 {
+			if r := na.ok(nil, "send_message", send("carol", "x")); nudged(r) {
+				t.Fatal("bob's count nudged a send to carol")
 			}
 		}
 	}
-	t.Fatal("the ring ran 100 times without a stop")
+	if want := []int{30, 60, 120, 240}; len(fired) != len(want) || fired[0] != 30 || fired[1] != 60 || fired[2] != 120 || fired[3] != 240 {
+		t.Fatalf("nudged at %v, want %v", fired, want)
+	}
+	for i := 2; i <= 30; i++ {
+		r := na.ok(nil, "send_message", send("carol", "x"))
+		if nudged(r) != (i == 30) {
+			t.Fatalf("carol send %d nudged=%v", i, nudged(r))
+		}
+	}
+
+	rs, err := na.sh.Agent(alice.agentID()).agent.Journal().Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var counts []int
+	for _, r := range rs {
+		if r.Type == journal.TypeNudge {
+			counts = append(counts, r.Count)
+			if r.To == "" || r.At.IsZero() {
+				t.Fatalf("nudge record %+v lacks peer or time", r)
+			}
+		}
+	}
+	if len(counts) != 5 || counts[0] != 30 || counts[3] != 240 || counts[4] != 30 {
+		t.Fatalf("journaled nudges %v, want 30 60 120 240 then carol's 30", counts)
+	}
+	na.stop()
+	n2 := w.node(alice.pid, w.lb, nil)
+	n2.ok(nil, "receive_message", map[string]any{})
+	if r := n2.ok(nil, "send_message", send("bob", "x")); !delivered(r) || nudged(r) {
+		t.Fatalf("after restart the count must start over: %v", r)
+	}
 }
 
-func TestPooledThreadsCountSeparately(t *testing.T) {
+func TestNudgeAppendsToTheNativeOneWayHint(t *testing.T) {
+	w := newWorld(t)
+	alice := w.claude(4001, "sess-alice", "alice")
+	w.claude(4002, "sess-bob", "bob")
+	na := w.node(alice.pid, nil, nil)
+	var got map[string]any
+	for i := 1; i <= 30; i++ {
+		got = na.ok(nil, "send_message", send("bob", "x"))
+	}
+	h, _ := got["hint"].(string)
+	if !strings.Contains(h, "one way") || !strings.Contains(h, nudgeMarker) {
+		t.Fatalf("hint %q", h)
+	}
+}
+
+func TestNudgeOnAskAndReply(t *testing.T) {
+	w := newWorld(t)
+	alice := w.claude(4001, "sess-alice", "alice")
+	w.codex.addThread("T-bob", "bob")
+	na := w.node(alice.pid, w.lb, nil)
+	nb := w.node(1, w.lb, nil)
+	na.ok(nil, "receive_message", map[string]any{})
+	nb.ok(thread("T-bob"), "receive_message", map[string]any{})
+
+	var ask map[string]any
+	for i := 1; i <= 30; i++ {
+		ask = na.ok(nil, "ask", send("bob", "q?"))
+	}
+	if !nudged(ask) || !delivered(ask) {
+		t.Fatalf("30th ask %v", ask)
+	}
+
+	id := na.ok(nil, "send_message", send("bob", "start"))["message_id"]
+	bobTurn, fired := true, false
+	for i := 0; i < 70 && !fired; i++ {
+		n, meta := nb, thread("T-bob")
+		if !bobTurn {
+			n, meta = na, nil
+		}
+		isErr, out := n.call(meta, "reply", map[string]any{"message_id": id, "text": "again"})
+		if isErr || out["message_id"] == nil {
+			t.Fatalf("reply %d: %v", i, out)
+		}
+		fired = nudged(out)
+		id = out["message_id"]
+		bobTurn = !bobTurn
+	}
+	if !fired {
+		t.Fatal("no reply result carried the nudge")
+	}
+}
+
+func TestPooledThreadsNudgeSeparately(t *testing.T) {
 	w := newWorld(t)
 	alice := w.claude(4001, "sess-alice", "alice")
 	w.codex.addThread("T-bob", "bob")
@@ -138,96 +169,29 @@ func TestPooledThreadsCountSeparately(t *testing.T) {
 	nbc.ok(thread("T-carol"), "receive_message", map[string]any{})
 
 	var wg sync.WaitGroup
-	capped := make([]int, 2)
+	fired := make([][]int, 2)
 	for i, th := range []string{"T-bob", "T-carol"} {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for n := 0; n < SendCapShort+5; n++ {
+			for n := 1; n <= 61; n++ {
 				res, err := nbc.cs.CallTool(context.Background(), &mcp.CallToolParams{Meta: thread(th), Name: "send_message", Arguments: send("alice", "x")})
 				if err != nil {
 					return
 				}
 				b, _ := json.Marshal(res.StructuredContent)
-				if strings.Contains(string(b), ReasonLoopCap) {
-					capped[i]++
+				if strings.Contains(string(b), nudgeMarker) {
+					fired[i] = append(fired[i], n)
 				}
 			}
 		}()
 	}
 	wg.Wait()
-	if capped[0] != 5 || capped[1] != 5 {
-		t.Fatalf("capped sends per thread %v, want 5 each", capped)
-	}
-}
-
-func TestPingPongStopsAtLoopCap(t *testing.T) {
-	w := newWorld(t)
-	alice := w.claude(4001, "sess-alice", "alice")
-	w.codex.addThread("T-bob", "bob")
-	na := w.node(alice.pid, w.lb, nil)
-	nb := w.node(1, w.lb, nil)
-	na.ok(nil, "receive_message", map[string]any{})
-	nb.ok(thread("T-bob"), "receive_message", map[string]any{})
-
-	for i := 0; i < 100; i++ {
-		if r := na.ok(nil, "send_message", send("bob", "ping")); r["reason"] == ReasonLoopCap {
-			return
-		}
-		if r := nb.ok(thread("T-bob"), "send_message", send("alice", "pong")); r["reason"] == ReasonLoopCap {
-			return
+	for i, f := range fired {
+		if len(f) != 2 || f[0] != 30 || f[1] != 60 {
+			t.Fatalf("thread %d nudged at %v, want 30 and 60", i, f)
 		}
 	}
-	t.Fatal("two sessions messaged each other 100 times without a stop")
-}
-
-func TestNativeSendsStopAtLoopCap(t *testing.T) {
-	w := newWorld(t)
-	alice := w.claude(4001, "sess-alice", "alice")
-	w.claude(4002, "sess-bob", "bob")
-	na := w.node(alice.pid, nil, nil)
-
-	for i := 0; i < 100; i++ {
-		if r := na.ok(nil, "send_message", send("bob", "ping")); r["reason"] == ReasonLoopCap {
-			if h, _ := r["hint"].(string); h == "" {
-				t.Fatalf("no hint on %v", r)
-			}
-			return
-		}
-	}
-	t.Fatal("100 sends to one native session without a stop")
-}
-
-func TestReplyChainStopsAtLoopCap(t *testing.T) {
-	w := newWorld(t)
-	alice := w.claude(4001, "sess-alice", "alice")
-	w.codex.addThread("T-bob", "bob")
-	na := w.node(alice.pid, w.lb, nil)
-	nb := w.node(1, w.lb, nil)
-	na.ok(nil, "receive_message", map[string]any{})
-	nb.ok(thread("T-bob"), "receive_message", map[string]any{})
-
-	id := na.ok(nil, "send_message", send("bob", "start"))["message_id"]
-	bobTurn := true
-	for i := 0; i < 100; i++ {
-		var n *node
-		var meta map[string]any
-		if bobTurn {
-			n, meta = nb, thread("T-bob")
-		} else {
-			n, meta = na, nil
-		}
-		isErr, out := n.call(meta, "reply", map[string]any{"message_id": id, "text": "again"})
-		if out["reason"] == ReasonLoopCap {
-			return
-		}
-		if isErr || out["state"] == "rejected" || out["message_id"] == nil {
-			t.Fatalf("reply %d: %v", i, out)
-		}
-		id = out["message_id"]
-		bobTurn = !bobTurn
-	}
-	t.Fatal("100 replies without a stop")
 }
 
 func TestScriptSendEntersTheRealReceiverChainAsUnverified(t *testing.T) {

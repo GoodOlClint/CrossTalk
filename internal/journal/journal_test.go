@@ -520,3 +520,29 @@ func TestAppendRefusesOverLimitRecord(t *testing.T) {
 		t.Fatalf("journal unusable after refusal: %v", err)
 	}
 }
+
+func TestNudgeRecordReplaysAndIsKept(t *testing.T) {
+	dir := t.TempDir()
+	j, _ := open(t, dir, Options{})
+	if err := j.Append(Record{Type: TypeNudge, To: "peer-1", Count: 30}); err != nil {
+		t.Fatal(err)
+	}
+	if err := j.Append(Record{Type: TypeNudge, To: "peer-1", Count: 60}); err != nil {
+		t.Fatal(err)
+	}
+	j.Close()
+	j2, _ := open(t, dir, Options{})
+	rs, err := j2.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []int
+	for _, r := range rs {
+		if r.Type == TypeNudge && r.To == "peer-1" {
+			got = append(got, r.Count)
+		}
+	}
+	if len(got) != 2 || got[0] != 30 || got[1] != 60 {
+		t.Fatalf("replayed nudges %v", got)
+	}
+}

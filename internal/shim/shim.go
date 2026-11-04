@@ -31,10 +31,6 @@ const (
 	ReasonNotPrimary        = "owner_not_primary"
 	ReasonNotServedHere     = "not_served_here"
 	DefaultDiscoveryTimeout = 3 * time.Second
-	SendCapShort            = 20
-	SendWindowShort         = 10 * time.Minute
-	SendCapLong             = 60
-	SendWindowLong          = time.Hour
 )
 
 // Transport carries a message to an agent served by a shim (A2A in
