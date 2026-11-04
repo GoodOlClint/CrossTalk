@@ -125,3 +125,27 @@ func TestBounceListsAllAsksAndCapsInforms(t *testing.T) {
 		t.Fatalf("asks are not listed first: %s", bt)
 	}
 }
+
+func TestInformAdmissionSweepsExpiredRoutes(t *testing.T) {
+	e, c := newClockEnv(t)
+	var sent []msg.Message
+	for i := range 4 {
+		if i > 0 {
+			c.advance(2 * time.Hour)
+		}
+		m := newMsg(msg.Inform, fmt.Sprint("fyi", i))
+		e.recv(A2A, alice, m)
+		sent = append(sent, m)
+	}
+	e.r.mu.Lock()
+	n := len(e.r.routes)
+	e.r.mu.Unlock()
+	if n != 1 {
+		t.Fatalf("%d routes in memory after six hours of informs, want 1", n)
+	}
+	for i, m := range sent {
+		if closed := routeClosed(t, e, m.MessageID); closed != (i < 3) {
+			t.Errorf("inform %d journaled closed = %t", i, closed)
+		}
+	}
+}

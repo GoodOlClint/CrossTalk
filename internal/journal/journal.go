@@ -14,6 +14,10 @@ import (
 
 const DefaultRetention = 24 * time.Hour
 
+// InformRouteTTL is how long a non-ask route stays open after its journaled
+// open time (ADR 0010).
+const InformRouteTTL = time.Hour
+
 type Type string
 
 const (
@@ -146,6 +150,15 @@ func unresolved(latest Record) bool {
 	return false
 }
 
+// retained is unresolved, except that an open inform route past
+// InformRouteTTL at now is treated as closed even before its close is journaled.
+func retained(latest Record, now time.Time) bool {
+	if latest.Type == TypeRoute && latest.State == StateOpen && latest.Kind != "" && latest.Kind != "ask" && now.Sub(latest.At) > InformRouteTTL {
+		return false
+	}
+	return unresolved(latest)
+}
+
 // dependencies holds the message and task ids named by unresolved work; every
 // record naming one of them is retained until that work resolves.
 type dependencies struct {
@@ -161,7 +174,7 @@ const PrincipalCrossTalk = "crosstalk"
 // peer names it or an admitted expiry notice answers it: the asker has no
 // local task record for it, and its deadline re-arm and receipt validation
 // read this record. Reply bodies alone never settle it.
-func liveSet(records []Record, latest map[string]Record) dependencies {
+func liveSet(records []Record, latest map[string]Record, now time.Time) dependencies {
 	d := dependencies{messages: map[string]bool{}, tasks: map[string]bool{}}
 	answered := map[string]bool{}
 	for _, r := range records {
@@ -187,7 +200,7 @@ func liveSet(records []Record, latest map[string]Record) dependencies {
 			d.messages[l.MessageID] = true
 			continue
 		}
-		if !unresolved(l) {
+		if !retained(l, now) {
 			continue
 		}
 		for _, id := range []string{l.MessageID, l.InReplyTo} {
@@ -262,11 +275,12 @@ func Open(stateDir, agentID string, binding Binding, opt Options) (*Journal, Rep
 	for _, r := range records {
 		latest[r.key()] = r
 	}
-	live := liveSet(records, latest)
-	cutoff := opt.Now().Add(-opt.Retention)
+	now := opt.Now()
+	live := liveSet(records, latest, now)
+	cutoff := now.Add(-opt.Retention)
 	var kept []Record
 	for _, r := range records {
-		if !r.At.Before(cutoff) || unresolved(latest[r.key()]) || live.holds(r) {
+		if !r.At.Before(cutoff) || retained(latest[r.key()], now) || live.holds(r) {
 			kept = append(kept, r)
 		}
 	}

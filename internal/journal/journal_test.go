@@ -466,6 +466,50 @@ func TestRetentionPrunesAskAfterAdmittedExpiryNotice(t *testing.T) {
 	}
 }
 
+func TestRetentionTreatsExpiredInformRouteAsClosed(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	j, _ := open(t, dir, Options{Now: func() time.Time { return now }})
+	for _, id := range []string{"fyi", "ask", "legacy"} {
+		kind := map[string]string{"fyi": "inform", "ask": "ask", "legacy": ""}[id]
+		j.Append(Record{Type: TypeDedupe, Sender: "alice", MessageID: id, State: "accepted", Message: json.RawMessage(`{"message_id":"` + id + `"}`)})
+		j.Append(Record{Type: TypeRoute, Session: "s", MessageID: id, Sender: "alice", Kind: kind, State: StateOpen})
+	}
+	j.Close()
+
+	j2, rp := reopenAfter(t, dir, now, 25*time.Hour)
+	for _, id := range []string{"ask", "legacy"} {
+		if _, ok := j2.Latest(Record{Type: TypeDedupe, Sender: "alice", MessageID: id}); !ok {
+			t.Errorf("open %s route lost its message", id)
+		}
+	}
+	if _, ok := j2.Latest(Record{Type: TypeRoute, Session: "s", MessageID: "fyi", Sender: "alice"}); ok {
+		t.Error("inform route past its TTL kept")
+	}
+	if _, ok := j2.Latest(Record{Type: TypeDedupe, Sender: "alice", MessageID: "fyi"}); ok {
+		t.Error("expired inform route's message kept as a dependency")
+	}
+	for _, u := range rp.Unresolved {
+		if u.MessageID == "fyi" {
+			t.Errorf("expired inform route replayed: %+v", u)
+		}
+	}
+}
+
+func TestRetentionKeepsInformRouteInsideTTL(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	j, _ := open(t, dir, Options{Now: func() time.Time { return now }})
+	j.Append(Record{Type: TypeDedupe, Sender: "alice", MessageID: "fyi", State: "accepted", Message: json.RawMessage(`{"message_id":"fyi"}`)})
+	j.Append(Record{Type: TypeRoute, Session: "s", MessageID: "fyi", Sender: "alice", Kind: "inform", State: StateOpen})
+	j.Close()
+
+	j2, _ := open(t, dir, Options{Now: func() time.Time { return now.Add(30 * time.Minute) }, Retention: 10 * time.Minute})
+	if _, ok := j2.Latest(Record{Type: TypeDedupe, Sender: "alice", MessageID: "fyi"}); !ok {
+		t.Error("open inform route inside its TTL lost its message")
+	}
+}
+
 func TestAppendRefusesOverLimitRecord(t *testing.T) {
 	j, _ := open(t, t.TempDir(), Options{})
 	err := j.Append(Record{Type: TypeDedupe, Sender: "s", MessageID: "m", State: strings.Repeat("x", MaxRecordBytes)})

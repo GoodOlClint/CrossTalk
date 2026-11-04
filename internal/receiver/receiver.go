@@ -117,7 +117,7 @@ var DefaultLimits = Limits{MaxMessageBytes: 64 << 10, MaxPending: 256}
 const (
 	// InformRouteTTL is how long an inform's route stays open after its
 	// journaled open time (ADR 0010); an ask's route follows its task.
-	InformRouteTTL = time.Hour
+	InformRouteTTL = journal.InformRouteTTL
 	// BounceInformCap bounds the inform routes a bounce lists.
 	BounceInformCap = 10
 )
@@ -414,6 +414,7 @@ func (r *Receiver) unreserve() {
 }
 
 func (r *Receiver) openRoute(rt route) error {
+	r.sweep()
 	rec := rt.record(journal.StateOpen)
 	rec.At = r.now().UTC()
 	if err := r.j.Append(rec); err != nil {
