@@ -5,3 +5,6 @@
 *.out
 .DS_Store
 .claude/
+graphify-out/
+.chunkhound/
+.chunkhound-index
