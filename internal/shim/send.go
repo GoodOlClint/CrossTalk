@@ -174,11 +174,21 @@ func (st *AgentState) deliver(ctx context.Context, m msg.Message) mcpserver.Resu
 		res.State, res.Reason = state, reason
 		return res
 	}
-	d, ok, err := st.shim.reg.Resolve(m.To)
-	if err != nil {
-		return finish(m.To, adapter.Unreachable, "registry: "+err.Error())
+	var fs []found
+	discover := func(ctx context.Context) ([]mcpserver.Session, error) {
+		var err error
+		fs, err = st.shim.sessions(ctx)
+		var out []mcpserver.Session
+		for _, f := range fs {
+			out = append(out, f.s)
+		}
+		return out, err
 	}
-	if ok {
+	tgt, err := mcpserver.ResolveTarget(ctx, st.shim.reg, discover, m.To)
+	if err != nil {
+		return finish(m.To, adapter.Unreachable, err.Error())
+	}
+	if d := tgt.Desc; tgt.Registered {
 		if d.AgentID == st.agent.ID() {
 			return finish(d.AgentID, adapter.Rejected, ReasonSelf)
 		}
@@ -192,12 +202,12 @@ func (st *AgentState) deliver(ctx context.Context, m msg.Message) mcpserver.Resu
 		return res
 	}
 	if m.Kind != msg.Inform {
-		if _, state, reason := st.nativeMatch(ctx, m.To); reason == ReasonNoSuchAgent {
-			return finish(m.To, state, reason)
+		if len(tgt.Native) == 0 {
+			return finish(m.To, adapter.Rejected, ReasonNoSuchAgent)
 		}
 		return finish(m.To, adapter.Rejected, ReasonNativeInformOnly)
 	}
-	b, ad, state, reason := st.nativeTarget(ctx, m.To)
+	b, ad, state, reason := st.nativeTarget(ctx, tgt.Native, fs)
 	if ad == nil {
 		return finish(m.To, state, reason)
 	}

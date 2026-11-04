@@ -22,28 +22,29 @@ type claimOut struct {
 func (s *Server) addClaimTools() {
 	boundTool(s, &mcp.Tool{
 		Name:        "claim",
-		Description: "Become the owner of an unclaimed registered agent; it becomes your subagent. Returns {name, owner}.",
+		Description: "Become the owner of an unclaimed registered agent, named by name or agent_id; it becomes your subagent. Returns {name, owner}.",
 		InputSchema: schemaFor[nameIn](nil),
 	}, func(ctx context.Context, a *Agent, in nameIn) (any, error) {
 		return s.claim(ctx, a, in.Name)
 	})
 	boundTool(s, &mcp.Tool{
 		Name:        "release",
-		Description: "End your claim on an agent you own; it returns to primary. Returns {name}.",
+		Description: "End your claim on an agent you own, named by name or agent_id; it returns to primary. Returns {name}.",
 		InputSchema: schemaFor[nameIn](nil),
 	}, func(ctx context.Context, a *Agent, in nameIn) (any, error) {
 		return s.release(ctx, a, in.Name)
 	})
 }
 
-func (s *Server) claimTarget(a *Agent, name string) (registry.Descriptor, error) {
-	t, ok, err := s.reg.Resolve(name)
+func (s *Server) claimTarget(ctx context.Context, a *Agent, name string) (registry.Descriptor, error) {
+	r, err := ResolveTarget(ctx, s.reg, s.backend.Discover, name)
 	if err != nil {
 		return registry.Descriptor{}, err
 	}
-	if !ok {
+	if !r.Registered {
 		return registry.Descriptor{}, rejected("no_such_agent")
 	}
+	t := r.Desc
 	if t.AgentID == a.id {
 		return registry.Descriptor{}, rejected("self")
 	}
@@ -51,7 +52,7 @@ func (s *Server) claimTarget(a *Agent, name string) (registry.Descriptor, error)
 }
 
 func (s *Server) claim(ctx context.Context, a *Agent, name string) (any, error) {
-	t, err := s.claimTarget(a, name)
+	t, err := s.claimTarget(ctx, a, name)
 	if err != nil {
 		return nil, err
 	}
@@ -75,7 +76,7 @@ func (s *Server) claim(ctx context.Context, a *Agent, name string) (any, error) 
 }
 
 func (s *Server) release(ctx context.Context, a *Agent, name string) (any, error) {
-	t, err := s.claimTarget(a, name)
+	t, err := s.claimTarget(ctx, a, name)
 	if err != nil {
 		return nil, err
 	}

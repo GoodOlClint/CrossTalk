@@ -388,26 +388,3 @@ func (r *Registry) Lookup(name string) (Descriptor, bool, error) {
 	}
 	return Descriptor{}, false, nil
 }
-
-// Resolve resolves a message target that is an agent_id or a name. An exact
-// agent_id wins over a name; an empty target matches nothing.
-func (r *Registry) Resolve(to string) (Descriptor, bool, error) {
-	if to == "" {
-		return Descriptor{}, false, nil
-	}
-	ds, err := r.List()
-	if err != nil {
-		return Descriptor{}, false, err
-	}
-	for _, d := range ds {
-		if d.AgentID == to {
-			return d, true, nil
-		}
-	}
-	for _, d := range ds {
-		if d.Name == to {
-			return d, true, nil
-		}
-	}
-	return Descriptor{}, false, nil
-}

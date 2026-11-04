@@ -597,12 +597,10 @@ func TestNonInformToUnknownTargetIsNoSuchAgent(t *testing.T) {
 	alice := w.claude(4001, "sess-alice", "alice")
 	bob := w.claude(4002, "sess-bob", "bob")
 	n := w.node(alice.pid, nil, nil)
-	for _, tool := range []string{"ask"} {
-		if out := n.ok(nil, tool, send("ghost", "q?")); out["state"] != "unknown" || out["reason"] != ReasonNoSuchAgent {
-			t.Fatalf("%s to unknown %v", tool, out)
-		}
+	if out := n.ok(nil, "ask", send("ghost", "q?")); out["state"] != "rejected" || out["reason"] != ReasonNoSuchAgent {
+		t.Fatalf("ask to unknown %v", out)
 	}
-	if out := n.ok(nil, "send_message", map[string]any{"to": "ghost", "text": "x", "kind": "command"}); out["state"] != "unknown" || out["reason"] != ReasonNoSuchAgent {
+	if out := n.ok(nil, "send_message", map[string]any{"to": "ghost", "text": "x", "kind": "command"}); out["state"] != "rejected" || out["reason"] != ReasonNoSuchAgent {
 		t.Fatalf("command to unknown %v", out)
 	}
 	for _, to := range []string{"bob", bob.agentID()} {
@@ -612,5 +610,85 @@ func TestNonInformToUnknownTargetIsNoSuchAgent(t *testing.T) {
 	}
 	if len(bob.got()) != 0 {
 		t.Fatalf("native contacted: %q", bob.got())
+	}
+}
+
+func TestIDOutranksRegisteredNameSquattingNativeID(t *testing.T) {
+	w := newWorld(t)
+	alice := w.claude(4001, "sess-alice", "alice")
+	bob := w.claude(4002, "sess-bob", "bob")
+	w.codex.addThread("T-squat", bob.agentID())
+	na := w.node(alice.pid, w.lb, nil)
+	ns := w.node(1, w.lb, nil)
+	na.ok(nil, "receive_message", map[string]any{})
+	ns.ok(thread("T-squat"), "receive_message", map[string]any{})
+
+	if out := na.ok(nil, "send_message", send(bob.agentID(), "hi native")); out["state"] != "accepted" {
+		t.Fatalf("send %v", out)
+	}
+	if got := bob.got(); len(got) != 1 || !strings.Contains(got[0], "hi native") {
+		t.Fatalf("bob got %q", got)
+	}
+	if out := na.ok(nil, "ask", send(bob.agentID(), "q?")); out["state"] != "rejected" || out["reason"] != ReasonNativeInformOnly {
+		t.Fatalf("ask %v", out)
+	}
+	na.fails(nil, "claim", map[string]any{"name": bob.agentID()}, mcpserver.CodeRejected, "no_such_agent")
+	if ws := w.codex.Writes(); len(ws) != 0 {
+		t.Fatalf("squatter reached: %+v", ws)
+	}
+	if d, _ := w.descriptor(identity.AgentID("codex", "T-squat")); d.Role != registry.RolePrimary || d.Owner != nil {
+		t.Fatalf("squatter claimed: %+v", d)
+	}
+}
+
+func TestIDOutranksRegisteredNameSquattingRegisteredID(t *testing.T) {
+	w := newWorld(t)
+	alice := w.claude(4001, "sess-alice", "alice")
+	bobID := identity.AgentID("codex", "T-bob")
+	w.codex.addThread("T-bob", "bob")
+	w.codex.addThread("T-squat", bobID)
+	na := w.node(alice.pid, w.lb, nil)
+	nb := w.node(1, w.lb, nil)
+	ns := w.node(2, w.lb, nil)
+	na.ok(nil, "receive_message", map[string]any{})
+	nb.ok(thread("T-bob"), "receive_message", map[string]any{})
+	ns.ok(thread("T-squat"), "receive_message", map[string]any{})
+
+	na.ok(nil, "ask", send(bobID, "q?"))
+	ws := w.codex.Writes()
+	if len(ws) != 1 || ws[0].SessionRef != "T-bob" {
+		t.Fatalf("writes %+v", ws)
+	}
+}
+
+func TestAskWithDeadlineToNonexistentTargetLeavesNothing(t *testing.T) {
+	w := newWorld(t)
+	alice := w.claude(4001, "sess-alice", "alice")
+	t0 := time.Date(2026, 11, 3, 13, 0, 0, 0, time.UTC)
+	na := w.node(alice.pid, nil, func(o *Options) { o.Now = fakeClock(t0) })
+	out := na.ok(nil, "ask", map[string]any{"to": "ghost", "text": "q?", "deadline_seconds": 1})
+	if out["state"] != "rejected" || out["reason"] != ReasonNoSuchAgent {
+		t.Fatalf("ask %v", out)
+	}
+	st := na.sh.Agent(alice.agentID())
+	st.mu.Lock()
+	armed := len(st.deadline)
+	st.mu.Unlock()
+	if armed != 0 {
+		t.Fatalf("armed %d timers", armed)
+	}
+	mb := na.ok(nil, "receive_message", map[string]any{})
+	if es, _ := mb["messages"].([]any); len(es) != 0 {
+		t.Fatalf("mailbox %v", mb)
+	}
+	na.stop()
+	n2 := w.node(alice.pid, nil, func(o *Options) { o.Now = fakeClock(t0.Add(72 * time.Hour)) })
+	mb = n2.ok(nil, "receive_message", map[string]any{})
+	if es, _ := mb["messages"].([]any); len(es) != 0 {
+		t.Fatalf("mailbox after restart %v", mb)
+	}
+	time.Sleep(1500 * time.Millisecond)
+	if got := alice.got(); len(got) != 0 {
+		t.Fatalf("expiry injected %q", got)
 	}
 }
