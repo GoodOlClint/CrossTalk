@@ -20,7 +20,7 @@ CrossTalk lets Claude Code and Codex sessions on this Mac message each other by 
 7. **Upgrade.** Re-run the `go install` line, then `claude plugin marketplace update crosstalk && claude plugin update crosstalk@crosstalk` and `codex plugin marketplace upgrade`, then restart sessions.
 8. **Uninstall.** `claude plugin uninstall crosstalk`, `codex plugin remove crosstalk@crosstalk`, then delete the binary.
 
-TODO(coordinator): --no-daemon verdict pending
+`codex --no-daemon` tabs can send and can pull with `receive_message`, but cannot receive delivered messages: the sender gets `unreachable`. Delivery needs an app server CrossTalk can reach, and `--no-daemon` offers none.
 
 ## If something is wrong
 
