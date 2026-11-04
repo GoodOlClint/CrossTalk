@@ -473,3 +473,24 @@ func TestVerifiedImmediateUsesToolOutput(t *testing.T) {
 		t.Fatalf("peer delivery is user input instead of named tool output: %s", calls[0].Params)
 	}
 }
+
+func TestInjectBoundedWhenAppServerNeverAnswers(t *testing.T) {
+	r := newRig(t, idleThread())
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	r.srv.Hook = func(_ int, method string, _ json.RawMessage) appservertest.Reply {
+		if strings.HasPrefix(method, "turn/") || strings.HasPrefix(method, "thread/inject") {
+			<-release
+		}
+		return appservertest.Reply{}
+	}
+	r.a.InjectTimeout = 200 * time.Millisecond
+	start := time.Now()
+	state, err := r.a.Inject(context.Background(), message("hi"), r.delivery(true, msg.Immediate))
+	if el := time.Since(start); el > 3*time.Second {
+		t.Fatalf("Inject took %v past a %v timeout", el, r.a.InjectTimeout)
+	}
+	if state != adapter.Unknown || !errors.Is(err, appserver.ErrAmbiguous) {
+		t.Fatalf("state %v err %v, want unknown/ambiguous", state, err)
+	}
+}

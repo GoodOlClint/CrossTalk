@@ -286,7 +286,9 @@ func (w *Wire) SendTask(ctx context.Context, from, to registry.Descriptor, m msg
 			return id, adapter.Unknown, errors.New(ReasonPending)
 		case <-time.After(min(wait, time.Until(deadline))):
 		}
-		t, err := c.GetTask(ctx, to.A2AURL, tok, id)
+		pctx, cancel := context.WithDeadline(ctx, deadline)
+		t, err := c.GetTask(pctx, to.A2AURL, tok, id)
+		cancel()
 		if err == nil && !settling(t.State) {
 			if t.Reason != "" && t.State != adapter.Accepted && t.State != adapter.Queued {
 				return id, t.State, errors.New(t.Reason)

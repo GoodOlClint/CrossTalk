@@ -187,6 +187,10 @@ func (s *Shim) CloseAgent(a *mcpserver.Agent) error {
 	return s.closeState(st)
 }
 
+// HandlerCloseWait bounds how long closeState waits for UDS handlers to stop
+// after their context is cancelled.
+var HandlerCloseWait = 5 * time.Second
+
 func (s *Shim) closeState(st *AgentState) error {
 	st.mu.Lock()
 	if st.closed {
@@ -198,23 +202,33 @@ func (s *Shim) closeState(st *AgentState) error {
 		t.Stop()
 	}
 	st.mu.Unlock()
+	if st.cancel != nil {
+		st.cancel()
+	}
 	var errs []error
 	if st.a2a.Close != nil {
 		errs = append(errs, st.a2a.Close())
 	}
 	if st.uds != nil {
-		if err := st.uds.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
-			errs = append(errs, err)
+		closed := make(chan error, 1)
+		go func() {
+			err := st.uds.Close()
+			<-st.serve
+			closed <- err
+		}()
+		select {
+		case err := <-closed:
+			if err != nil && !errors.Is(err, net.ErrClosed) {
+				errs = append(errs, err)
+			}
+		case <-time.After(HandlerCloseWait):
+			s.log.Warn("shim: uds handlers did not stop", "uds", st.udsPath)
 		}
-		<-st.serve
 		for _, p := range st.uds.Files() {
 			if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
 				errs = append(errs, err)
 			}
 		}
-	}
-	if st.cancel != nil {
-		st.cancel()
 	}
 	return errors.Join(errs...)
 }
