@@ -85,8 +85,12 @@ func TestRequestBodyBounded(t *testing.T) {
 	client, ctx := e.peer()
 	am := textMsg("small", nil)
 	am.Metadata = map[string]any{"extra": strings.Repeat("x", MaxRequestBytes)}
-	if _, err := send(t, client, ctx, am, true); err == nil {
+	_, err := send(t, client, ctx, am, true)
+	if err == nil {
 		t.Fatal("request over MaxRequestBytes was accepted")
+	}
+	if st := errorState(err); st != adapter.Rejected {
+		t.Fatalf("oversized request mapped to %q, want rejected: %v", st, err)
 	}
 	if n := len(e.srv.PendingMessageIDs()); n != 0 {
 		t.Fatalf("%d tasks created for an oversized request", n)

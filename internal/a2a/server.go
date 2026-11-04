@@ -270,10 +270,13 @@ func (c *corsStripper) Write(b []byte) (int, error) {
 	return c.ResponseWriter.Write(b)
 }
 
+// limitBody rejects oversized requests as JSON-RPC invalid-request errors so the
+// sender sees a definite rejection rather than an ambiguous HTTP status.
 func limitBody(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.ContentLength > MaxRequestBytes {
-			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+			w.Header().Set("Content-Type", "application/json")
+			fmt.Fprintf(w, `{"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"request body exceeds %d bytes"}}`+"\n", MaxRequestBytes)
 			return
 		}
 		r.Body = http.MaxBytesReader(w, r.Body, MaxRequestBytes)
