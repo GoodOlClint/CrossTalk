@@ -396,6 +396,11 @@ func toolError(err error) *Error {
 }
 
 func errResult(e *Error) (*mcp.CallToolResult, any, error) {
+	if h := e.hint(); h != e.Hint {
+		c := *e
+		c.Hint = h
+		e = &c
+	}
 	return &mcp.CallToolResult{IsError: true}, e, nil
 }
 
@@ -434,7 +439,7 @@ func boundTool[In any](s *Server, t *mcp.Tool, h func(context.Context, *Agent, I
 		if err != nil {
 			return errResult(toolError(err))
 		}
-		return nil, withNotice(out, notice), nil
+		return nil, withNotice(withHint(out), notice), nil
 	})
 }
 
