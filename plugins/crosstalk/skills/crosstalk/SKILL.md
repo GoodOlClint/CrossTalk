@@ -38,6 +38,8 @@ Tool names are bare here; your harness may prefix them.
 - `self`: pick another row.
 - `agent_held`: tell the user a second CrossTalk server may be installed.
 - `ask_closed`, `already_replied`, `no_such_message`: `send_message` to the sender.
+- `loop_cap`: you sent that session too many messages in a short time. Stop and tell the user.
+- `hop_repeat`, `hop_overflow`: the message would loop back through a session already in its chain. Do not forward it again; `reply` to the original or tell the user.
 - `unbound`: only `list_agents` works. Tell the user.
 - `not_ready`: retry once.
 - `too_large`, `too_many_pending`, `too_many_asks`: shorten the text or wait.

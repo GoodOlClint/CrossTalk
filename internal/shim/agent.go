@@ -43,6 +43,7 @@ type AgentState struct {
 	up       bool
 	closed   bool
 	deadline map[string]*time.Timer
+	sends    map[string][]time.Time
 
 	closeDone chan struct{}
 	closeErr  error
@@ -91,7 +92,7 @@ func (s *Shim) state(a *mcpserver.Agent) (*AgentState, error) {
 // BindHarness confirms which conversation the agent is (§3 F2) through the
 // harness that identified it.
 func (s *Shim) BindHarness(ctx context.Context, a *mcpserver.Agent) (adapter.Binding, error) {
-	st := &AgentState{shim: s, agent: a, udsPath: s.reg.UDSPath(a.ID()), deadline: map[string]*time.Timer{}}
+	st := &AgentState{shim: s, agent: a, udsPath: s.reg.UDSPath(a.ID()), deadline: map[string]*time.Timer{}, sends: map[string][]time.Time{}}
 	h := harness.Lookup(s.opt.Harnesses, a.Harness())
 	if h == nil {
 		return adapter.Binding{}, fmt.Errorf("shim: unknown harness %q", a.Harness())

@@ -23,6 +23,7 @@ const PrincipalCrossTalk = "crosstalk"
 const (
 	ReasonAskClosed      = "ask_closed"
 	ReasonAlreadyReplied = "already_replied"
+	ReasonLoopCap        = "loop_cap"
 )
 
 const (
@@ -126,6 +127,59 @@ func (st *AgentState) newMessage(to string, k msg.Kind, d msg.Delivery, text str
 	}
 }
 
+// withinLoopCap records a send to peer and reports whether it stays within
+// the cap. Counts are in memory: a restart resets them.
+func (st *AgentState) withinLoopCap(peer string) bool {
+	now := st.shim.now()
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	kept := st.sends[peer][:0:0]
+	for _, t := range st.sends[peer] {
+		if now.Sub(t) < LoopWindow {
+			kept = append(kept, t)
+		}
+	}
+	if len(kept) >= st.shim.opt.LoopCap {
+		st.sends[peer] = kept
+		return false
+	}
+	st.sends[peer] = append(kept, now)
+	return true
+}
+
+// forwardChain is the hop_chain for a send to target. The send extends the
+// chain of the newest A2A message this agent received within ForwardWindow
+// that was not a reply, since that message is what a model-made send most
+// likely forwards; a send back to the previous hop starts a fresh chain, so
+// answering a peer is never a loop, and ping-pong is left to withinLoopCap.
+func (st *AgentState) forwardChain(target string) ([]string, error) {
+	self := []string{msg.Hop(st.agent.ID())}
+	j := st.agent.Journal()
+	rs, err := j.Records()
+	if err != nil {
+		return self, nil
+	}
+	now := st.shim.now()
+	for i := len(rs) - 1; i >= 0; i-- {
+		rec := rs[i]
+		if rec.Type != journal.TypeDedupe || len(rec.Message) == 0 {
+			continue
+		}
+		var m msg.Message
+		if json.Unmarshal(rec.Message, &m) != nil || len(m.HopChain) == 0 || m.InReplyTo != nil || now.Sub(m.SentAt) > ForwardWindow {
+			continue
+		}
+		if l, _ := j.Latest(rec); adapter.State(l.State) == adapter.Rejected {
+			continue
+		}
+		if m.HopChain[len(m.HopChain)-1] == msg.Hop(target) {
+			return self, nil
+		}
+		return msg.AppendHop(m.HopChain, self[0])
+	}
+	return self, nil
+}
+
 func (st *AgentState) outbound(m msg.Message, to string, state adapter.State, reason string, withBody bool) error {
 	return st.outboundTask(m, to, state, reason, withBody, "")
 }
@@ -201,6 +255,18 @@ func (st *AgentState) deliver(ctx context.Context, m msg.Message) mcpserver.Resu
 		if d.AgentID == st.agent.ID() {
 			return finish(d.AgentID, adapter.Rejected, ReasonSelf)
 		}
+		if !st.withinLoopCap(d.AgentID) {
+			return finish(d.AgentID, adapter.Rejected, ReasonLoopCap)
+		}
+		chain, err := st.forwardChain(d.AgentID)
+		if err != nil {
+			reason := receiver.ReasonHopRepeat
+			if errors.Is(err, msg.ErrHopOverflow) {
+				reason = receiver.ReasonHopOverflow
+			}
+			return finish(d.AgentID, adapter.Rejected, reason)
+		}
+		m.HopChain = chain
 		if st.outbound(m, d.AgentID, journal.StateSubmitted, "", true) != nil {
 			res.State, res.Reason = adapter.Unreachable, receiver.ReasonJournal
 			return res
@@ -230,6 +296,9 @@ func (st *AgentState) deliver(ctx context.Context, m msg.Message) mcpserver.Resu
 		return finish(m.To, state, reason)
 	}
 	to := string(b.Harness) + ":" + b.SessionRef
+	if !st.withinLoopCap(to) {
+		return finish(to, adapter.Rejected, ReasonLoopCap)
+	}
 	if st.outbound(m, to, journal.StateSubmitted, "", true) != nil {
 		res.State, res.Reason = adapter.Unreachable, receiver.ReasonJournal
 		return res
