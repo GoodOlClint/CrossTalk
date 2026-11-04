@@ -332,7 +332,7 @@ func (st *AgentState) legacyReceipt(ask msg.Message, peer string) bool {
 		if json.Unmarshal(r.Message, &m) != nil || m.InReplyTo == nil || *m.InReplyTo != ask.MessageID || m.ContextID != ask.ContextID {
 			continue
 		}
-		if l, ok := j.Latest(r); !ok || l.State == string(adapter.Rejected) {
+		if l, ok := j.Latest(r); !ok || !receiver.Admitted(l.State) {
 			continue
 		}
 		return j.Append(journal.Record{Type: journal.TypeReceipt, MessageID: m.MessageID, InReplyTo: ask.MessageID, Sender: peer, ContextID: ask.ContextID}) == nil

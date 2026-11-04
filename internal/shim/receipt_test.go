@@ -117,3 +117,42 @@ func TestLegacyReplyBodyBecomesReceiptOnReplay(t *testing.T) {
 		}
 	})
 }
+
+func TestLegacyReceiptNeedsAdmittedState(t *testing.T) {
+	for state, want := range map[string]bool{
+		journal.StateSubmitted:      false,
+		string(adapter.Rejected):    false,
+		journal.StateCanceled:       false,
+		string(adapter.Bounced):     false,
+		string(adapter.Unreachable): false,
+		string(adapter.Accepted):    true,
+		string(adapter.Queued):      true,
+		string(adapter.Unknown):     true,
+	} {
+		t.Run(state, func(t *testing.T) {
+			w := newWorld(t)
+			alice := w.claude(4001, "sess-alice", "alice")
+			w.codex.addThread("T-bob", "bob")
+			na := w.node(alice.pid, w.lb, nil)
+			nb := w.node(1, w.lb, nil)
+			nb.ok(thread("T-bob"), "receive_message", map[string]any{})
+			askID := na.ok(nil, "ask", send("bob", "question?"))["message_id"].(string)
+			st := na.sh.Agent(alice.agentID())
+			peer := identity.AgentID("codex", "T-bob")
+			m := answer(askID, askID, "legacy")
+			m.Kind = msg.Command
+			body, _ := json.Marshal(m)
+			if err := st.agent.Journal().Append(journal.Record{Type: journal.TypeDedupe, Sender: peer, MessageID: m.MessageID, State: journal.StateSubmitted, Message: body}); err != nil {
+				t.Fatal(err)
+			}
+			if state != journal.StateSubmitted {
+				if err := st.agent.Journal().SetDedupeState(peer, m.MessageID, state); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got := st.legacyReceipt(msg.Message{MessageID: askID, ContextID: askID}, peer); got != want || st.replied(askID) != want {
+				t.Fatalf("legacy receipt from latest state %s: %v, replied %v; want %v", state, got, st.replied(askID), want)
+			}
+		})
+	}
+}

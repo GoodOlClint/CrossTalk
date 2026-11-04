@@ -34,6 +34,19 @@ type Entry struct {
 // accepted and queued are delivered by the harness itself.
 var MailboxStates = []adapter.State{adapter.Unreachable, adapter.Unknown, adapter.Bounced}
 
+// Admitted reports whether a dedupe state is one the receiver writes only
+// after the message passed hop, policy and size admission and was claimed
+// for dispatch. submitted precedes policy; rejected, canceled, bounced and
+// unreachable (also written by Recover for unclaimed messages) are not
+// evidence of admission.
+func Admitted(state string) bool {
+	switch adapter.State(state) {
+	case adapter.Accepted, adapter.Queued, adapter.Unknown:
+		return true
+	}
+	return false
+}
+
 func inMailbox(state string) bool {
 	for _, s := range MailboxStates {
 		if string(s) == state {
