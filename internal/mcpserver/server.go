@@ -435,7 +435,7 @@ func (s *Server) addTools() {
 
 	boundTool(s, &mcp.Tool{
 		Name:        "receive_message",
-		Description: "Pull mailbox entries the harness did not deliver (inbound unreachable, unknown, bounced) and your own sends still unknown, e.g. pending far-side tasks (direction outbound). after is a message_id cursor over the full journal ordering, but the state filter always applies: accepted and queued messages are never returned.",
+		Description: "Pull mailbox entries the harness did not deliver (inbound unreachable, unknown, recovered, bounced) and your own sends still unknown, e.g. pending far-side tasks (direction outbound). after is a message_id cursor over the full journal ordering, but the state filter always applies: accepted and queued messages are never returned.",
 		InputSchema: schemaFor[receiveIn](func(sch *jsonschema.Schema) {
 			zero := 0.0
 			sch.Properties["limit"].Minimum = &zero

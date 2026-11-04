@@ -254,14 +254,8 @@ func (r *Receiver) receive(ctx context.Context, in Inbound, resume bool) Result 
 		return rejected(m.MessageID, reason)
 	}
 
-	if reason := hopCheck(m.HopChain, self.AgentID); reason != "" {
+	if reason := r.admission(in.Ingress, m, in.Sender, self); reason != "" {
 		return reject(reason)
-	}
-	if reason := policy(in.Ingress, m.Kind, in.Sender, self); reason != "" {
-		return reject(reason)
-	}
-	if textBytes(m) > r.limits.MaxMessageBytes {
-		return reject(ReasonTooLarge)
 	}
 	if !r.reserve() {
 		return reject(ReasonTooManyPending)
@@ -315,6 +309,21 @@ func (r *Receiver) receive(ctx context.Context, in Inbound, resume bool) Result 
 		r.closeRoute(rt)
 	}
 	return Result{MessageID: m.MessageID, State: st}
+}
+
+// admission runs the hop, policy and size checks and returns the first
+// failing reason, or "".
+func (r *Receiver) admission(ing Ingress, m msg.Message, s Sender, self Recipient) string {
+	if reason := hopCheck(m.HopChain, self.AgentID); reason != "" {
+		return reason
+	}
+	if reason := policy(ing, m.Kind, s, self); reason != "" {
+		return reason
+	}
+	if textBytes(m) > r.limits.MaxMessageBytes {
+		return ReasonTooLarge
+	}
+	return ""
 }
 
 // askedPeer reports whether askID is an outbound ask of this agent sent to

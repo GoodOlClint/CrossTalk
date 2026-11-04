@@ -38,6 +38,7 @@ const (
 	StateWorking     = "working"
 	StateDispatching = "dispatching"
 	StateUnknown     = "unknown"
+	StateRecovered   = "recovered"
 	StateCanceled    = "canceled"
 	StateOpen        = "open"
 	StateClosed      = "closed"
@@ -133,7 +134,7 @@ func unresolved(latest Record) bool {
 	switch latest.Type {
 	case TypeDedupe, TypeTask:
 		switch latest.State {
-		case StateSubmitted, StateWorking, StateDispatching, StateUnknown:
+		case StateSubmitted, StateWorking, StateDispatching, StateUnknown, StateRecovered:
 			return true
 		}
 	case TypeDispatch:
