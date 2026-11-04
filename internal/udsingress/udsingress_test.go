@@ -386,3 +386,79 @@ func TestListenRefusesLiveSocketAndReplacesStale(t *testing.T) {
 		t.Fatalf("socket mode %v %v", fi, err)
 	}
 }
+
+const capturedLine = `{"msgV":1,"msg_id":"1b829882-07d9-4e72-940c-a95f9d6517f5","type":"user","message":{"role":"user","content":"<cross-session-message from=\"uds:/tmp/cc-socks/43463.sock\" hop-chain=\"06d38d46d3fc1bcdad34fcc2\" from-name=\"crosstalk-test-a\" from-mode=\"prompting\">\nCAPTURE-PROBE from crosstalk-test-a\n</cross-session-message>"},"priority":"next","from":"uds:/tmp/cc-socks/43463.sock"}`
+
+func sendNoAuth(t *testing.T, path, line string) string {
+	t.Helper()
+	c, err := net.Dial("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	c.Write([]byte(line + "\n"))
+	c.SetReadDeadline(time.Now().Add(3 * time.Second))
+	got, _ := bufio.NewReader(c).ReadString('\n')
+	return strings.TrimSpace(got)
+}
+
+func TestCapturedNativeLineWithoutAuthFromVerifiedPeer(t *testing.T) {
+	pid, st := os.Getpid(), ownStart(t)
+	dir := staticDir{{AgentID: "aaaa", Name: "claude-a", Role: registry.RolePrimary, PID: pid, StartedAt: st}}
+	rcv := &recordingReceiver{}
+	s, _ := start(t, dir, rcv)
+	a := ackOf(t, sendNoAuth(t, s.Path, capturedLine))
+	if a.State != "accepted" {
+		t.Fatalf("%+v", a)
+	}
+	got := rcv.all()
+	if len(got) != 1 {
+		t.Fatalf("%d receives", len(got))
+	}
+	in := got[0]
+	if !in.Sender.Verified || in.Sender.AgentID != "aaaa" || !in.Native {
+		t.Fatalf("%+v", in)
+	}
+	if in.Message.Parts[0].Text != "CAPTURE-PROBE from crosstalk-test-a" {
+		t.Fatalf("body %q", in.Message.Parts[0].Text)
+	}
+	if len(in.Message.HopChain) != 1 || in.Message.HopChain[0] != "06d38d46d3fc1bcdad34fcc2" {
+		t.Fatalf("hop chain %v", in.Message.HopChain)
+	}
+	f, err := ParseUserFrame([]byte(capturedLine))
+	if err != nil || f.Attrs["from-name"] != "crosstalk-test-a" || f.Attrs["from-mode"] != "prompting" ||
+		f.ClientMsgID != "1b829882-07d9-4e72-940c-a95f9d6517f5" || f.From != "uds:/tmp/cc-socks/43463.sock" {
+		t.Fatalf("%+v %v", f, err)
+	}
+}
+
+func TestCapturedNativeLineWithoutAuthFromUnmappedPeerClosed(t *testing.T) {
+	rcv := &recordingReceiver{}
+	s, _ := start(t, staticDir(nil), rcv)
+	if got := sendNoAuth(t, s.Path, capturedLine); got != "" {
+		t.Fatalf("reply %q", got)
+	}
+	pid := os.Getpid()
+	dup := staticDir{{AgentID: "a", PID: pid, StartedAt: ownStart(t)}, {AgentID: "b", PID: pid, StartedAt: ownStart(t)}}
+	s2, _ := start(t, dup, rcv)
+	if got := sendNoAuth(t, s2.Path, capturedLine); got != "" {
+		t.Fatalf("reply %q", got)
+	}
+	if len(rcv.all()) != 0 {
+		t.Fatal("unverified unauthenticated frame reached the receiver")
+	}
+}
+
+func TestTwoLinePathStillWorksAndBadTokenCloses(t *testing.T) {
+	rcv := &recordingReceiver{}
+	s, tok := start(t, staticDir(nil), rcv)
+	if a := ackOf(t, send(t, s.Path, tok, capturedLine)); a.State != "accepted" {
+		t.Fatalf("%+v", a)
+	}
+	if line := send(t, s.Path, "wrong", capturedLine); line != "" {
+		t.Fatalf("reply to bad token: %q", line)
+	}
+	if len(rcv.all()) != 1 {
+		t.Fatalf("%d receives", len(rcv.all()))
+	}
+}
