@@ -8,7 +8,7 @@ Cross-harness agent messaging: the shim (`crosstalk mcp`, an MCP server the harn
 - Identity per request, never per process: Claude from the parent pid (`~/.claude/sessions/<ppid>.json`), Codex from `params._meta.threadId` on each `tools/call`; neither → `unbound`. One process may serve several Codex threads (pooling); one agent record per (harness, session_ref).
 - Model-facing: MCP over stdio, seven tools (`list_agents`, `send_message`, `reply`, `ask`, `receive_message`, `claim`, `release`).
 - Peer-facing: A2A over loopback HTTP plus a `/tmp/cc-socks`-compatible unix socket speaking Claude Code's two-line peer protocol.
-- Harness adapters: Claude (session socket + `~/.claude/sessions` registry), Codex (managed app-server daemon over websocket-on-unix: `thread/turns/list`, `turn/steer`, `turn/start`, `codex queue`).
+- Harness adapters: Claude (session socket + `~/.claude/sessions` registry), Codex (managed app-server daemon over websocket-on-unix: `turn/start.toolOutput`, `thread/inject_items`; [ADR 0007](docs/decisions/0007-codex-toolout-delivery.md)).
 - State: per-agent append-only JSONL journal under `~/.local/state/crosstalk/journal/` (dedupe, dispatch claims, reply routing, claims), replayed when the agent registers.
 - Discovery: every Claude session and loaded Codex thread from the harness registries, merged with `~/.local/state/crosstalk/agents/<agent_id>.json` descriptors; no daemon, no herdr dependency. ADR 0003.
 - Trust: sender identity from transport (peer pid, bearer credential), never from message text; kinds `inform`, `ask` and `command` in v1 (`kind` is a routing hint, not a trust boundary), `control` deferred. ADR 0004.
