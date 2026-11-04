@@ -692,3 +692,26 @@ func TestAskWithDeadlineToNonexistentTargetLeavesNothing(t *testing.T) {
 		t.Fatalf("expiry injected %q", got)
 	}
 }
+
+func TestAgentIDShapedTargetNeverMatchesName(t *testing.T) {
+	w := newWorld(t)
+	alice := w.claude(4001, "sess-alice", "alice")
+	const dead = "0123456789abcdef"
+	w.codex.addThread("T-squat", dead)
+	na := w.node(alice.pid, w.lb, nil)
+	ns := w.node(1, w.lb, nil)
+	na.ok(nil, "receive_message", map[string]any{})
+	ns.ok(thread("T-squat"), "receive_message", map[string]any{})
+
+	if out := na.ok(nil, "send_message", send(dead, "x")); out["state"] != "unknown" || out["reason"] != ReasonNoSuchAgent {
+		t.Fatalf("send %v", out)
+	}
+	if out := na.ok(nil, "ask", send(dead, "x")); out["state"] != "rejected" || out["reason"] != ReasonNoSuchAgent {
+		t.Fatalf("ask %v", out)
+	}
+	na.fails(nil, "claim", map[string]any{"name": dead}, mcpserver.CodeRejected, "no_such_agent")
+	na.fails(nil, "release", map[string]any{"name": dead}, mcpserver.CodeRejected, "no_such_agent")
+	if ws := w.codex.Writes(); len(ws) != 0 {
+		t.Fatalf("squatter reached: %+v", ws)
+	}
+}

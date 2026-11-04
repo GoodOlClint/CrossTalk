@@ -16,7 +16,8 @@ type Target struct {
 	Native     []Session
 }
 
-func isAgentID(s string) bool {
+// IsAgentID reports whether s has the shape of an agent_id: 16 lowercase hex characters.
+func IsAgentID(s string) bool {
 	if len(s) != 16 {
 		return false
 	}
@@ -28,10 +29,10 @@ func isAgentID(s string) bool {
 	return true
 }
 
-// ResolveTarget resolves to by precedence: registered agent_id, native
-// agent_id, registered name, native name. An empty to matches nothing. A
-// discovery failure that leaves an agent_id-shaped to unmatched is an error
-// rather than a fall-through to name matching.
+// ResolveTarget resolves to by its shape. An agent_id-shaped to matches a
+// registered agent_id, then a native agent_id, and never a name. Any other to
+// matches a registered name without discovery, then a native name. An empty to
+// matches nothing.
 func ResolveTarget(ctx context.Context, reg *registry.Registry, discover func(context.Context) ([]Session, error), to string) (Target, error) {
 	if to == "" {
 		return Target{}, nil
@@ -40,34 +41,18 @@ func ResolveTarget(ctx context.Context, reg *registry.Registry, discover func(co
 	if err != nil {
 		return Target{}, fmt.Errorf("registry: %w", err)
 	}
+	id := IsAgentID(to)
 	for _, d := range ds {
-		if d.AgentID == to {
+		if id && d.AgentID == to || !id && d.Name == to {
 			return Target{Desc: d, Registered: true}, nil
 		}
 	}
-	ss, derr := discover(ctx)
-	var byID []Session
+	ss, _ := discover(ctx)
+	var native []Session
 	for _, s := range ss {
-		if identity.AgentID(string(s.Harness), s.SessionRef) == to {
-			byID = append(byID, s)
+		if id && identity.AgentID(string(s.Harness), s.SessionRef) == to || !id && s.Name == to {
+			native = append(native, s)
 		}
 	}
-	if len(byID) > 0 {
-		return Target{Native: byID}, nil
-	}
-	if derr != nil && isAgentID(to) {
-		return Target{}, fmt.Errorf("discovery: %w", derr)
-	}
-	for _, d := range ds {
-		if d.Name == to {
-			return Target{Desc: d, Registered: true}, nil
-		}
-	}
-	var byName []Session
-	for _, s := range ss {
-		if s.Name == to {
-			byName = append(byName, s)
-		}
-	}
-	return Target{Native: byName}, nil
+	return Target{Native: native}, nil
 }

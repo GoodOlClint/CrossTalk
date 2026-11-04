@@ -358,7 +358,7 @@ func (st *AgentState) noticed(messageID string) bool {
 func (st *AgentState) legacyReceipt(ask msg.Message, peer string) bool {
 	j := st.agent.Journal()
 	rs, err := j.Records()
-	if err != nil || !isAgentID(peer) {
+	if err != nil || !mcpserver.IsAgentID(peer) {
 		return false
 	}
 	for _, r := range rs {
@@ -409,18 +409,6 @@ func (s *Shim) descriptorByID(agentID string) (registry.Descriptor, bool) {
 	return registry.Descriptor{}, false
 }
 
-func isAgentID(k string) bool {
-	if len(k) != 16 {
-		return false
-	}
-	for _, c := range k {
-		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
-			return false
-		}
-	}
-	return true
-}
-
 // Reply answers an inbound message; the destination is the stored original's
 // verified sender, never the model's text (§8, §5 F4). There is one reply
 // per ask task (any of its message ids) or, without a task, per inbound
@@ -455,7 +443,7 @@ func (s *Shim) Reply(ctx context.Context, from *mcpserver.Agent, messageID, text
 	if closed {
 		return mcpserver.Result{}, askClosed(orig)
 	}
-	if isAgentID(key) && orig.Kind != msg.Ask && !st.rcv.RouteOpen(orig.MessageID) {
+	if mcpserver.IsAgentID(key) && orig.Kind != msg.Ask && !st.rcv.RouteOpen(orig.MessageID) {
 		return mcpserver.Result{}, &mcpserver.Error{Code: mcpserver.CodeInvalid, Reason: ReasonNoSuchMessage}
 	}
 	r := st.newMessage(orig.From, msg.Inform, msg.Immediate, text)
@@ -489,7 +477,7 @@ func (st *AgentState) completeReply(ctx context.Context, orig, r msg.Message, ke
 	}
 	if stage == journal.StatePending {
 		hook := st.shim.opt.OnReply
-		if hook == nil && !isAgentID(key) {
+		if hook == nil && !mcpserver.IsAgentID(key) {
 			res.State, res.Reason = adapter.Unreachable, ReasonNoReplyHook
 			return res, nil
 		}
@@ -514,7 +502,7 @@ func (st *AgentState) completeReply(ctx context.Context, orig, r msg.Message, ke
 			return res, nil
 		}
 	}
-	if !isAgentID(key) {
+	if !mcpserver.IsAgentID(key) {
 		if advance(journal.StateDelivered) {
 			res.State = adapter.Accepted
 		}
