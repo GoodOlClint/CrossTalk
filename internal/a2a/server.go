@@ -73,6 +73,7 @@ type Profile struct {
 type Peer struct {
 	AgentID   string
 	Role      string
+	Harness   string
 	TokenPath string
 }
 
@@ -475,7 +476,7 @@ func (s *Server) authenticate(p *a2asrv.ServiceParams) (receiver.Sender, bool) {
 		if subtle.ConstantTimeCompare(got[:], want[:]) != 1 {
 			return receiver.Sender{}, false
 		}
-		return receiver.Sender{Verified: true, AgentID: peer.AgentID, Name: names[0], Role: peer.Role}, true
+		return receiver.Sender{Verified: true, AgentID: peer.AgentID, Name: names[0], Role: peer.Role, Harness: peer.Harness}, true
 	}
 	return receiver.Sender{}, false
 }

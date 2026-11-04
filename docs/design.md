@@ -161,7 +161,7 @@ States (V16): `accepted` = injected immediately with harness evidence (Claude so
 
 ## 9. Lifecycle
 
-Install (ADR 0006), once per harness, no wrapper and no per-session configuration:
+Install (ADR 0006, ADR 0013), once per harness, no wrapper and no per-session configuration. The plugins in `plugins/crosstalk/` do the same and add the skill (`docs/setup.md`); the manual forms are:
 - Claude: `claude mcp add --scope user crosstalk -- crosstalk mcp`
 - Codex: in `~/.codex/config.toml`, `[mcp_servers.crosstalk]` with `command = "crosstalk"`, `args = ["mcp"]` and `default_tools_approval_mode = "approve"` (stops Codex prompting on every CrossTalk tool call)
 
@@ -226,7 +226,7 @@ Out: any wrapper or launcher (`crosstalk run` removed, ADR 0006), launch-time ro
 - Agent Card exposure (S4): decided by ADR 0011. The card has no cwd, every `Access-Control-*` header and `Vary` is stripped, OPTIONS answers 204, a non-loopback Host gets 421; residual name, role and harness exposure to same-machine browsers is accepted.
 - Native targets (S5): a session without CrossTalk accepts `inform` only; `ask` or `command` to it is `rejected/native_inform_only`; to a target that resolves to nothing it is `rejected/no_such_agent` (no deadline timer, no expiry notice, no mailbox entry).
 - Reply-route lifetime (S1): decided by ADR 0010. Ask routes close with their task; inform routes expire after `InformRouteTTL` (1 h) on the journal clock and are swept on admission; the bounce lists every open ask then the ten newest informs with a count.
-- Packaging (2026-11-04): the product stays a pure MCP server; per-harness plugins (Claude plugin manifest with a skill and SessionStart/SessionEnd hooks; Codex skill plus config snippet) are thin install wrappers to add after the design review, never a second code path. Eager registration via SessionStart would remove the "inform raced registration" window seen in round 4.
+- Packaging (2026-11-04): decided by ADR 0013. The product stays a pure MCP server; one plugin tree for Claude Code and Codex carries a skill and the server entry, never a second code path. Hooks remain v1.1 (below). Live clean-account runs are not done (`docs/plans/agent-plugins-clean-run.md`).
 - ADR 0008 narrowing note (R16): today the core selects one `NativeIngress` implementation for all agents. A second native ingress protocol, a deferred-delivery (mailbox) capability and installation hooks are outside the current `harness.Harness` interface, so "one package plus one line" holds only within the supported extension points. `Render` is exposed on the interface, but each injector builds its own payload; it is not the canonical path of the shared dispatch. Revisit when a second native protocol is chosen.
 - Next harnesses (spike 11): OpenCode, Gemini CLI with Qwen Code sharing a package, Pi; ACP is a launch mode, not an attach surface, so no generic ACP harness.
 - A2A auth beyond the same-user bearer/peer-token scheme (needed for cross-machine, out of v1).

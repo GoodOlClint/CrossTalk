@@ -29,9 +29,6 @@ func TestNativeInformOnlyCarriesHonestHint(t *testing.T) {
 	if h, _ := na.ok(nil, "ask", send("quiet", "q?"))["hint"].(string); !strings.Contains(h, "unreachable") || strings.Contains(h, "send_message") {
 		t.Fatalf("unreachable native hint %q", h)
 	}
-	if res := na.ok(nil, "ask", send("ghost", "q?")); res["hint"] != nil {
-		t.Fatalf("no such agent carries a hint: %v", res)
-	}
 }
 
 func TestAmbiguousNameIsNotNativeInformOnly(t *testing.T) {
@@ -56,5 +53,47 @@ func TestAmbiguousNameIsNotNativeInformOnly(t *testing.T) {
 	}
 	if res := na.ok(nil, "ask", send(d1.agentID(), "q?")); res["reason"] != ReasonNativeInformOnly {
 		t.Fatalf("by id %v", res)
+	}
+}
+
+func TestReasonsCarryHints(t *testing.T) {
+	w := newWorld(t)
+	alice := w.claude(4001, "sess-alice", "alice")
+	na := w.node(alice.pid, nil, nil)
+	if h, _ := na.ok(nil, "ask", send("ghost", "q?"))["hint"].(string); !strings.Contains(h, "list_agents") {
+		t.Fatalf("no_such_agent hint %q", h)
+	}
+	if h, _ := na.ok(nil, "send_message", send("alice", "me"))["hint"].(string); !strings.Contains(h, "you: true") {
+		t.Fatalf("self hint %q", h)
+	}
+	_, out := na.call(nil, "reply", map[string]any{"message_id": "nope", "text": "x"})
+	if h, _ := out["hint"].(string); out["reason"] != ReasonNoSuchMessage || !strings.Contains(h, "send_message") {
+		t.Fatalf("no_such_message %v", out)
+	}
+}
+
+func TestAgentHeldHintSaysWhatToRemove(t *testing.T) {
+	w := newWorld(t)
+	alice := w.claude(4001, "sess-alice", "alice")
+	n1 := w.node(alice.pid, nil, nil)
+	n2 := w.node(alice.pid, nil, nil)
+	n1.ok(nil, "receive_message", map[string]any{})
+	_, out := n2.call(nil, "receive_message", map[string]any{})
+	if h, _ := out["hint"].(string); out["reason"] != "agent_held" || !strings.Contains(h, "claude mcp remove") {
+		t.Fatalf("agent_held %v", out)
+	}
+}
+
+func TestReplyToFirstContactInformHintsSendMessage(t *testing.T) {
+	w := newWorld(t)
+	alice := w.claude(4001, "sess-alice", "alice")
+	w.codex.addThread("T-bob", "bob")
+	na := w.node(alice.pid, w.lb, nil)
+	id := na.ok(nil, "send_message", send("bob", "hello"))["message_id"]
+	nb := w.node(1, w.lb, nil)
+	nb.ok(thread("T-bob"), "receive_message", map[string]any{})
+	_, out := nb.call(thread("T-bob"), "reply", map[string]any{"message_id": id, "text": "hi"})
+	if h, _ := out["hint"].(string); out["reason"] != ReasonNoSuchMessage || !strings.Contains(h, "send_message") {
+		t.Fatalf("reply %v", out)
 	}
 }

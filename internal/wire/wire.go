@@ -200,7 +200,7 @@ func (w *Wire) resolvePeer(name string) (a2a.Peer, bool) {
 	if role == "" {
 		role = registry.RolePrimary
 	}
-	return a2a.Peer{AgentID: d.AgentID, Role: role, TokenPath: d.CredentialRef}, true
+	return a2a.Peer{AgentID: d.AgentID, Role: role, Harness: d.Harness, TokenPath: d.CredentialRef}, true
 }
 
 func (w *Wire) resolveSender(agentID string) (receiver.Sender, bool) {
@@ -214,7 +214,7 @@ func (w *Wire) resolveSender(agentID string) (receiver.Sender, bool) {
 			if role == "" {
 				role = registry.RolePrimary
 			}
-			return receiver.Sender{Verified: true, AgentID: agentID, Name: d.Name, Role: role}, true
+			return receiver.Sender{Verified: true, AgentID: agentID, Name: d.Name, Role: role, Harness: d.Harness}, true
 		}
 	}
 	return receiver.Sender{}, false

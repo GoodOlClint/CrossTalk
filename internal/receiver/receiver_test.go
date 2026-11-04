@@ -109,6 +109,16 @@ func TestAcceptedInjectsWithVerifiedIdentity(t *testing.T) {
 	}
 }
 
+func TestInjectCarriesSenderHarness(t *testing.T) {
+	e := newEnv(t)
+	snd := alice
+	snd.Harness = "codex"
+	e.recv(A2A, snd, newMsg(msg.Inform, "hi"))
+	if w := e.fake.Writes(); len(w) != 1 || w[0].Delivery.SenderHarness != "codex" {
+		t.Fatalf("writes %+v", w)
+	}
+}
+
 // Test 6: the same message_id twice returns the prior state, one injection.
 func TestDuplicateReturnsPriorState(t *testing.T) {
 	e := newEnv(t)

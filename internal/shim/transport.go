@@ -52,7 +52,7 @@ func (l *Loopback) Send(ctx context.Context, from, to registry.Descriptor, m msg
 	res := st.Receive(ctx, receiver.Inbound{
 		Ingress: receiver.A2A,
 		Message: m,
-		Sender:  receiver.Sender{Verified: true, AgentID: from.AgentID, Name: from.Name, Role: from.Role, PID: from.PID},
+		Sender:  receiver.Sender{Verified: true, AgentID: from.AgentID, Name: from.Name, Role: from.Role, Harness: from.Harness, PID: from.PID},
 	})
 	if res.Reason != "" {
 		return res.State, errors.New(res.Reason)

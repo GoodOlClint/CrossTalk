@@ -117,6 +117,7 @@ type Error struct {
 	Code    string `json:"error"`
 	Reason  string `json:"reason,omitempty"`
 	Message string `json:"message,omitempty"`
+	Hint    string `json:"hint,omitempty"`
 }
 
 func (e *Error) Error() string {

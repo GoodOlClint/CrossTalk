@@ -535,3 +535,40 @@ func TestDrainRefusesNewCallsAndWaitsForThoseInFlight(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestListAgentsMarksCaller(t *testing.T) {
+	e := newEnv(t, 4242, NewFakeBackend())
+	you := func(rows map[string]map[string]any) []string {
+		var ids []string
+		for id, r := range rows {
+			if r["you"] == true {
+				ids = append(ids, id)
+			}
+		}
+		return ids
+	}
+	e.mustOK(thread("A"), "list_agents", map[string]any{})
+	e.mustOK(thread("B"), "list_agents", map[string]any{})
+	for _, th := range []string{"A", "B"} {
+		ids := you(rowsByID(t, e.mustOK(thread(th), "list_agents", map[string]any{})))
+		if len(ids) != 1 || ids[0] != codexID(th) {
+			t.Errorf("caller %s sees you on %v, want only %s", th, ids, codexID(th))
+		}
+	}
+	if ids := you(rowsByID(t, e.mustOK(nil, "list_agents", map[string]any{}))); len(ids) != 0 {
+		t.Errorf("unbound caller sees you on %v", ids)
+	}
+}
+
+func TestInitializeCarriesInstructions(t *testing.T) {
+	e := newEnv(t, 4242, NewFakeBackend())
+	got := e.cs.InitializeResult().Instructions
+	if len(got) == 0 || len(got) > 512 {
+		t.Fatalf("instructions are %d bytes, want 1..512: %q", len(got), got)
+	}
+	for _, w := range []string{"you", "reply", "no_such_message", "untrusted"} {
+		if !strings.Contains(got, w) {
+			t.Errorf("instructions lack %q: %q", w, got)
+		}
+	}
+}

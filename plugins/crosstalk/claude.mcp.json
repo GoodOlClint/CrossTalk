@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "crosstalk": {
+      "command": "crosstalk",
+      "args": [
+        "mcp"
+      ]
+    }
+  }
+}

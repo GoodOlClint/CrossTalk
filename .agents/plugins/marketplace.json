@@ -1,0 +1,20 @@
+{
+  "name": "crosstalk",
+  "interface": {
+    "displayName": "CrossTalk"
+  },
+  "plugins": [
+    {
+      "name": "crosstalk",
+      "source": {
+        "source": "local",
+        "path": "./plugins/crosstalk"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

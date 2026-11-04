@@ -55,6 +55,7 @@ type Self struct {
 // Identity is the sender of an inbound message as the receiver verified it.
 type Identity struct {
 	Name     string
+	Harness  string
 	Address  string
 	Verified bool
 }

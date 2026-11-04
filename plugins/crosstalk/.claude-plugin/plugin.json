@@ -1,0 +1,14 @@
+{
+  "name": "crosstalk",
+  "version": "0.1.0",
+  "description": "Message other running agent sessions (Claude Code, Codex) on this Mac by name.",
+  "author": {
+    "name": "GoodOlClint",
+    "url": "https://github.com/GoodOlClint"
+  },
+  "homepage": "https://github.com/GoodOlClint/CrossTalk",
+  "repository": "https://github.com/GoodOlClint/CrossTalk",
+  "license": "MIT",
+  "skills": "./skills/",
+  "mcpServers": "./claude.mcp.json"
+}
