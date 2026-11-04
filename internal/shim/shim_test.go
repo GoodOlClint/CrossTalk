@@ -122,7 +122,7 @@ func TestDiscoverMergesClaudeCodexAndDescriptors(t *testing.T) {
 	srv.AddThread(&appservertest.Thread{ID: "T-live", Name: "cx", Cwd: "/work/cx", Loaded: true})
 	srv.AddThread(&appservertest.Thread{ID: "T-stored", Name: "old", Cwd: "/old"})
 	cx := &codex.Adapter{ControlSocket: shortDir(t) + "/absent.sock", Endpoints: []string{srv.Endpoint()}}
-	n := w.node(alice.pid, nil, func(o *Options) { o.Codex = cx })
+	n := w.node(alice.pid, nil, func(o *Options) { o.Harnesses = w.harnesses(cx) })
 
 	out := n.ok(nil, "list_agents", map[string]any{})
 	rows := map[string]map[string]any{}
@@ -145,7 +145,7 @@ func TestDiscoverMergesClaudeCodexAndDescriptors(t *testing.T) {
 	}
 
 	absent := &codex.Adapter{ControlSocket: shortDir(t) + "/absent.sock"}
-	sh, err := New(Options{StateDir: w.state, SessionsDir: w.sessions, PPID: 1, Alive: fakePID, Codex: absent})
+	sh, err := New(Options{StateDir: w.state, PPID: 1, Harnesses: w.harnesses(absent)})
 	if err != nil {
 		t.Fatal(err)
 	}

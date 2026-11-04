@@ -5,14 +5,21 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/signal"
 	"syscall"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/GoodOlClint/crosstalk/internal/harness"
+	"github.com/GoodOlClint/crosstalk/internal/harness/claude"
+	"github.com/GoodOlClint/crosstalk/internal/harness/codex"
+	"github.com/GoodOlClint/crosstalk/internal/harness/codex/appserver"
 	"github.com/GoodOlClint/crosstalk/internal/mcpserver"
+	"github.com/GoodOlClint/crosstalk/internal/registry"
 	"github.com/GoodOlClint/crosstalk/internal/shim"
+	"github.com/GoodOlClint/crosstalk/internal/udsingress"
 	"github.com/GoodOlClint/crosstalk/internal/wire"
 )
 
@@ -42,8 +49,33 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 }
 
+// harnesses is every supported harness in trust order: an explicit
+// _meta.threadId outranks the parent pid.
+func harnesses(stateDir string) ([]harness.Harness, error) {
+	cl, err := claude.NewHarness(claude.HarnessOptions{Ingress: udsingress.NewIngress})
+	if err != nil {
+		return nil, err
+	}
+	cx := codex.NewHarness(codex.HarnessOptions{
+		Logger:     slog.Default(),
+		ClientInfo: appserver.ClientInfo{Name: "crosstalk", Version: mcpserver.Version},
+		Directory:  registry.New(stateDir),
+	})
+	return []harness.Harness{cx, cl}, nil
+}
+
 func runMCP(stderr io.Writer) int {
-	w, err := wire.New(shim.Options{})
+	stateDir, err := registry.DefaultDir()
+	if err != nil {
+		fmt.Fprintf(stderr, "crosstalk mcp: %v\n", err)
+		return 1
+	}
+	hs, err := harnesses(stateDir)
+	if err != nil {
+		fmt.Fprintf(stderr, "crosstalk mcp: %v\n", err)
+		return 1
+	}
+	w, err := wire.New(shim.Options{StateDir: stateDir, Harnesses: hs})
 	if err != nil {
 		fmt.Fprintf(stderr, "crosstalk mcp: %v\n", err)
 		return 1

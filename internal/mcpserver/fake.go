@@ -5,6 +5,7 @@ import (
 	"sync"
 
 	"github.com/GoodOlClint/crosstalk/internal/adapter"
+	"github.com/GoodOlClint/crosstalk/internal/harness"
 	"github.com/GoodOlClint/crosstalk/internal/msg"
 	"github.com/GoodOlClint/crosstalk/internal/registry"
 )
@@ -32,6 +33,8 @@ type FakeBackend struct {
 	SendErr  error
 	ClaimErr error
 	Bind     func(ctx context.Context, a *Agent) (BindInfo, error)
+	// Harnesses' sessions are listed by Discover after the scripted ones.
+	Harnesses []harness.Harness
 }
 
 var _ Backend = (*FakeBackend)(nil)
@@ -104,10 +107,19 @@ func (f *FakeBackend) Release(_ context.Context, a *Agent, t registry.Descriptor
 	return f.ClaimErr
 }
 
-func (f *FakeBackend) Discover(context.Context) ([]Session, error) {
+func (f *FakeBackend) Discover(ctx context.Context) ([]Session, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
-	return append([]Session(nil), f.sessions...), nil
+	out := append([]Session(nil), f.sessions...)
+	hs := f.Harnesses
+	f.mu.Unlock()
+	for _, h := range hs {
+		ss, err := h.Discover(ctx)
+		if err != nil {
+			return out, err
+		}
+		out = append(out, ss...)
+	}
+	return out, nil
 }
 
 // fakeBinder wraps a FakeBackend whose Bind hook is set.

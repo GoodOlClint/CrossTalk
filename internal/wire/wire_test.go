@@ -16,6 +16,8 @@ import (
 
 	"github.com/GoodOlClint/crosstalk/internal/a2a"
 	"github.com/GoodOlClint/crosstalk/internal/adapter"
+	"github.com/GoodOlClint/crosstalk/internal/harness"
+	"github.com/GoodOlClint/crosstalk/internal/harness/claude"
 	"github.com/GoodOlClint/crosstalk/internal/harness/codex"
 	"github.com/GoodOlClint/crosstalk/internal/identity"
 	"github.com/GoodOlClint/crosstalk/internal/journal"
@@ -23,6 +25,7 @@ import (
 	"github.com/GoodOlClint/crosstalk/internal/msg"
 	"github.com/GoodOlClint/crosstalk/internal/registry"
 	"github.com/GoodOlClint/crosstalk/internal/shim"
+	"github.com/GoodOlClint/crosstalk/internal/udsingress"
 )
 
 type fakeCodex struct {
@@ -65,7 +68,12 @@ func newNode(t *testing.T, stateDir string, ppid int, name string) *node {
 	fc := &fakeCodex{Fake: adapter.NewFake(adapter.Codex)}
 	fc.threads = []codex.LoadedThread{{Endpoint: "fake://" + th, ID: th, Name: name, Cwd: "/work/" + name, Status: "idle",
 		Session: adapter.SessionStatus{Loaded: true, Reachable: true}}}
-	w, err := New(shim.Options{StateDir: stateDir, SessionsDir: shortDir(t), PPID: ppid, Codex: fc})
+	ch, err := claude.NewHarness(claude.HarnessOptions{SessionsDir: shortDir(t), Ingress: udsingress.NewIngress})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hs := []harness.Harness{codex.NewHarness(codex.HarnessOptions{Adapter: fc, Directory: registry.New(stateDir)}), ch}
+	w, err := New(shim.Options{StateDir: stateDir, PPID: ppid, Harnesses: hs})
 	if err != nil {
 		t.Fatal(err)
 	}

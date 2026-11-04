@@ -1,11 +1,13 @@
 package mcpserver
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/GoodOlClint/crosstalk/internal/adapter"
+	"github.com/GoodOlClint/crosstalk/internal/harness"
 )
 
 func writeClaudeSession(t *testing.T, dir string, pid int, sessionID, name, cwd string) {
@@ -19,6 +21,7 @@ func writeClaudeSession(t *testing.T, dir string, pid int, sessionID, name, cwd 
 func TestResolveCaller(t *testing.T) {
 	dir := t.TempDir()
 	writeClaudeSession(t, dir, 4242, "claude-sess", "alpha", "/work/alpha")
+	hs := testHarnesses(t, dir)
 
 	cases := []struct {
 		name    string
@@ -38,7 +41,7 @@ func TestResolveCaller(t *testing.T) {
 		{"init parent", nil, 1, "", ""},
 	}
 	for _, c := range cases {
-		got, err := resolveCaller(c.meta, dir, c.ppid)
+		got, err := resolveCaller(context.Background(), hs, harness.RequestContext{Meta: c.meta, ParentPID: c.ppid})
 		if err != nil {
 			t.Fatalf("%s: %v", c.name, err)
 		}
@@ -46,7 +49,7 @@ func TestResolveCaller(t *testing.T) {
 			t.Errorf("%s: got (%q, %q), want (%q, %q)", c.name, got.harness, got.sessionRef, c.harness, c.ref)
 		}
 	}
-	got, _ := resolveCaller(nil, dir, 4242)
+	got, _ := resolveCaller(context.Background(), hs, harness.RequestContext{ParentPID: 4242})
 	if got.name != "alpha" || got.cwd != "/work/alpha" || got.harnessPID != 4242 {
 		t.Errorf("claude caller fields: %+v", got)
 	}

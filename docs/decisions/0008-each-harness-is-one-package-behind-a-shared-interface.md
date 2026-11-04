@@ -13,24 +13,38 @@ Design §2 already says "adding a harness = one adapter: register(), inject(mess
 
 "Pluggable" here means an in-process Go interface with a compile-time list, not a runtime plugin: every release ships all supported harnesses in the one binary (operator, 2026-11-03). The bar is that adding a harness is one new package plus one line in `cmd/crosstalk`, with no change to the existing harness packages and no harness-specific code in the shim. Everything a harness contributes lives behind one interface in `internal/harness`, and the shim, mcpserver and A2A code never name a concrete harness.
 
+Final interface (`internal/harness`, implemented 2026-11-03):
+
 ```go
 type Harness interface {
-    Name() adapter.Harness                                  // "claude", "codex", "gemini"
-    // Bind decides from the MCP request context whether this call comes from
-    // one of its sessions; ok=false means "not mine", let the next harness try.
+    adapter.Adapter // Register, Inject, Status
+    Name() adapter.Harness
+    // Identify names the session a call comes from without contacting the
+    // harness; it runs on every call. ok=false means "not mine". An empty
+    // Name means the caller is named from Discover.
+    Identify(ctx context.Context, req RequestContext) (Session, bool, error)
+    // Bind confirms the binding when the agent registers. An error wrapping
+    // ErrAmbiguous comes with a usable Binding.
     Bind(ctx context.Context, req RequestContext) (adapter.Binding, bool, error)
-    // Discover lists this harness's live sessions, with or without CrossTalk.
     Discover(ctx context.Context) ([]Session, error)
-    Inject(ctx context.Context, m msg.Message, d adapter.Delivery) (adapter.State, error)
-    Status(ctx context.Context, sessionRef string) (adapter.SessionStatus, error)
-    // Render produces what the harness's model sees for an inbound message
-    // (envelope text for Claude, toolOutput payload for Codex per ADR 0007).
     Render(m msg.Message, from Identity) any
-    // NativeReplyAddress is the address a native reply tool in this harness can
-    // reach, or "" when the harness has none (then replies go through `reply`).
-    NativeReplyAddress(self Binding) string
+    NativeReplyAddress(self Self) string
 }
+
+type RequestContext struct { ParentPID int; Meta map[string]any; Client ClientInfo; MCPSessionID string }
+type Session struct { Harness adapter.Harness; SessionRef, Name, Cwd, Status string; Reachable bool; HarnessPID int; Endpoint string }
+type Self struct { Binding adapter.Binding; UDSPath string }
+type Identity struct { Name, Address string; Verified bool }
+
+// Optional: the first harness in the list that implements it serves every
+// agent's uds_path.
+type NativeIngress interface { NewIngress(cfg IngressConfig) Ingress }
+type Ingress interface { Listen() error; Serve(ctx context.Context) error; Close() error; Files() []string }
+
+var ErrAmbiguous error // Codex: thread loaded on more than one endpoint
 ```
+
+Differences from the first sketch: binding is two calls, because the MCP server identifies the caller on every tool call (cheap, no harness contact) while the endpoint probe runs once at registration; `Harness` embeds `adapter.Adapter`, since native-name sends need `Register`; the reply address reaches `Inject` as `adapter.Delivery.ReplyAddress`, set by the shim from the target harness's `NativeReplyAddress`. mcpserver receives the harness list in `mcpserver.Options.Harnesses` (from `shim.MCPOptions`) and stores the registering call's `RequestContext` on the `Agent` for the shim's `Bind`. The uds ingress is served by an agent of any harness, because its senders are native Claude sessions; Claude's protocol server is `udsingress.NewIngress`, passed in `claude.HarnessOptions.Ingress` by `cmd/crosstalk` (the `claude` package cannot import `udsingress`, whose tests import `claude`). `internal/shim/arch_test.go` pins that `internal/shim`, `internal/mcpserver`, `internal/a2a` and `internal/wire` import no `internal/harness/<name>` package.
 
 `RequestContext` carries what the MCP server knows about a call: parent pid, `_meta`, client info, session id. Each harness package (`internal/harness/claude`, `internal/harness/codex`, later `internal/harness/gemini`) exports a constructor returning a `Harness`; `cmd/crosstalk` lists them once in a slice, in trust order. The shim iterates that slice for Bind and Discover and otherwise only holds the `Harness` it bound. Harness-specific ingress (Claude's uds socket protocol) is likewise behind an `Ingress` constructor the harness returns, so a harness with no native socket contributes none. Tests for the shim use `adapter.Fake` wrapped as a `Harness`; no harness package is imported by `internal/shim` or `internal/mcpserver` after the refactor, and a `go list -deps` check pins that in `go test`.
 

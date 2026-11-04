@@ -10,19 +10,15 @@ import (
 	"time"
 
 	"github.com/GoodOlClint/crosstalk/internal/adapter"
-	"github.com/GoodOlClint/crosstalk/internal/harness/claude"
-	"github.com/GoodOlClint/crosstalk/internal/harness/codex"
-	"github.com/GoodOlClint/crosstalk/internal/harness/codex/appserver"
+	"github.com/GoodOlClint/crosstalk/internal/harness"
 	"github.com/GoodOlClint/crosstalk/internal/journal"
 	"github.com/GoodOlClint/crosstalk/internal/mcpserver"
+	"github.com/GoodOlClint/crosstalk/internal/msg"
 	"github.com/GoodOlClint/crosstalk/internal/receiver"
 	"github.com/GoodOlClint/crosstalk/internal/registry"
-	"github.com/GoodOlClint/crosstalk/internal/udsingress"
 )
 
-var codexClientInfo = appserver.ClientInfo{Name: "crosstalk", Version: mcpserver.Version}
-
-var ErrSessionMismatch = errors.New("shim: parent Claude session does not match the caller")
+var ErrSessionMismatch = errors.New("shim: harness session does not match the caller")
 
 // AgentState is one bound agent's per-agent state in this process (§9):
 // harness binding, receiver over its journal, uds ingress and A2A listener.
@@ -30,12 +26,11 @@ type AgentState struct {
 	shim    *Shim
 	agent   *mcpserver.Agent
 	binding adapter.Binding
-	harness adapter.Adapter
-	claude  *claude.Adapter
+	harness harness.Harness
 	udsPath string
 
 	rcv *receiver.Receiver
-	uds *udsingress.Server
+	uds harness.Ingress
 	a2a A2AListener
 
 	ctx    context.Context
@@ -88,37 +83,29 @@ func (s *Shim) state(a *mcpserver.Agent) (*AgentState, error) {
 	return st, nil
 }
 
-// BindHarness confirms which conversation the agent is (§3 F2): Claude from
-// the parent pid's session file, Codex from the one endpoint that has the
-// thread loaded.
+// BindHarness confirms which conversation the agent is (§3 F2) through the
+// harness that identified it.
 func (s *Shim) BindHarness(ctx context.Context, a *mcpserver.Agent) (adapter.Binding, error) {
 	st := &AgentState{shim: s, agent: a, udsPath: s.reg.UDSPath(a.ID()), deadline: map[string]*time.Timer{}}
-	st.claude = s.claudeAdapter(st.udsPath)
-	var b adapter.Binding
-	switch a.Harness() {
-	case adapter.Claude:
-		sess, err := st.claude.BindFromParent()
-		if err != nil {
-			return adapter.Binding{}, err
-		}
-		if sess.SessionID != a.SessionRef() {
-			return adapter.Binding{}, fmt.Errorf("%w: %s != %s", ErrSessionMismatch, sess.SessionID, a.SessionRef())
-		}
-		b, st.harness = sess.Binding(), st.claude
-	case adapter.Codex:
-		var err error
-		b, err = s.codex.Register(ctx, a.SessionRef())
-		if errors.Is(err, codex.ErrAmbiguousEndpoint) {
-			s.log.Warn("shim: codex thread loaded on several endpoints; inbound unreachable", "thread", a.SessionRef(), "err", err)
-			b, err = adapter.Binding{Harness: adapter.Codex, SessionRef: a.SessionRef()}, nil
-		}
-		if err != nil {
-			return adapter.Binding{}, err
-		}
-		st.harness = s.codex
-	default:
+	h := harness.Lookup(s.opt.Harnesses, a.Harness())
+	if h == nil {
 		return adapter.Binding{}, fmt.Errorf("shim: unknown harness %q", a.Harness())
 	}
+	b, ok, err := h.Bind(ctx, a.Request())
+	if errors.Is(err, harness.ErrAmbiguous) {
+		s.log.Warn("shim: session reachable through several endpoints; inbound unreachable", "harness", a.Harness(), "session", a.SessionRef(), "err", err)
+		err = nil
+	}
+	if err != nil {
+		return adapter.Binding{}, err
+	}
+	if !ok {
+		return adapter.Binding{}, fmt.Errorf("shim: harness %q does not claim the caller", a.Harness())
+	}
+	if b.SessionRef != a.SessionRef() {
+		return adapter.Binding{}, fmt.Errorf("%w: %s != %s", ErrSessionMismatch, b.SessionRef, a.SessionRef())
+	}
+	st.harness = h
 	st.binding = b
 	s.mu.Lock()
 	if old := s.agents[a.ID()]; old != nil && old.started() {
@@ -142,7 +129,7 @@ func (s *Shim) Bind(ctx context.Context, a *mcpserver.Agent) (mcpserver.BindInfo
 	}
 	st.rcv = receiver.New(receiver.Config{
 		Journal:   a.Journal(),
-		Adapter:   st.harness,
+		Adapter:   st.injector(st.harness),
 		Self:      st.self,
 		Forwarder: forwarder{st},
 		Now:       s.opt.Now,
@@ -151,17 +138,22 @@ func (s *Shim) Bind(ctx context.Context, a *mcpserver.Agent) (mcpserver.BindInfo
 		return mcpserver.BindInfo{}, err
 	}
 	st.ctx, st.cancel = context.WithCancel(s.ctx)
-	u := &udsingress.Server{Path: st.udsPath, Directory: s.reg, Receiver: st.rcv, StartTime: s.reg.StartTime, PeerPID: s.udsPeerPID}
-	if err := u.Listen(); err != nil {
-		return mcpserver.BindInfo{}, err
+	var u harness.Ingress
+	if s.ingress != nil {
+		u = s.ingress.NewIngress(harness.IngressConfig{Path: st.udsPath, Directory: s.reg, Receiver: st.rcv, StartTime: s.reg.StartTime, PeerPID: s.udsPeerPID})
 	}
-	st.uds, st.serve = u, make(chan struct{})
-	go func() {
-		defer close(st.serve)
-		if err := st.uds.Serve(st.ctx); err != nil {
-			s.log.Warn("shim: uds ingress stopped", "agent", a.ID(), "err", err)
+	if u != nil {
+		if err := u.Listen(); err != nil {
+			return mcpserver.BindInfo{}, err
 		}
-	}()
+		st.uds, st.serve = u, make(chan struct{})
+		go func() {
+			defer close(st.serve)
+			if err := st.uds.Serve(st.ctx); err != nil {
+				s.log.Warn("shim: uds ingress stopped", "agent", a.ID(), "err", err)
+			}
+		}()
+	}
 	st.mu.Lock()
 	st.up = true
 	st.mu.Unlock()
@@ -216,7 +208,7 @@ func (s *Shim) closeState(st *AgentState) error {
 			errs = append(errs, err)
 		}
 		<-st.serve
-		for _, p := range []string{st.udsPath, udsingress.KeyPath(st.udsPath)} {
+		for _, p := range st.uds.Files() {
 			if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
 				errs = append(errs, err)
 			}
@@ -226,4 +218,20 @@ func (s *Shim) closeState(st *AgentState) error {
 		st.cancel()
 	}
 	return errors.Join(errs...)
+}
+
+// injector is h as this agent injects into it: Delivery.ReplyAddress is h's
+// native reply address for this agent.
+func (st *AgentState) injector(h harness.Harness) adapter.Adapter {
+	return injector{Harness: h, reply: h.NativeReplyAddress(harness.Self{Binding: st.binding, UDSPath: st.udsPath})}
+}
+
+type injector struct {
+	harness.Harness
+	reply string
+}
+
+func (i injector) Inject(ctx context.Context, m msg.Message, d adapter.Delivery) (adapter.State, error) {
+	d.ReplyAddress = i.reply
+	return i.Harness.Inject(ctx, m, d)
 }

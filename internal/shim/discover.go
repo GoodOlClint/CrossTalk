@@ -2,103 +2,56 @@ package shim
 
 import (
 	"context"
-	"encoding/json"
-	"os"
-	"path/filepath"
+	"errors"
 
 	"github.com/GoodOlClint/crosstalk/internal/adapter"
-	"github.com/GoodOlClint/crosstalk/internal/harness/claude"
-	"github.com/GoodOlClint/crosstalk/internal/harness/codex"
+	"github.com/GoodOlClint/crosstalk/internal/harness"
 	"github.com/GoodOlClint/crosstalk/internal/mcpserver"
-	"github.com/GoodOlClint/crosstalk/internal/procstart"
 )
 
-func (s *Shim) alive(pid int) bool {
-	if pid <= 0 {
-		return false
-	}
-	if s.opt.Alive != nil {
-		return s.opt.Alive(pid)
-	}
-	_, err := procstart.StartTime(pid)
-	return err == nil
+type found struct {
+	h harness.Harness
+	s harness.Session
 }
 
-// claudeSessions reads every live session file; it never consults them for
-// sender identity (§3).
-func (s *Shim) claudeSessions() []claude.Session {
-	paths, _ := filepath.Glob(filepath.Join(s.opt.SessionsDir, "*.json"))
-	var out []claude.Session
-	for _, p := range paths {
-		b, err := os.ReadFile(p)
+// sessions unions every harness's Discover, each bounded by
+// DiscoveryTimeout; a harness that fails contributes what it returned.
+func (s *Shim) sessions(ctx context.Context) ([]found, error) {
+	var out []found
+	var errs []error
+	for _, h := range s.opt.Harnesses {
+		hctx, cancel := context.WithTimeout(ctx, s.opt.DiscoveryTimeout)
+		ss, err := h.Discover(hctx)
+		cancel()
 		if err != nil {
-			continue
+			errs = append(errs, err)
 		}
-		var cs claude.Session
-		if json.Unmarshal(b, &cs) != nil || cs.SessionID == "" || filepath.Base(p) != itoa(cs.PID)+".json" || !s.alive(cs.PID) {
-			continue
-		}
-		out = append(out, cs)
-	}
-	return out
-}
-
-func socketExists(path string) bool {
-	if path == "" {
-		return false
-	}
-	fi, err := os.Stat(path)
-	return err == nil && fi.Mode()&os.ModeSocket != 0
-}
-
-// codexThreads queries the managed daemon plus every harness_endpoint a
-// Codex descriptor records (§3 CQ10). An absent daemon yields nothing.
-func (s *Shim) codexThreads(ctx context.Context) []codex.LoadedThread {
-	var extra []string
-	if ds, err := s.reg.List(); err == nil {
-		for _, d := range ds {
-			if d.Harness == string(adapter.Codex) && d.HarnessEndpoint != nil && *d.HarnessEndpoint != "" {
-				extra = append(extra, *d.HarnessEndpoint)
-			}
+		for _, x := range ss {
+			out = append(out, found{h: h, s: x})
 		}
 	}
-	ctx, cancel := context.WithTimeout(ctx, s.opt.DiscoveryTimeout)
-	defer cancel()
-	return s.codex.LoadedThreads(ctx, extra...)
+	return out, errors.Join(errs...)
 }
 
-// Discover lists every live Claude session and every loaded Codex thread.
-// mcpserver merges the descriptor directory on top and sets crosstalk,
-// role and owner from it.
+// Discover lists every live session of every harness. mcpserver merges the
+// descriptor directory on top and sets crosstalk, role and owner from it.
 func (s *Shim) Discover(ctx context.Context) ([]mcpserver.Session, error) {
+	fs, err := s.sessions(ctx)
 	var out []mcpserver.Session
-	for _, cs := range s.claudeSessions() {
-		out = append(out, mcpserver.Session{Harness: adapter.Claude, SessionRef: cs.SessionID, Name: cs.Name, Cwd: cs.Cwd, Status: cs.Status, Reachable: socketExists(cs.MessagingSocketPath)})
+	for _, f := range fs {
+		out = append(out, f.s)
 	}
-	for _, t := range s.codexThreads(ctx) {
-		out = append(out, mcpserver.Session{Harness: adapter.Codex, SessionRef: t.ID, Name: t.Name, Cwd: t.Cwd, Status: t.Status, Reachable: t.Session.Reachable})
-	}
-	return out, nil
+	return out, err
 }
 
 // nativeTarget resolves a name with no descriptor to exactly one harness
-// session, injected through this agent's own adapters (§3: inform only).
+// session, injected through this agent's own injectors (§3: inform only).
 func (st *AgentState) nativeTarget(ctx context.Context, name string) (adapter.Binding, adapter.Adapter, adapter.State, string) {
-	s := st.shim
-	type cand struct {
-		h   adapter.Harness
-		ref string
-		cs  claude.Session
-	}
-	var cs []cand
-	for _, c := range s.claudeSessions() {
-		if c.Name == name {
-			cs = append(cs, cand{h: adapter.Claude, ref: c.SessionID, cs: c})
-		}
-	}
-	for _, t := range s.codexThreads(ctx) {
-		if t.Name == name {
-			cs = append(cs, cand{h: adapter.Codex, ref: t.ID})
+	fs, _ := st.shim.sessions(ctx)
+	var cs []found
+	for _, f := range fs {
+		if f.s.Name == name {
+			cs = append(cs, f)
 		}
 	}
 	switch len(cs) {
@@ -109,15 +62,12 @@ func (st *AgentState) nativeTarget(ctx context.Context, name string) (adapter.Bi
 		return adapter.Binding{}, nil, adapter.Rejected, ReasonAmbiguousName
 	}
 	c := cs[0]
-	if c.h == st.binding.Harness && c.ref == st.binding.SessionRef {
+	if c.s.Harness == st.binding.Harness && c.s.SessionRef == st.binding.SessionRef {
 		return adapter.Binding{}, nil, adapter.Rejected, ReasonSelf
 	}
-	if c.h == adapter.Claude {
-		return c.cs.Binding(), st.claude, "", ""
-	}
-	b, err := s.codex.Register(ctx, c.ref)
+	b, err := c.h.Register(ctx, c.s.SessionRef)
 	if err != nil {
 		return adapter.Binding{}, nil, adapter.Unreachable, err.Error()
 	}
-	return b, s.codex, "", ""
+	return b, st.injector(c.h), "", ""
 }

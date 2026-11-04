@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/GoodOlClint/crosstalk/internal/adapter"
-	"github.com/GoodOlClint/crosstalk/internal/harness/claude"
 	"github.com/GoodOlClint/crosstalk/internal/journal"
 	"github.com/GoodOlClint/crosstalk/internal/mcpserver"
 	"github.com/GoodOlClint/crosstalk/internal/msg"
@@ -421,7 +420,7 @@ func (s *Shim) Mailbox(ctx context.Context, of *mcpserver.Agent, after string, l
 	for _, e := range es {
 		me := mcpserver.MailboxEntry{Direction: e.Direction, MessageID: e.MessageID, TaskID: e.TaskID, InReplyTo: e.InReplyTo, From: e.From, To: e.To, Reason: e.Reason, State: adapter.State(e.State), InstanceID: e.InstanceID, SessionRef: e.SessionRef}
 		if e.Message != nil {
-			me.Text = claude.Body(*e.Message)
+			me.Text = e.Message.Text()
 		}
 		out = append(out, me)
 	}

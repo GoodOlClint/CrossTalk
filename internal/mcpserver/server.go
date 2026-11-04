@@ -6,14 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sync"
-	"syscall"
 
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/GoodOlClint/crosstalk/internal/adapter"
+	"github.com/GoodOlClint/crosstalk/internal/harness"
 	"github.com/GoodOlClint/crosstalk/internal/identity"
 	"github.com/GoodOlClint/crosstalk/internal/journal"
 	"github.com/GoodOlClint/crosstalk/internal/msg"
@@ -26,47 +24,39 @@ type Options struct {
 	Backend Backend
 	// Registry holds descriptors and locks; its Dir is also the journal root.
 	Registry *registry.Registry
-	// SessionDir is ~/.claude/sessions.
-	SessionDir string
-	// PPID is the parent pid used for Claude self-binding; 0 means os.Getppid().
+	// Harnesses identify callers, in trust order (ADR 0008).
+	Harnesses []harness.Harness
+	// PPID is the parent pid every request context carries; 0 means os.Getppid().
 	PPID int
-	// Alive reports whether a Claude session pid is running; nil means kill(pid, 0).
-	Alive func(pid int) bool
 }
 
 type Server struct {
-	backend    Backend
-	reg        *registry.Registry
-	sessionDir string
-	ppid       int
-	alive      func(int) bool
-	mcp        *mcp.Server
+	backend   Backend
+	reg       *registry.Registry
+	harnesses []harness.Harness
+	ppid      int
+	mcp       *mcp.Server
 
 	mu     sync.Mutex
 	agents map[string]*Agent
 	closed bool
 }
 
-func DefaultOptions(b Backend) (Options, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return Options{}, err
-	}
+func DefaultOptions(b Backend, hs ...harness.Harness) (Options, error) {
 	dir, err := registry.DefaultDir()
 	if err != nil {
 		return Options{}, err
 	}
-	return Options{Backend: b, Registry: registry.New(dir), SessionDir: filepath.Join(home, ".claude", "sessions")}, nil
+	return Options{Backend: b, Registry: registry.New(dir), Harnesses: hs}, nil
 }
 
 func New(opt Options) *Server {
 	s := &Server{
-		backend:    opt.Backend,
-		reg:        opt.Registry,
-		sessionDir: opt.SessionDir,
-		ppid:       opt.PPID,
-		alive:      opt.Alive,
-		agents:     map[string]*Agent{},
+		backend:   opt.Backend,
+		reg:       opt.Registry,
+		harnesses: opt.Harnesses,
+		ppid:      opt.PPID,
+		agents:    map[string]*Agent{},
 	}
 	if s.backend == nil {
 		s.backend = Unwired{}
@@ -74,20 +64,9 @@ func New(opt Options) *Server {
 	if s.ppid == 0 {
 		s.ppid = os.Getppid()
 	}
-	if s.alive == nil {
-		s.alive = pidAlive
-	}
 	s.mcp = mcp.NewServer(&mcp.Implementation{Name: "crosstalk", Version: Version}, nil)
 	s.addTools()
 	return s
-}
-
-func pidAlive(pid int) bool {
-	if pid <= 0 {
-		return false
-	}
-	err := syscall.Kill(pid, 0)
-	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
 func (s *Server) MCP() *mcp.Server { return s.mcp }
@@ -131,7 +110,7 @@ func (s *Server) agent(ctx context.Context, c caller) (*Agent, string, *Error) {
 	}
 	a, ok := s.agents[id]
 	if !ok {
-		a = &Agent{id: id, harness: c.harness, sessionRef: c.sessionRef, ready: make(chan struct{})}
+		a = &Agent{id: id, harness: c.harness, sessionRef: c.sessionRef, req: c.req, ready: make(chan struct{})}
 		s.agents[id] = a
 		s.mu.Unlock()
 		notice, err := s.register(ctx, a, c)
@@ -274,13 +253,11 @@ func (s *Server) local(agentID string) *Agent {
 	return a
 }
 
+// resolve takes name and cwd from Discover when the harness could not name
+// the caller from the request alone.
 func (s *Server) resolve(ctx context.Context, req *mcp.CallToolRequest) (caller, error) {
-	var meta map[string]any
-	if req != nil && req.Params != nil {
-		meta = req.Params.GetMeta()
-	}
-	c, err := resolveCaller(meta, s.sessionDir, s.ppid)
-	if err != nil || c.harness != adapter.Codex {
+	c, err := resolveCaller(ctx, s.harnesses, requestContext(req, s.ppid))
+	if err != nil || !c.bound() || c.name != "" {
 		return c, err
 	}
 	sessions, err := s.backend.Discover(ctx)
@@ -288,7 +265,7 @@ func (s *Server) resolve(ctx context.Context, req *mcp.CallToolRequest) (caller,
 		return c, nil
 	}
 	for _, ss := range sessions {
-		if ss.Harness == adapter.Codex && ss.SessionRef == c.sessionRef {
+		if ss.Harness == c.harness && ss.SessionRef == c.sessionRef {
 			c.name, c.cwd = ss.Name, ss.Cwd
 			break
 		}
@@ -332,7 +309,7 @@ func boundTool[In any](s *Server, t *mcp.Tool, h func(context.Context, *Agent, I
 			return errResult(toolError(err))
 		}
 		if !c.bound() {
-			return errResult(&Error{Code: CodeUnbound, Reason: "no _meta.threadId and no Claude session for the parent pid"})
+			return errResult(&Error{Code: CodeUnbound, Reason: "no harness claims this call"})
 		}
 		a, notice, e := s.agent(ctx, c)
 		if e != nil {
