@@ -4,7 +4,7 @@ Cross-harness agent messaging: the shim (`crosstalk mcp`, an MCP server the harn
 
 ## Architecture
 
-- Go, single static binary (`crosstalk`). CrossTalk spawns and wraps nothing: `crosstalk mcp` is the shim, installed once per harness (`claude mcp add --scope user crosstalk -- crosstalk mcp`; Codex `[mcp_servers.crosstalk]` `command = "crosstalk"`, `args = ["mcp"]`, `default_tools_approval_mode = "approve"`, which stops Codex from prompting on every CrossTalk tool call). ADR 0002, ADR 0006 (supersedes ADR 0005). Each harness is one package behind `harness.Harness`, compiled into the one binary (ADR 0008): shim, mcpserver and a2a import no harness package. Codex delivery as toolOutput: ADR 0007 (Codex-authored, branch codex/toolout). Native replies are bounced back to their own session, never routed: ADR 0009.
+- Go, single static binary (`crosstalk`). CrossTalk spawns and wraps nothing: `crosstalk mcp` is the shim, installed once per harness (`claude mcp add --scope user crosstalk -- crosstalk mcp`; Codex `[mcp_servers.crosstalk]` `command = "crosstalk"`, `args = ["mcp"]`, `default_tools_approval_mode = "approve"`, which stops Codex from prompting on every CrossTalk tool call). ADR 0002, ADR 0006 (supersedes ADR 0005). Each harness is one package behind `harness.Harness`, compiled into the one binary (ADR 0008): shim, mcpserver and a2a import no harness package. Codex delivery as toolOutput: ADR 0007 (Codex-authored, branch codex/toolout). Native replies are bounced back to their own session, never routed: ADR 0009. Plugins and the skill: ADR 0013, tree under `plugins/crosstalk/`.
 - Identity per request, never per process: Claude from the parent pid (`~/.claude/sessions/<ppid>.json`), Codex from `params._meta.threadId` on each `tools/call`; neither → `unbound`. One process may serve several Codex threads (pooling); one agent record per (harness, session_ref).
 - Model-facing: MCP over stdio, seven tools (`list_agents`, `send_message`, `reply`, `ask`, `receive_message`, `claim`, `release`).
 - Peer-facing: A2A over loopback HTTP plus a `/tmp/cc-socks`-compatible unix socket speaking Claude Code's two-line peer protocol.
@@ -32,7 +32,7 @@ Every ADR in this repo is provisional (operator ruling, 2026-11-04). An ADR may 
 
 ## Status
 
-v1 implemented on main. `docs/design.md` is still a draft under operator review, and its §11 tests gate "done" for v1 (test 17, the SDK conformance gate, is open).
+v1 implemented on main. Agent plugins and the skill are on `feat/agent-plugins` (ADR 0013; `docs/setup.md`); their live clean-account runs are not done (`docs/plans/agent-plugins-clean-run.md`). `docs/design.md` is still a draft under operator review, and its §11 tests gate "done" for v1 (test 17, the SDK conformance gate, is open).
 
 The repo is private. It goes public only after CI is in place (operator ruling, 2026-11-04), and after username paths and the stale README are fixed at HEAD. The operator flips the visibility. Commit author email stays as is; no history rewrite.
 

@@ -1,0 +1,46 @@
+# ADR 0013 — Ship CrossTalk to Claude Code and Codex as one plugin tree with a skill and MCP instructions
+
+- **Status:** Provisional
+- **Date:** 2026-11-04
+- **Deciders:** operator (Q1–Q6 of the plan), session
+- **Context source:** `docs/plans/agent-plugins.md` (approved 2026-11-04), including its Codex review (R1–R3)
+
+## Context
+
+A manual MCP install gave models the tools but not the knowledge to use them: they could not tell which `list_agents` row was themselves, called a Codex peer "the other Claude session", and gave up after `native_inform_only`. Design §12 had deferred plugins to after the review.
+
+## Decision
+
+- Fix tool output first: `you: true` on the caller's row, `from-harness` on the Claude envelope and `from_harness` in the Codex render, a no-authority `notice` on the Claude envelope, `hint` text for `no_such_agent`, `self`, `agent_held`, `unbound`, `not_ready` and `no_such_message`, and `crosstalk version`.
+- MCP `instructions` (at most 512 bytes, in Go, so a manual install gets them) carry the minimum.
+- One skill, `plugins/crosstalk/skills/crosstalk/SKILL.md`, serves both harnesses with bare tool names. A Go test fails when it names a code the source lacks or omits a state or hinted reason.
+- One plugin directory with `.claude-plugin/` and `.codex-plugin/` manifests, two marketplace files, and server key and command exactly `crosstalk`. Versions equal `mcpserver.Version` (test).
+- Install by `go install` with `GOBIN` on Homebrew's `bin`; no tap, no signed release. The Claude permission rule is added by hand. The Codex plugin sets `default_tools_approval_mode = "approve"`.
+- No hooks, commands or agents in the plugin; hooks stay v1.1.
+
+## Rejected alternatives
+
+- A plugin command that runs `go install` (hidden code execution), a prebuilt release (signing and notarization pipeline), a Homebrew tap (adds only `brew upgrade`), a `crosstalk install` that edits `settings.json` (writes user config; overlaps the agy installer).
+
+## Consequences
+
+- A release bumps one version number in three places under test.
+- Claude users with a manual entry must remove it (two shims otherwise; the second reports `agent_held`).
+- Eval cases live in `plugins/crosstalk/evals/` and run with `claude plugin eval`; Codex has no eval runner.
+
+## Not yet run live
+
+These plan facts rest on source reading or are untested, and no live run has confirmed them. Steps: `docs/plans/agent-plugins-clean-run.md`.
+
+| Fact | Status |
+|---|---|
+| 6. Codex: plugin plus manual entry with the same server name gives one registration | SOURCE only |
+| 7. Codex plugin server key must be `crosstalk` for delivery's hardcoded namespace | SOURCE only |
+| 8. Codex `_meta.threadId` binds through a plugin-started server | UNKNOWN live |
+| 9. Codex honours the plugin's `default_tools_approval_mode` when the user has no entry, and a user `prompt` entry still prompts | SOURCE and docs only |
+| PATH seen by a harness launched outside a shell | UNKNOWN |
+| Codex private-repo marketplace clone | UNKNOWN |
+| Plain-request live runs (plan commit 7) and the install matrix (commit 8) | not run |
+| `docs/setup.md` on a clean account | not run |
+
+Claude facts 1–5 were run live on 2.1.318 before the plan was approved; the four eval cases (plan commit 6) passed on Haiku against mocked tools, which prove behaviour, not transport. The mocks carry no real tool schemas, and the MCP-only comparison arm of commit 6 was not built.
