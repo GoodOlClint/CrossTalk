@@ -6,6 +6,9 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"net"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -550,5 +553,49 @@ func TestInjectBoundedWhenAppServerNeverAnswers(t *testing.T) {
 	}
 	if state != adapter.Unknown || !errors.Is(err, appserver.ErrAmbiguous) {
 		t.Fatalf("state %v err %v, want unknown/ambiguous", state, err)
+	}
+}
+
+func TestRegisterSurvivesAnEndpointThatNeverAnswers(t *testing.T) {
+	healthy := appservertest.New(t)
+	healthy.AddThread(activeThread(thread))
+	dir, err := os.MkdirTemp("/tmp", "xt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	hung := filepath.Join(dir, "hung.sock")
+	ln, err := net.Listen("unix", hung)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			t.Cleanup(func() { c.Close() })
+		}
+	}()
+
+	old := codex.EndpointProbeTimeout
+	codex.EndpointProbeTimeout = 300 * time.Millisecond
+	defer func() { codex.EndpointProbeTimeout = old }()
+	ad := &codex.Adapter{ControlSocket: healthy.Endpoint(), Endpoints: []string{"unix://" + hung}}
+	done := make(chan struct{})
+	var bind adapter.Binding
+	go func() {
+		bind, err = ad.Register(context.Background(), thread)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Register blocked on an endpoint that never answers")
+	}
+	if err != nil || bind.HarnessEndpoint != healthy.Endpoint() {
+		t.Fatalf("Register = %+v, %v", bind, err)
 	}
 }
