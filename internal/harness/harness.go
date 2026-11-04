@@ -107,6 +107,28 @@ type NativeIngress interface {
 	NewIngress(cfg IngressConfig) Ingress
 }
 
+// Supersession is implemented by a harness that can prove a session ended
+// while its MCP connection lives on, as Claude Code's /clear does. A harness
+// without that proof does not implement it, and its sessions end only with
+// their shim. One process serving several live sessions is not such proof.
+type Supersession interface {
+	// Superseded reports that s no longer runs in the process s.HarnessPID.
+	// It must be false when the harness cannot tell.
+	Superseded(s Session) bool
+}
+
+// Superseded is the registry's test for a descriptor, answered by the harness
+// that wrote it.
+func Superseded(hs []Harness) func(registry.Descriptor) bool {
+	return func(d registry.Descriptor) bool {
+		if d.HarnessPID == nil {
+			return false
+		}
+		sup, ok := Lookup(hs, adapter.Harness(d.Harness)).(Supersession)
+		return ok && sup.Superseded(Session{Harness: adapter.Harness(d.Harness), SessionRef: d.SessionRef, HarnessPID: *d.HarnessPID})
+	}
+}
+
 // Lookup returns the harness named name.
 func Lookup(hs []Harness, name adapter.Harness) Harness {
 	for _, h := range hs {

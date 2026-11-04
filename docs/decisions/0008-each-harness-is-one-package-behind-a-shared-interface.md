@@ -39,6 +39,7 @@ type Identity struct { Name, Address string; Verified bool }
 // Optional: the first harness in the list that implements it serves every
 // agent's uds_path.
 type NativeIngress interface { NewIngress(cfg IngressConfig) Ingress }
+type Supersession interface { Superseded(s Session) bool } // optional: the harness can prove s ended while its MCP connection lives on (design §3)
 type Ingress interface { Listen() error; Serve(ctx context.Context) error; Close() error; Files() []string }
 
 var ErrAmbiguous error // Codex: thread loaded on more than one endpoint

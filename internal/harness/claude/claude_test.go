@@ -373,3 +373,35 @@ func TestRenderParityWithCodex(t *testing.T) {
 		}
 	}
 }
+
+func TestSupersededNeedsAnotherSessionInTheFile(t *testing.T) {
+	dir := t.TempDir()
+	h, err := NewHarness(HarnessOptions{SessionsDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := harness.Session{SessionRef: "old", HarnessPID: 4242}
+	if h.Superseded(s) {
+		t.Error("missing file is evidence")
+	}
+	for _, tc := range []struct {
+		body string
+		want bool
+	}{
+		{`{"pid":4242,"sessionId":"old"}`, false},
+		{`{"pid":4242,"sessionId":"new"}`, true},
+		{`{"pid":4242,"sessionId":""}`, false},
+		{`{"pid":77,"sessionId":"new"}`, false},
+		{`{"pid":4242,"sess`, false},
+	} {
+		if err := os.WriteFile(filepath.Join(dir, "4242.json"), []byte(tc.body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if got := h.Superseded(s); got != tc.want {
+			t.Errorf("%s: %v, want %v", tc.body, got, tc.want)
+		}
+	}
+	if h.Superseded(harness.Session{SessionRef: "old"}) {
+		t.Error("no pid is evidence")
+	}
+}

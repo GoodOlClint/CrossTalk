@@ -27,6 +27,10 @@ var (
 type Registry struct {
 	Dir       string
 	StartTime func(pid int) (time.Time, error)
+	// Superseded reports that d's session ended although d's shim is still
+	// running (harness.Superseded); nil means no descriptor is. Set it before
+	// the registry is shared.
+	Superseded func(d Descriptor) bool
 }
 
 func New(dir string) *Registry {
@@ -202,6 +206,23 @@ func (g *Registration) Publish(d Descriptor) error {
 	return nil
 }
 
+// ReleaseName removes the descriptor and releases the alias lock but keeps the
+// agent lock, for a superseded agent whose handlers did not stop: the agent
+// stops holding its name while its journal may still be written.
+func (g *Registration) ReleaseName() error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.agentLock == nil {
+		return nil
+	}
+	err := removeIfInstance(g.reg.DescriptorPath(g.desc.AgentID), g.desc.InstanceID)
+	if g.nameLock != nil {
+		g.nameLock.Close()
+		g.nameLock = nil
+	}
+	return err
+}
+
 // Rename moves the alias to newName: the new alias lock is taken first, the
 // descriptor is rewritten, then the old alias lock is released. agent_id,
 // instance_id and every agent_id-keyed path are unchanged (CQ9).
@@ -331,10 +352,12 @@ func (r *Registry) Live(d Descriptor) bool {
 	return err == nil && st.Equal(d.StartedAt)
 }
 
-// List returns the live descriptors. A stale descriptor (dead pid, or a live
-// pid whose start time differs from started_at) is removed when its agent lock
-// is free, and skipped either way.
-func (r *Registry) List() ([]Descriptor, error) {
+// IsSuperseded reports whether d's session has ended under a shim still running.
+func (r *Registry) IsSuperseded(d Descriptor) bool {
+	return r.Superseded != nil && r.Superseded(d)
+}
+
+func (r *Registry) descriptors() ([]Descriptor, error) {
 	paths, err := filepath.Glob(filepath.Join(r.agentsDir(), "*.json"))
 	if err != nil {
 		return nil, err
@@ -348,13 +371,45 @@ func (r *Registry) List() ([]Descriptor, error) {
 			}
 			return nil, err
 		}
-		if r.Live(d) {
-			out = append(out, d)
-			continue
-		}
-		r.prune(d)
+		out = append(out, d)
 	}
 	return out, nil
+}
+
+// List returns the descriptors of live sessions. A stale descriptor (dead pid,
+// or a live pid whose start time differs from started_at) is removed when its
+// agent lock is free, and skipped either way. A superseded descriptor is
+// skipped and left for its own shim to remove.
+func (r *Registry) List() ([]Descriptor, error) {
+	ds, err := r.descriptors()
+	if err != nil {
+		return nil, err
+	}
+	var out []Descriptor
+	for _, d := range ds {
+		switch {
+		case !r.Live(d):
+			r.prune(d)
+		case !r.IsSuperseded(d):
+			out = append(out, d)
+		}
+	}
+	return out, nil
+}
+
+// HeldBySuperseded reports whether name's holder is a superseded descriptor:
+// its alias lock is still held, by a shim that has not yet released it.
+func (r *Registry) HeldBySuperseded(name string) bool {
+	ds, err := r.descriptors()
+	if err != nil {
+		return false
+	}
+	for _, d := range ds {
+		if d.Name == name && r.Live(d) && r.IsSuperseded(d) {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *Registry) prune(stale Descriptor) {

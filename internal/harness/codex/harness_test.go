@@ -111,3 +111,10 @@ func TestDirectInputRequiresPositiveEvidence(t *testing.T) {
 		})
 	}
 }
+
+func TestCodexNeverClaimsSupersession(t *testing.T) {
+	var h harness.Harness = codex.NewHarness(codex.HarnessOptions{Adapter: &codex.Adapter{ControlSocket: t.TempDir() + "/absent.sock"}})
+	if _, ok := h.(harness.Supersession); ok {
+		t.Fatal("a pooled process serves several live threads; Codex has no proof that one ended")
+	}
+}

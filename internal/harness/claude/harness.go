@@ -36,6 +36,7 @@ type Harness struct {
 var (
 	_ harness.Harness       = (*Harness)(nil)
 	_ harness.NativeIngress = (*Harness)(nil)
+	_ harness.Supersession  = (*Harness)(nil)
 )
 
 func NewHarness(opt HarnessOptions) (*Harness, error) {
@@ -97,6 +98,17 @@ func (h *Harness) Bind(_ context.Context, req harness.RequestContext) (adapter.B
 		return adapter.Binding{}, true, err
 	}
 	return s.Binding(), true, nil
+}
+
+// Superseded reports that the session file of s's process names another
+// session. A missing or unreadable file is no evidence: Claude Code rewrites
+// the file in place.
+func (h *Harness) Superseded(s harness.Session) bool {
+	if s.HarnessPID <= 0 {
+		return false
+	}
+	cur, err := h.a.readSession(s.HarnessPID)
+	return err == nil && cur.SessionID != s.SessionRef
 }
 
 // Discover reads every live session file; they are never consulted for

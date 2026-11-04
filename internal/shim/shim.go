@@ -129,6 +129,7 @@ func New(opt Options) (*Shim, error) {
 		opt.Now = time.Now
 	}
 	s := &Shim{opt: opt, reg: registry.New(opt.StateDir), log: opt.Logger, agents: map[string]*AgentState{}}
+	s.reg.Superseded = harness.Superseded(opt.Harnesses)
 	if s.log == nil {
 		s.log = slog.Default()
 	}

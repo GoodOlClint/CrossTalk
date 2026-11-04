@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"sync"
+	"time"
 
 	"github.com/google/jsonschema-go/jsonschema"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -18,7 +20,12 @@ import (
 	"github.com/GoodOlClint/crosstalk/internal/registry"
 )
 
-const Version = "0.1.0"
+const (
+	Version = "0.1.0"
+	// DefaultSupersedeInterval bounds how long a superseded session whose
+	// replacement has made no CrossTalk call keeps its name lock.
+	DefaultSupersedeInterval = 2 * time.Second
+)
 
 type Options struct {
 	Backend Backend
@@ -28,6 +35,9 @@ type Options struct {
 	Harnesses []harness.Harness
 	// PPID is the parent pid every request context carries; 0 means os.Getppid().
 	PPID int
+	// SupersedeInterval is how often Run checks for superseded agents; 0 means
+	// DefaultSupersedeInterval.
+	SupersedeInterval time.Duration
 }
 
 type Server struct {
@@ -36,6 +46,7 @@ type Server struct {
 	harnesses []harness.Harness
 	ppid      int
 	mcp       *mcp.Server
+	interval  time.Duration
 
 	mu     sync.Mutex
 	agents map[string]*Agent
@@ -56,7 +67,11 @@ func New(opt Options) *Server {
 		reg:       opt.Registry,
 		harnesses: opt.Harnesses,
 		ppid:      opt.PPID,
+		interval:  opt.SupersedeInterval,
 		agents:    map[string]*Agent{},
+	}
+	if s.interval == 0 {
+		s.interval = DefaultSupersedeInterval
 	}
 	if s.backend == nil {
 		s.backend = Unwired{}
@@ -73,8 +88,68 @@ func (s *Server) MCP() *mcp.Server { return s.mcp }
 
 // Run serves MCP on t until the client disconnects, then closes every agent.
 func (s *Server) Run(ctx context.Context, t mcp.Transport) error {
+	wctx, stop := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		tick := time.NewTicker(s.interval)
+		defer tick.Stop()
+		for {
+			select {
+			case <-wctx.Done():
+				return
+			case <-tick.C:
+				s.RetireSuperseded()
+			}
+		}
+	}()
 	err := s.mcp.Run(ctx, t)
+	stop()
+	<-done
 	return errors.Join(err, s.Close())
+}
+
+// RetireSuperseded ends the registration of every agent of this process whose
+// harness says its session is gone, the same way process exit ends one: the
+// listeners stop and the descriptor and locks go, and the journal stays for a
+// later resume. If handlers do not stop, the name is still released and the
+// agent lock stays until process exit.
+func (s *Server) RetireSuperseded() {
+	s.mu.Lock()
+	ready := make([]*Agent, 0, len(s.agents))
+	for _, a := range s.agents {
+		if a.isReady() {
+			ready = append(ready, a)
+		}
+	}
+	s.mu.Unlock()
+	ac, _ := s.backend.(AgentCloser)
+	for _, a := range ready {
+		if !s.reg.IsSuperseded(a.Descriptor()) {
+			continue
+		}
+		s.mu.Lock()
+		mine := s.agents[a.id] == a
+		if mine {
+			delete(s.agents, a.id)
+		}
+		s.mu.Unlock()
+		if !mine {
+			continue
+		}
+		var err error
+		if ac != nil {
+			err = ac.CloseAgent(a)
+		}
+		if errors.Is(err, ErrCloseTimeout) {
+			err = errors.Join(err, a.reg.ReleaseName())
+		} else {
+			err = errors.Join(err, a.close())
+		}
+		if err != nil {
+			slog.Warn("mcpserver: retiring superseded agent", "agent", a.id, "err", err)
+		}
+	}
 }
 
 // Close removes this process's own-instance descriptors and releases their locks.
@@ -117,6 +192,7 @@ func (s *Server) agent(ctx context.Context, c caller) (*Agent, string, *Error) {
 		a = &Agent{id: id, harness: c.harness, sessionRef: c.sessionRef, req: c.req, ready: make(chan struct{})}
 		s.agents[id] = a
 		s.mu.Unlock()
+		s.RetireSuperseded()
 		notice, err := s.register(ctx, a, c)
 		if err != nil {
 			s.mu.Lock()
@@ -209,30 +285,45 @@ func (s *Server) register(ctx context.Context, a *Agent, c caller) (notice strin
 		p.Published(a)
 	}
 	if c.name != "" && g.Name() != c.name {
-		notice = fmt.Sprintf("registered as %q: harness name %q is held by another live agent", g.Name(), c.name)
+		notice = s.heldNotice("registered as", g.Name(), c.name)
 	}
 	return notice, nil
 }
 
+func (s *Server) heldNotice(prefix, name, harnessName string) string {
+	if s.reg.HeldBySuperseded(harnessName) {
+		return fmt.Sprintf("%s %q: harness name %q is held by a session that has ended until its shim releases it; a later call takes it", prefix, name, harnessName)
+	}
+	return fmt.Sprintf("%s %q: harness name %q is held by another live agent", prefix, name, harnessName)
+}
+
 // followRename moves the alias when the harness session name changed since
-// the last call; agent_id and every agent_id-keyed path stay (CQ9).
+// the last call, and retries on every call while the harness name is held;
+// agent_id and every agent_id-keyed path stay (CQ9).
 func (s *Server) followRename(a *Agent, c caller) string {
 	if c.name == "" {
 		return ""
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if c.name == a.harnessName {
+	changed := c.name != a.harnessName
+	if !changed && c.name == a.reg.Name() {
 		return ""
 	}
 	err := a.reg.Rename(c.name)
 	switch {
 	case err == nil:
 		a.harnessName = c.name
-		return ""
+		if changed {
+			return ""
+		}
+		return fmt.Sprintf("now registered as %q: the harness name is free", c.name)
 	case errors.Is(err, registry.ErrNameHeld):
 		a.harnessName = c.name
-		return fmt.Sprintf("still registered as %q: harness name %q is held by another live agent", a.reg.Name(), c.name)
+		if !changed {
+			return ""
+		}
+		return s.heldNotice("still registered as", a.reg.Name(), c.name)
 	default:
 		return fmt.Sprintf("rename to %q failed: %v", c.name, err)
 	}

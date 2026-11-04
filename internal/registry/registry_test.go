@@ -429,3 +429,49 @@ func TestLookupEmptyNameMatchesNothing(t *testing.T) {
 		t.Fatal("empty name resolves")
 	}
 }
+
+func TestListSkipsSupersededAndKeepsItsFile(t *testing.T) {
+	r := New(t.TempDir())
+	g, err := r.Acquire(Request{AgentID: "a1", HarnessName: "n", Harness: "claude", Cwd: "/w"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.Close()
+	if err := g.Publish(Descriptor{}); err != nil {
+		t.Fatal(err)
+	}
+	if r.HeldBySuperseded("n") {
+		t.Error("live holder reported superseded")
+	}
+	r.Superseded = func(Descriptor) bool { return true }
+	if ds, _ := r.List(); len(ds) != 0 {
+		t.Fatalf("listed %+v", ds)
+	}
+	if _, ok, _ := r.Lookup("n"); ok {
+		t.Error("superseded name resolves")
+	}
+	if !r.HeldBySuperseded("n") {
+		t.Error("holder not reported superseded")
+	}
+	if _, err := os.Stat(r.DescriptorPath("a1")); err != nil {
+		t.Errorf("file removed by a reader: %v", err)
+	}
+	if err := g.ReleaseName(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(r.DescriptorPath("a1")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("descriptor survives ReleaseName: %v", err)
+	}
+	r.Superseded = nil
+	other, err := r.Acquire(Request{AgentID: "a2", HarnessName: "n", Harness: "claude", Cwd: "/w"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	if other.Name() != "n" {
+		t.Errorf("name %q", other.Name())
+	}
+	if _, err := r.Acquire(Request{AgentID: "a1", Harness: "claude", Cwd: "/w"}); !errors.Is(err, ErrAgentHeld) {
+		t.Errorf("agent lock released: %v", err)
+	}
+}

@@ -472,3 +472,32 @@ func TestCloseKeepsOwnershipWhenAgentCloseTimesOut(t *testing.T) {
 		t.Fatalf("Acquire err = %v, want ErrAgentHeld while a handler may still run", err)
 	}
 }
+
+func TestRetireReleasesNameWhenCloseTimesOut(t *testing.T) {
+	fb := NewFakeBackend()
+	fb.SetSessions(
+		Session{Harness: "codex", SessionRef: "T-old", Name: "shared", Cwd: "/w"},
+		Session{Harness: "codex", SessionRef: "T-new", Name: "shared", Cwd: "/w"},
+	)
+	e := newEnv(t, 999999, fb)
+	e.srv.backend = timedOutCloser{e.fb}
+	e.mustOK(thread("T-old"), "send_message", sendArgs("x", "1"))
+	oldID := codexID("T-old")
+	e.reg.Superseded = func(d registry.Descriptor) bool { return d.AgentID == oldID }
+
+	out := e.mustOK(thread("T-new"), "send_message", sendArgs("x", "2"))
+	if out["notice"] != nil {
+		t.Errorf("notice %v", out["notice"])
+	}
+	if d := e.descriptor(codexID("T-new")); d.Name != "shared" {
+		t.Fatalf("new holder %+v", d)
+	}
+	_, err := registry.New(e.stateDir).Acquire(registry.Request{AgentID: oldID, Harness: "codex", Cwd: "/w"})
+	if !errors.Is(err, registry.ErrAgentHeld) {
+		t.Fatalf("Acquire err = %v, want ErrAgentHeld while a handler may still run", err)
+	}
+	isErr, res := e.call(thread("T-old"), "send_message", sendArgs("x", "3"))
+	if !isErr || res["reason"] != "agent_held" {
+		t.Fatalf("resume during timeout: %v %v", isErr, res)
+	}
+}

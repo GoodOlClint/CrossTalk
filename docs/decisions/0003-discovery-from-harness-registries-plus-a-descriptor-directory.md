@@ -25,3 +25,4 @@ A shim publishes no Claude-visible record in `~/.claude/sessions/` in v1: a repl
 
 - Registration takes two `flock`s held for its lifetime: an agent record lock keyed by agent_id and an alias lock keyed by name. A held name lock sends the newcomer to a fallback name (design §3).
 - Stale-record cleanup must check pid reuse (start time), not pid existence.
+- A live shim does not prove a live session: Claude Code's `/clear` keeps the process and shim and starts a new session id. The harness that can prove a session ended says so (`harness.Supersession`, ADR 0008), readers skip such a descriptor, and its shim retires the agent and releases both locks, keeping the journal for a resume (design §3 Superseded sessions). Keeping the old record running but unaddressable was rejected: it needs a second state for one record, and the exit path already keeps everything a resume needs.
