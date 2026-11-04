@@ -215,7 +215,7 @@ func (s *Server) Listen() (string, error) {
 		Logger:       s.cfg.Logger,
 	}
 	mux := http.NewServeMux()
-	mux.Handle("/{$}", limitBody(a2asrv.NewJSONRPCHandler(h)))
+	mux.Handle("/{$}", s.admitted(limitBody(a2asrv.NewJSONRPCHandler(h))))
 	mux.Handle(a2asrv.WellKnownAgentCardPath, loopbackCard(a2asrv.NewAgentCardHandler(cardProducer{s: s})))
 
 	s.mu.Lock()
@@ -271,6 +271,19 @@ func (c *corsStripper) WriteHeader(code int) {
 func (c *corsStripper) Write(b []byte) (int, error) {
 	c.strip()
 	return c.ResponseWriter.Write(b)
+}
+
+// admitted holds the shutdown drain for the whole request: http.Server.Close
+// does not wait for running handlers, and they write the journal.
+func (s *Server) admitted(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !s.admit() {
+			http.Error(w, "server closing", http.StatusServiceUnavailable)
+			return
+		}
+		defer s.wg.Done()
+		next.ServeHTTP(w, r)
+	})
 }
 
 // limitBody rejects oversized requests as JSON-RPC invalid-request errors so the

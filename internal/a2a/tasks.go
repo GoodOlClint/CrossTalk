@@ -730,6 +730,10 @@ func (s *Server) armDeadline(t *task) {
 		return
 	}
 	expire := func() {
+		if !s.admit() {
+			return
+		}
+		defer s.wg.Done()
 		if done, _ := s.tasks.update(t, sdk.TaskStateFailed, "", ReasonDeadline, failedStatus(t, "failed", ReasonDeadline)); done {
 			s.askClosed(t)
 		}

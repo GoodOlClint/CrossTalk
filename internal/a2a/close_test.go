@@ -3,6 +3,8 @@ package a2a
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
@@ -136,5 +138,62 @@ func TestContinuationAfterCloseRefused(t *testing.T) {
 	}
 	if r.received(second.ID) {
 		t.Fatal("continuation after close reached the receiver")
+	}
+}
+
+func TestCloseContextWaitsForTaskDeadlineCallback(t *testing.T) {
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	e := newEnv(t, receiver.Limits{}, Limits{}, func(s *Server) {
+		s.cfg.OnAskClosed = func([]string) {
+			once.Do(func() { close(entered) })
+			<-release
+		}
+	})
+	t.Cleanup(func() { e.srv.Close() })
+	cl, ctx := e.peer()
+	d := textMsg("anyone?", map[string]any{"kind": "ask", "deadline_seconds": 1})
+	if _, err := cl.SendMessage(ctx, &sdk.SendMessageRequest{Message: d, Config: &sdk.SendMessageConfig{ReturnImmediately: true}}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("deadline callback never ran")
+	}
+	short, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	err := e.srv.CloseContext(short)
+	close(release)
+	if !errors.Is(err, ErrWorkersRunning) {
+		t.Fatalf("CloseContext with a deadline callback running = %v, want ErrWorkersRunning", err)
+	}
+}
+
+func TestCloseContextWaitsForHTTPHandler(t *testing.T) {
+	s := NewServer(Config{})
+	entered, release := make(chan struct{}), make(chan struct{})
+	h := s.admitted(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		close(entered)
+		<-release
+	}))
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/", nil))
+	}()
+	<-entered
+	short, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	err := s.CloseContext(short)
+	close(release)
+	<-done
+	if !errors.Is(err, ErrWorkersRunning) {
+		t.Fatalf("CloseContext with a handler running = %v, want ErrWorkersRunning", err)
+	}
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/", nil))
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("request after close: %d", rec.Code)
 	}
 }

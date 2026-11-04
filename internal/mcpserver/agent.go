@@ -33,9 +33,10 @@ type Agent struct {
 	calls    sync.WaitGroup
 }
 
-// admit registers a tool call with the agent's drain; the caller must call
-// a.calls.Done when it returns true.
-func (a *Agent) admit() bool {
+// Admit registers a journal writer (a tool call or a background worker) with
+// the agent's drain; the caller must call Done when it returns true. A writer
+// refused here does nothing and leaves durable state for replay.
+func (a *Agent) Admit() bool {
 	a.callMu.Lock()
 	defer a.callMu.Unlock()
 	if a.draining {
@@ -45,14 +46,16 @@ func (a *Agent) admit() bool {
 	return true
 }
 
+func (a *Agent) Done() { a.calls.Done() }
+
 func (a *Agent) stopCalls() {
 	a.callMu.Lock()
 	a.draining = true
 	a.callMu.Unlock()
 }
 
-// Drain refuses new tool calls for the agent and waits for those in flight
-// until ctx ends. The journal must stay open until it returns nil.
+// Drain refuses new journal writers for the agent and waits for those in
+// flight until ctx ends. The journal must stay open until it returns nil.
 func (a *Agent) Drain(ctx context.Context) error {
 	a.stopCalls()
 	done := make(chan struct{})

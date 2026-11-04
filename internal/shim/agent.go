@@ -180,8 +180,11 @@ func (s *Shim) Published(a *mcpserver.Agent) {
 	s.mu.Lock()
 	st := s.agents[a.ID()]
 	s.mu.Unlock()
-	if st != nil && st.agent == a && st.started() {
-		go st.retryObligations()
+	if st != nil && st.agent == a && st.started() && a.Admit() {
+		go func() {
+			defer a.Done()
+			st.retryObligations()
+		}()
 	}
 }
 
@@ -204,7 +207,7 @@ func (s *Shim) CloseAgent(a *mcpserver.Agent) error {
 
 // HandlerCloseWait bounds how long closeState waits, in total, for the A2A
 // listener and the UDS handlers to stop after their context is cancelled and
-// for the agent's in-flight tool calls to finish.
+// for the agent's in-flight tool calls and background workers to finish.
 var HandlerCloseWait = 5 * time.Second
 
 func (s *Shim) closeState(st *AgentState) error {

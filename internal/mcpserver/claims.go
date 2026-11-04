@@ -114,6 +114,10 @@ func (a *Agent) ApplyRelease(ownerID string) error { return a.applyRelease(owner
 // republishes its descriptor as a subagent. The journal, not the descriptor,
 // is authoritative for the check.
 func (a *Agent) applyClaim(ownerID, ownerName string) error {
+	if !a.Admit() {
+		return rejected("agent_retiring")
+	}
+	defer a.Done()
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if r, ok := a.j.Latest(journal.Record{Type: journal.TypeClaim}); ok && r.Claimed {
@@ -128,6 +132,10 @@ func (a *Agent) applyClaim(ownerID, ownerName string) error {
 }
 
 func (a *Agent) applyRelease(ownerID string) error {
+	if !a.Admit() {
+		return rejected("agent_retiring")
+	}
+	defer a.Done()
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	r, ok := a.j.Latest(journal.Record{Type: journal.TypeClaim})

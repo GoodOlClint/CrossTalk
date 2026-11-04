@@ -505,7 +505,7 @@ func TestRetireReleasesNameWhenCloseTimesOut(t *testing.T) {
 
 func TestDrainRefusesNewCallsAndWaitsForThoseInFlight(t *testing.T) {
 	a := &Agent{}
-	if !a.admit() {
+	if !a.Admit() {
 		t.Fatal("first call refused")
 	}
 	short, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
@@ -513,10 +513,10 @@ func TestDrainRefusesNewCallsAndWaitsForThoseInFlight(t *testing.T) {
 	if err := a.Drain(short); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("Drain with a call in flight: %v", err)
 	}
-	if a.admit() {
+	if a.Admit() {
 		t.Fatal("call admitted after drain began")
 	}
-	a.calls.Done()
+	a.Done()
 	if err := a.Drain(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -525,8 +525,8 @@ func TestDrainRefusesNewCallsAndWaitsForThoseInFlight(t *testing.T) {
 	var wg sync.WaitGroup
 	for range 32 {
 		wg.Go(func() {
-			if b.admit() {
-				b.calls.Done()
+			if b.Admit() {
+				b.Done()
 			}
 		})
 	}

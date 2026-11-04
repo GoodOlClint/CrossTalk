@@ -30,7 +30,7 @@ func (s *Server) listAgentsTool(ctx context.Context, req *mcp.CallToolRequest, _
 		if a, n, e := s.agent(ctx, c); e != nil {
 			notice = "not registered: " + e.Error()
 		} else {
-			a.calls.Done()
+			a.Done()
 			notice = n
 		}
 	}

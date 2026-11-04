@@ -212,7 +212,7 @@ func (s *Server) agent(ctx context.Context, c caller) (*Agent, string, *Error) {
 			close(a.ready)
 			return nil, "", toolError(err)
 		}
-		a.admit()
+		a.Admit()
 		close(a.ready)
 		return a, notice, nil
 	}
@@ -225,7 +225,7 @@ func (s *Server) agent(ctx context.Context, c caller) (*Agent, string, *Error) {
 	if a.err != nil {
 		return nil, "", &Error{Code: CodeNotReady, Reason: "binding_failed"}
 	}
-	if !a.admit() {
+	if !a.Admit() {
 		return nil, "", &Error{Code: CodeNotReady, Reason: "agent_retiring"}
 	}
 	return a, s.followRename(a, c), nil
@@ -429,7 +429,7 @@ func boundTool[In any](s *Server, t *mcp.Tool, h func(context.Context, *Agent, I
 		if e != nil {
 			return errResult(e)
 		}
-		defer a.calls.Done()
+		defer a.Done()
 		out, err := h(ctx, a, in)
 		if err != nil {
 			return errResult(toolError(err))

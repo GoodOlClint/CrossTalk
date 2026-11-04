@@ -322,6 +322,10 @@ func (st *AgentState) rearmDeadlines() {
 // expire tells this agent's own session that an ask got no reply in time
 // (§8 V15). Work already injected at the target is not stopped.
 func (st *AgentState) expire(ask msg.Message) {
+	if !st.agent.Admit() {
+		return
+	}
+	defer st.agent.Done()
 	st.mu.Lock()
 	delete(st.deadline, ask.MessageID)
 	closed := st.closed
