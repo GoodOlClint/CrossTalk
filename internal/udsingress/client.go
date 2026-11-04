@@ -22,15 +22,15 @@ type Ack struct {
 // using the key file next to it, and returns the ack. It never creates a key.
 func Send(path, text string, timeout time.Duration) (Ack, error) {
 	var ack Ack
+	user, _ := json.Marshal(map[string]any{"type": "user", "message": map[string]string{"role": "user", "content": text}})
+	if len(user) > DefaultMaxFrame {
+		return ack, fmt.Errorf("message is %d bytes encoded; the limit is %d", len(user), DefaultMaxFrame)
+	}
 	raw, err := os.ReadFile(KeyPath(path))
 	if err != nil {
 		return ack, err
 	}
 	auth, _ := json.Marshal(map[string]string{"type": "auth", "token": strings.TrimSpace(string(raw))})
-	user, _ := json.Marshal(map[string]any{"type": "user", "message": map[string]string{"role": "user", "content": text}})
-	if len(user) > DefaultMaxFrame {
-		return ack, fmt.Errorf("message is %d bytes encoded; the limit is %d", len(user), DefaultMaxFrame)
-	}
 	c, err := net.DialTimeout("unix", path, 3*time.Second)
 	if err != nil {
 		return ack, err
