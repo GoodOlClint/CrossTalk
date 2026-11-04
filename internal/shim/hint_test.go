@@ -3,7 +3,9 @@ package shim
 import (
 	"os"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestNativeInformOnlyCarriesHonestHint(t *testing.T) {
@@ -107,5 +109,47 @@ func TestReplyToFirstContactInformHintsSendMessage(t *testing.T) {
 	_, out := nb.call(thread("T-bob"), "reply", map[string]any{"message_id": id, "text": "hi"})
 	if h, _ := out["hint"].(string); out["reason"] != ReasonNoSuchMessage || !strings.Contains(h, "send_message") {
 		t.Fatalf("reply %v", out)
+	}
+}
+
+func TestNoSuchMessageHintSaysWhyItIsGone(t *testing.T) {
+	w := newWorld(t)
+	alice := w.claude(4001, "sess-alice", "alice")
+	w.codex.addThread("T-bob", "bob")
+	t0 := time.Date(2026, 11, 3, 13, 0, 0, 0, time.UTC)
+	var mu sync.Mutex
+	now := t0
+	clock := func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+	na := w.node(alice.pid, w.lb, nil)
+	nb := w.node(1, w.lb, func(o *Options) { o.Now = clock })
+
+	early := na.ok(nil, "send_message", send("bob", "before bind"))["message_id"]
+	nb.ok(thread("T-bob"), "receive_message", map[string]any{})
+	_, out := nb.call(thread("T-bob"), "reply", map[string]any{"message_id": early, "text": "x"})
+	if h, _ := out["hint"].(string); !strings.Contains(h, "before this session bound") || !strings.Contains(h, "nothing expired") || !strings.Contains(h, "send_message") {
+		t.Fatalf("pre-bind hint %q", h)
+	}
+
+	old := na.ok(nil, "send_message", send("bob", "fyi"))["message_id"]
+	mu.Lock()
+	now = now.Add(61 * time.Minute)
+	mu.Unlock()
+	_, out = nb.call(thread("T-bob"), "reply", map[string]any{"message_id": old, "text": "x"})
+	if h, _ := out["hint"].(string); !strings.Contains(h, "expired after one hour") || !strings.Contains(h, "send_message") {
+		t.Fatalf("expired hint %q", h)
+	}
+}
+
+func TestAcceptedNativeSendWarnsOneWay(t *testing.T) {
+	w := newWorld(t)
+	alice := w.claude(4001, "sess-alice", "alice")
+	w.claude(4002, "sess-bob", "bob")
+	na := w.node(alice.pid, nil, nil)
+	res := na.ok(nil, "send_message", send("bob", "fyi"))
+	if res["state"] != "accepted" {
+		t.Fatalf("send %v", res)
+	}
+	if h, _ := res["hint"].(string); !strings.Contains(h, "one way") || !strings.Contains(h, "wait on that session's user") {
+		t.Fatalf("hint %q", h)
 	}
 }

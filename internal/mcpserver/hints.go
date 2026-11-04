@@ -11,7 +11,7 @@ var Hints = map[string]string{
 	"loop_cap":        "You have sent this session many messages in a short time, which looks like a loop. Stop sending to it and tell the user; receive_message shows anything it sent back.",
 	"hop_repeat":      "This message would return to a session already in the chain that led to it, so CrossTalk stopped it. Do not forward it again; answer with reply to the original message, or tell the user.",
 	"hop_overflow":    "This chain of forwards is too long, so CrossTalk stopped it. Do not forward it again; tell the user.",
-	"no_such_message": "No reply route exists for that message_id: it was a first-contact inform that arrived before this session bound, or its route expired. Use send_message to the sender instead.",
+	"no_such_message": "No reply route exists for that message_id. Use send_message to the sender instead.",
 }
 
 func hintFor(reason string) string { return Hints[reason] }

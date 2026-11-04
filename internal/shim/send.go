@@ -29,6 +29,9 @@ const (
 const (
 	hintNativeReachable   = "This session has no CrossTalk binding yet, so it takes no ask or command. send_message with the default kind reaches it; if CrossTalk is installed there, its first CrossTalk call binds it, and then ask works."
 	hintNativeUnreachable = "This session has no CrossTalk binding yet and its harness reports it unreachable, so nothing can reach it now. Check list_agents later; if CrossTalk is installed there, its first CrossTalk call binds it, and then ask works."
+	hintNativeOneWay      = "Delivered one way to a session with no CrossTalk binding. An answer may never come, or may wait on that session's user."
+	hintNoRouteUnbound    = "This message arrived before this session bound, so it has no reply route; nothing expired. Use send_message to the sender."
+	hintNoRouteExpired    = "This inform's reply route expired after one hour. Use send_message to the sender."
 	hintAmbiguousName     = "Several sessions carry this name. Find the one you mean in list_agents and address it by agent_id."
 )
 
@@ -311,7 +314,11 @@ func (st *AgentState) deliver(ctx context.Context, m msg.Message) mcpserver.Resu
 	if err != nil {
 		reason = err.Error()
 	}
-	return finish(to, state, reason)
+	res = finish(to, state, reason)
+	if reason == "" && (state == adapter.Accepted || state == adapter.Queued) {
+		res.Hint = hintNativeOneWay
+	}
+	return res
 }
 
 func (s *Shim) Send(ctx context.Context, from *mcpserver.Agent, req mcpserver.SendRequest) (mcpserver.Result, error) {
@@ -514,7 +521,7 @@ func (s *Shim) Reply(ctx context.Context, from *mcpserver.Agent, messageID, text
 	defer st.replyMu.Unlock()
 	orig, key, ok := st.inbound(messageID)
 	if !ok {
-		return mcpserver.Result{}, &mcpserver.Error{Code: mcpserver.CodeInvalid, Reason: ReasonNoSuchMessage}
+		return mcpserver.Result{}, &mcpserver.Error{Code: mcpserver.CodeInvalid, Reason: ReasonNoSuchMessage, Hint: hintNoRouteUnbound}
 	}
 	if key == receiver.LabelUnverified {
 		return mcpserver.Result{}, &mcpserver.Error{Code: string(adapter.Unreachable), Reason: ReasonSenderUnverified}
@@ -535,7 +542,7 @@ func (s *Shim) Reply(ctx context.Context, from *mcpserver.Agent, messageID, text
 		return mcpserver.Result{}, askClosed(orig)
 	}
 	if mcpserver.IsAgentID(key) && orig.Kind != msg.Ask && !st.rcv.RouteOpen(orig.MessageID) {
-		return mcpserver.Result{}, &mcpserver.Error{Code: mcpserver.CodeInvalid, Reason: ReasonNoSuchMessage}
+		return mcpserver.Result{}, &mcpserver.Error{Code: mcpserver.CodeInvalid, Reason: ReasonNoSuchMessage, Hint: hintNoRouteExpired}
 	}
 	r := st.newMessage(orig.From, msg.Inform, msg.Immediate, text)
 	irt, ctxID := st.replyTarget(orig)
