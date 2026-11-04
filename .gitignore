@@ -8,3 +8,4 @@
 graphify-out/
 .chunkhound/
 .chunkhound-index
+plugins/crosstalk/evals/results/

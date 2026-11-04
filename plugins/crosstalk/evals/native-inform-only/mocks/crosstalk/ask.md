@@ -1,0 +1,1 @@
+{"message_id":"0198aaaa-0000-7000-8000-000000000009","state":"rejected","reason":"native_inform_only","hint":"This session has no CrossTalk binding yet, so it takes no ask or command. send_message with the default kind reaches it; if CrossTalk is installed there, its first CrossTalk call binds it, and then ask works."}
