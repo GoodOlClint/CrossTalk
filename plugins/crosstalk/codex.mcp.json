@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "crosstalk": {
+      "command": "crosstalk",
+      "args": [
+        "mcp"
+      ],
+      "default_tools_approval_mode": "approve"
+    }
+  }
+}

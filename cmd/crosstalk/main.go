@@ -28,6 +28,7 @@ const usage = `usage: crosstalk <command>
 commands:
   mcp      run the shim as an MCP server over stdio
   capture  record raw Codex app-server frames for fixtures
+  version  print the version
 `
 
 func run(args []string, stdout, stderr io.Writer) int {
@@ -40,6 +41,9 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runMCP(stderr)
 	case "capture":
 		return runCapture(args[1:], stdout, stderr)
+	case "version":
+		fmt.Fprintln(stdout, mcpserver.Version)
+		return 0
 	case "help", "-h", "--help":
 		fmt.Fprint(stdout, usage)
 		return 0
