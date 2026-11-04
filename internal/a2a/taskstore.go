@@ -9,6 +9,7 @@ import (
 
 	sdk "github.com/a2aproject/a2a-go/v2/a2a"
 
+	"github.com/GoodOlClint/crosstalk/internal/adapter"
 	"github.com/GoodOlClint/crosstalk/internal/journal"
 	"github.com/GoodOlClint/crosstalk/internal/msg"
 )
@@ -177,12 +178,21 @@ func (st *store) replay(rs []journal.Record) {
 		if len(r.Message) > 0 {
 			var m sdk.Message
 			if json.Unmarshal(r.Message, &m) == nil {
-				t.history = append(t.history, &m)
-				if state.Terminal() {
-					t.status = &m
-				}
-				if m.Role == sdk.MessageRoleUser {
-					st.index(t, m.ID)
+				switch i := slices.IndexFunc(t.history, func(h *sdk.Message) bool { return h.ID == m.ID && h.Role == sdk.MessageRoleUser }); {
+				case m.Role == sdk.MessageRoleUser && i > 0 && deliveryState(&m) == string(adapter.Rejected):
+					t.history = slices.Delete(t.history, i, i+1)
+					st.unindex(t, m.ID)
+				case m.Role == sdk.MessageRoleUser && i > 0:
+					t.history[i] = &m
+				case m.Role == sdk.MessageRoleUser && deliveryState(&m) == string(adapter.Rejected):
+				default:
+					t.history = append(t.history, &m)
+					if state.Terminal() {
+						t.status = &m
+					}
+					if m.Role == sdk.MessageRoleUser {
+						st.index(t, m.ID)
+					}
 				}
 			}
 		}

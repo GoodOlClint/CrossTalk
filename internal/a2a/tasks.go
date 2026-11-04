@@ -302,23 +302,106 @@ func (st *store) markUnknown(t *task) {
 	_ = st.saveLocked(t, nil)
 }
 
-// appendContinuation records a continuation message of t and makes its
-// message id a handle that resolves to t.
-func (st *store) appendContinuation(t *task, m *sdk.Message) error {
+// beginContinuation durably appends continuation m to t's history, with
+// delivery state submitted, and makes its id a handle of t, before m can be
+// delivered. It reports whether m.ID is a continuation handle of t; an id
+// already associated with t is not appended again.
+func (st *store) beginContinuation(t *task, m *sdk.Message) (bool, error) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
-	if o, ok := st.byMsg[m.ID]; ok && o != t {
-		return badMessage("message_id is in use by another task")
+	if t.state.Terminal() {
+		return false, sdk.ErrUnsupportedOperation
 	}
+	if m.ID == t.messageID {
+		return false, nil
+	}
+	if o, ok := st.byMsg[m.ID]; ok {
+		if o != t {
+			return false, badMessage("message_id is in use by another task")
+		}
+		return true, nil
+	}
+	m = withDeliveryState(m, journal.StateSubmitted)
 	prev := *t
-	t.history = append(t.history, m)
+	t.history = append(slices.Clone(t.history), m)
 	t.updated = time.Now().UTC()
 	if err := st.saveLocked(t, m); err != nil {
 		t.history, t.updated = prev.history, prev.updated
-		return err
+		return false, err
 	}
 	st.index(t, m.ID)
+	return true, nil
+}
+
+// settleContinuation records the receiver's state for continuation id of t;
+// with unsettledOnly it does so only while the entry is still submitted. A
+// rejected continuation is removed from the history and its handle dropped. Nothing is journaled once t is terminal, because records after a
+// terminal one are ignored on replay.
+func (st *store) settleContinuation(t *task, id, state string, unsettledOnly bool) error {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	i := slices.IndexFunc(t.history, func(h *sdk.Message) bool { return h.ID == id && h.Role == sdk.MessageRoleUser })
+	if i <= 0 {
+		return nil
+	}
+	entry := t.history[i]
+	if cur := deliveryState(entry); cur == state || unsettledOnly && cur != journal.StateSubmitted {
+		return nil
+	}
+	settled := withDeliveryState(entry, state)
+	prevHistory, prevHandles := t.history, t.handles
+	if state == string(adapter.Rejected) {
+		st.unindex(t, id)
+		t.history = slices.Delete(slices.Clone(t.history), i, i+1)
+	} else {
+		t.history = slices.Clone(t.history)
+		t.history[i] = settled
+	}
+	if t.state.Terminal() {
+		return nil
+	}
+	if err := st.saveLocked(t, settled); err != nil {
+		if state == string(adapter.Rejected) {
+			return err
+		}
+		t.history, t.handles = prevHistory, prevHandles
+		return err
+	}
 	return nil
+}
+
+func (st *store) unindex(t *task, handle string) {
+	if st.byMsg[handle] == t {
+		delete(st.byMsg, handle)
+	}
+	t.handles = slices.DeleteFunc(slices.Clone(t.handles), func(h string) bool { return h == handle })
+}
+
+func (st *store) terminal(t *task) bool {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	return t.state.Terminal()
+}
+
+func deliveryState(m *sdk.Message) string {
+	ct, _ := m.Metadata[MetaKey].(map[string]any)
+	s, _ := ct["state"].(string)
+	return s
+}
+
+func withDeliveryState(m *sdk.Message, state string) *sdk.Message {
+	c := *m
+	c.Metadata = maps.Clone(m.Metadata)
+	if c.Metadata == nil {
+		c.Metadata = map[string]any{}
+	}
+	ct := map[string]any{}
+	if old, ok := c.Metadata[MetaKey].(map[string]any); ok {
+		ct = maps.Clone(old)
+	}
+	ct["state"] = state
+	c.Metadata[MetaKey] = ct
+	return &c
 }
 
 func (st *store) index(t *task, handle string) {
@@ -701,26 +784,25 @@ func (h *handler) continuation(ctx context.Context, snd receiver.Sender, m msg.M
 	tid := string(t.id)
 	m.TaskID = &tid
 
+	cont, err := s.tasks.beginContinuation(t, wire)
+	if err != nil {
+		if errors.Is(err, errBadMessage) || errors.Is(err, sdk.ErrUnsupportedOperation) {
+			return nil, err
+		}
+		return nil, sdk.NewError(sdk.ErrInternalError, "message could not be recorded")
+	}
 	res := s.cfg.Receiver.Receive(s.base, receiver.Inbound{Ingress: receiver.A2A, Message: m, Sender: snd})
+	if cont {
+		err = s.tasks.settleContinuation(t, wire.ID, string(res.State), res.Duplicate)
+		if s.tasks.terminal(t) {
+			s.askClosed(t)
+		}
+	}
 	if res.State == adapter.Rejected {
 		return nil, rejection(res.MessageID, res.Reason)
 	}
-	ct := map[string]any{}
-	if old, ok := wire.Metadata[MetaKey].(map[string]any); ok {
-		ct = maps.Clone(old)
-	}
-	ct["state"] = string(res.State)
-	if wire.Metadata == nil {
-		wire.Metadata = map[string]any{}
-	}
-	wire.Metadata[MetaKey] = ct
-	if !res.Duplicate {
-		if err := s.tasks.appendContinuation(t, wire); err != nil {
-			if errors.Is(err, errBadMessage) {
-				return nil, err
-			}
-			return nil, sdk.NewError(sdk.ErrInternalError, "message could not be recorded")
-		}
+	if err != nil {
+		return nil, sdk.NewError(sdk.ErrInternalError, "message could not be recorded")
 	}
 	if wait {
 		if err := s.await(ctx, t); err != nil {
