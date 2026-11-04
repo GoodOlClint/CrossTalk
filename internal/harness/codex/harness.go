@@ -37,9 +37,6 @@ type HarnessOptions struct {
 // the binding is the one endpoint that has the thread loaded.
 type Harness struct {
 	Threads
-	dir interface {
-		List() ([]registry.Descriptor, error)
-	}
 }
 
 var _ harness.Harness = (*Harness)(nil)
@@ -49,7 +46,10 @@ func NewHarness(opt HarnessOptions) *Harness {
 	if t == nil {
 		t = &Adapter{Logger: opt.Logger, ClientInfo: opt.ClientInfo}
 	}
-	return &Harness{Threads: t, dir: opt.Directory}
+	if a, ok := t.(*Adapter); ok && opt.Directory != nil {
+		a.Directory = opt.Directory
+	}
+	return &Harness{Threads: t}
 }
 
 func (h *Harness) Name() adapter.Harness { return adapter.Codex }
@@ -88,18 +88,8 @@ func (h *Harness) Bind(ctx context.Context, req harness.RequestContext) (adapter
 // harness_endpoint a Codex descriptor records. An absent daemon yields
 // nothing.
 func (h *Harness) Discover(ctx context.Context) ([]harness.Session, error) {
-	var extra []string
-	if h.dir != nil {
-		if ds, err := h.dir.List(); err == nil {
-			for _, d := range ds {
-				if d.Harness == string(adapter.Codex) && d.HarnessEndpoint != nil && *d.HarnessEndpoint != "" {
-					extra = append(extra, *d.HarnessEndpoint)
-				}
-			}
-		}
-	}
 	var out []harness.Session
-	for _, t := range h.LoadedThreads(ctx, extra...) {
+	for _, t := range h.LoadedThreads(ctx) {
 		out = append(out, harness.Session{Harness: adapter.Codex, SessionRef: t.ID, Name: t.Name, Cwd: t.Cwd, Status: t.Status,
 			Reachable: t.Session.Reachable, Endpoint: t.Endpoint})
 	}

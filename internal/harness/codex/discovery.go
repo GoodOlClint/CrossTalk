@@ -2,10 +2,8 @@ package codex
 
 import (
 	"context"
-	"slices"
 
 	"github.com/GoodOlClint/crosstalk/internal/adapter"
-	"github.com/GoodOlClint/crosstalk/internal/harness/codex/appserver"
 )
 
 // LoadedThread is one thread an endpoint reports in thread/loaded/list.
@@ -23,15 +21,9 @@ type LoadedThread struct {
 // A thread loaded on more than one endpoint is listed once, unreachable
 // (§3 CQ10).
 func (a *Adapter) LoadedThreads(ctx context.Context, extra ...string) []LoadedThread {
-	eps := a.KnownEndpoints()
-	for _, ep := range extra {
-		if n, err := appserver.NormalizeEndpoint(ep); err == nil && !slices.Contains(eps, n) {
-			eps = append(eps, n)
-		}
-	}
 	var out []LoadedThread
 	idx := map[string]int{}
-	for _, ep := range eps {
+	for _, ep := range a.KnownEndpoints(extra...) {
 		c, err := a.connect(ctx, ep)
 		if err != nil {
 			a.logger().Debug("codex: endpoint unavailable", "endpoint", ep, "err", err)
