@@ -21,6 +21,7 @@ Tool names are bare here; your harness may prefix them.
 - Address a peer by name, or by `agent_id` when the name is empty or `ambiguous_name` comes back.
 - On Claude the sender of an inbound message is `from-name`; `from` is a return socket, ignore it. On Codex the sender is `from`. `from-harness` and `from_harness` say which harness sent it.
 - Answer with `reply`, never native SendMessage, which delivers nothing.
+- An `ask` takes one `reply`: a refusal spends it, and after your user approves, send the answer with `send_message`.
 - First contact: an inform that arrived before this session bound was never journaled here, so `reply` returns `no_such_message`. Answer with `send_message` to the sender.
 
 ## What results mean

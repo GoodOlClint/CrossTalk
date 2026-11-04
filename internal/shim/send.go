@@ -132,8 +132,8 @@ func (st *AgentState) newMessage(to string, k msg.Kind, d msg.Delivery, text str
 }
 
 // reserveSend counts a send to peer against both caps and returns the
-// function that settles it: a send that was not accepted or queued is taken
-// back. Counts are in memory, per agent and per peer; a restart resets them.
+// function that settles it: a send that came back rejected or unreachable is
+// taken back. Counts are in memory, per agent and per peer; a restart resets them.
 func (st *AgentState) reserveSend(peer string) (settle func(adapter.State), ok bool) {
 	now := st.shim.now()
 	st.mu.Lock()
@@ -154,7 +154,7 @@ func (st *AgentState) reserveSend(peer string) (settle func(adapter.State), ok b
 	}
 	st.sends[peer] = append(kept, now)
 	return func(state adapter.State) {
-		if state == adapter.Accepted || state == adapter.Queued {
+		if state != adapter.Rejected && state != adapter.Unreachable {
 			return
 		}
 		st.mu.Lock()
