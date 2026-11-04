@@ -227,16 +227,34 @@ func (s *Server) handle(ctx context.Context, c *net.UnixConn) {
 	r := bufio.NewReader(c)
 
 	line, err := readLine(r, max)
-	if err != nil || !s.authOK(line) {
-		return
-	}
-	line, err = readLine(r, max)
-	if errors.Is(err, errTooLarge) {
-		writeAck(c, ack{State: string(adapter.Rejected), Reason: receiver.ReasonTooLarge})
-		return
-	}
 	if err != nil {
 		return
+	}
+	var sender receiver.Sender
+	if lineType(line) == "user" {
+		if perr != nil || serr != nil {
+			return
+		}
+		sender = s.identify(pid, started)
+		if !sender.Verified {
+			return
+		}
+	} else {
+		if !s.authOK(line) {
+			return
+		}
+		line, err = readLine(r, max)
+		if errors.Is(err, errTooLarge) {
+			writeAck(c, ack{State: string(adapter.Rejected), Reason: receiver.ReasonTooLarge})
+			return
+		}
+		if err != nil {
+			return
+		}
+		sender = receiver.Sender{PID: pid}
+		if perr == nil && serr == nil {
+			sender = s.identify(pid, started)
+		}
 	}
 	f, err := ParseUserFrame(line)
 	if err != nil {
@@ -244,10 +262,6 @@ func (s *Server) handle(ctx context.Context, c *net.UnixConn) {
 		return
 	}
 
-	sender := receiver.Sender{PID: pid}
-	if perr == nil && serr == nil {
-		sender = s.identify(pid, started)
-	}
 	kind := msg.Inform
 	if f.Kind != "" {
 		kind = msg.Kind(f.Kind)
@@ -256,12 +270,34 @@ func (s *Server) handle(ctx context.Context, c *net.UnixConn) {
 		Ingress: receiver.UDS,
 		Sender:  sender,
 		Native:  true,
-		Message: msg.Message{Kind: kind, Delivery: msg.Immediate, Parts: []msg.Part{{Type: "text", Text: f.Body}}},
+		Message: msg.Message{Kind: kind, Delivery: msg.Immediate, HopChain: hopChain(f), Parts: []msg.Part{{Type: "text", Text: f.Body}}},
 	}
 	c.SetDeadline(time.Time{})
 	res := s.Receiver.Receive(ctx, in)
 	c.SetWriteDeadline(time.Now().Add(rt))
 	writeAck(c, ack{MessageID: res.MessageID, State: string(res.State), Reason: res.Reason})
+}
+
+func lineType(line []byte) string {
+	var t struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(line, &t) != nil {
+		return ""
+	}
+	return t.Type
+}
+
+func hopChain(f Frame) []string {
+	h := f.Attrs["hop-chain"]
+	if h == "" {
+		return nil
+	}
+	chain := strings.Split(h, ",")
+	if msg.CheckHopChain(chain) != nil {
+		return nil
+	}
+	return chain
 }
 
 func (s *Server) authOK(line []byte) bool {

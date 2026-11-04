@@ -14,6 +14,10 @@ type Frame struct {
 	// Kind is the kind the frame asked for, from the envelope kind attribute
 	// or a crosstalk.kind field; empty when it asked for none.
 	Kind string
+	// ClientMsgID and From are the top-level msg_id and from of the user
+	// line; display only.
+	ClientMsgID string
+	From        string
 }
 
 type kindField struct {
@@ -25,6 +29,8 @@ type userLine struct {
 	Message   json.RawMessage `json:"message"`
 	Crosstalk *kindField      `json:"crosstalk"`
 	DotKind   string          `json:"crosstalk.kind"`
+	MsgID     string          `json:"msg_id"`
+	From      string          `json:"from"`
 }
 
 type userMsg struct {
@@ -56,6 +62,7 @@ func ParseUserFrame(line []byte) (Frame, error) {
 	if err != nil {
 		return Frame{}, err
 	}
+	f.ClientMsgID, f.From = u.MsgID, u.From
 	for _, k := range []string{u.DotKind, m.DotKind, kindOf(u.Crosstalk), kindOf(m.Crosstalk)} {
 		if k == "" {
 			continue
