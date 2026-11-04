@@ -29,6 +29,13 @@ func (a *Adapter) Inject(ctx context.Context, m msg.Message, d adapter.Delivery)
 	if _, err := CheckVersion(c.ServerVersion()); err != nil {
 		return adapter.Unreachable, err
 	}
+	th, err := c.ReadThread(ctx, thread)
+	if err != nil {
+		return adapter.Unreachable, err
+	}
+	if !statusOf(th).Reachable {
+		return adapter.Unreachable, fmt.Errorf("%w: thread has no positive direct-input evidence", ErrRefused)
+	}
 	mode := d.Mode
 	if mode == "" {
 		mode = m.Delivery

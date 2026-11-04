@@ -11,6 +11,7 @@ import (
 
 	"github.com/GoodOlClint/crosstalk/internal/adapter"
 	"github.com/GoodOlClint/crosstalk/internal/harness/codex/appserver"
+	"github.com/GoodOlClint/crosstalk/internal/registry"
 )
 
 // ReasonAmbiguousEndpoint is the §3 CQ10 reason for a thread loaded on more
@@ -32,6 +33,9 @@ type Adapter struct {
 	Endpoints  []string
 	Logger     *slog.Logger
 	ClientInfo appserver.ClientInfo
+	Directory  interface {
+		List() ([]registry.Descriptor, error)
+	}
 
 	mu       sync.Mutex
 	bindings map[string]adapter.Binding
@@ -53,9 +57,7 @@ func (a *Adapter) clientInfo() appserver.ClientInfo {
 	return appserver.ClientInfo{Name: "crosstalk", Version: "dev"}
 }
 
-// KnownEndpoints returns the control socket plus Endpoints, normalized and
-// deduplicated, control socket first.
-func (a *Adapter) KnownEndpoints() []string {
+func (a *Adapter) KnownEndpoints(extra ...string) []string {
 	cs := a.ControlSocket
 	if cs == "" {
 		var err error
@@ -63,8 +65,20 @@ func (a *Adapter) KnownEndpoints() []string {
 			a.logger().Warn("codex: no home directory for control socket", "err", err)
 		}
 	}
+	eps := append([]string{cs}, a.Endpoints...)
+	if a.Directory != nil {
+		if ds, err := a.Directory.List(); err == nil {
+			for _, d := range ds {
+				if d.Harness == string(adapter.Codex) && d.HarnessEndpoint != nil {
+					eps = append(eps, *d.HarnessEndpoint)
+				}
+			}
+		} else {
+			a.logger().Warn("codex: endpoint directory unavailable", "err", err)
+		}
+	}
 	var out []string
-	for _, ep := range append([]string{cs}, a.Endpoints...) {
+	for _, ep := range append(eps, extra...) {
 		if ep == "" {
 			continue
 		}
@@ -203,6 +217,6 @@ func statusOf(th appserver.Thread) adapter.SessionStatus {
 	default:
 		return s
 	}
-	s.Reachable = th.CanAcceptDirectInput == nil || *th.CanAcceptDirectInput
+	s.Reachable = th.CanAcceptDirectInput != nil && *th.CanAcceptDirectInput
 	return s
 }

@@ -418,7 +418,7 @@ func (s *Server) handle(method string, raw json.RawMessage) (any, *appserver.RPC
 	}
 	switch method {
 	case "thread/read":
-		th := map[string]any{"id": t.ID, "cwd": t.Cwd, "status": status(t), "name": nil}
+		th := map[string]any{"id": t.ID, "cwd": t.Cwd, "status": status(t), "name": nil, "canAcceptDirectInput": true}
 		if t.Name != "" {
 			th["name"] = t.Name
 		}

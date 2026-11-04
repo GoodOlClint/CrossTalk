@@ -4,7 +4,7 @@
 {"seq":4,"step":"thread_loaded_list","kind":"frame","dir":"out","frame":{"id":2,"jsonrpc":"2.0","method":"thread/loaded/list","params":{}}}
 {"seq":5,"step":"thread_loaded_list","kind":"frame","dir":"in","frame":{"id":2,"result":{"data":["01a1a33c-9dbe-74d0-9309-f9e6d8e10407"],"nextCursor":null}}}
 {"seq":6,"step":"thread_read","kind":"frame","dir":"out","frame":{"id":3,"jsonrpc":"2.0","method":"thread/read","params":{"threadId":"01a1a33c-9dbe-74d0-9309-f9e6d8e10407"}}}
-{"seq":7,"step":"thread_read","kind":"frame","dir":"in","frame":{"id":3,"result":{"thread":{"cwd":"/work","id":"01a1a33c-9dbe-74d0-9309-f9e6d8e10407","name":null,"status":{"activeFlags":[],"type":"active"}}}}}
+{"seq":7,"step":"thread_read","kind":"frame","dir":"in","frame":{"id":3,"result":{"thread":{"canAcceptDirectInput":true,"cwd":"/work","id":"01a1a33c-9dbe-74d0-9309-f9e6d8e10407","name":null,"status":{"activeFlags":[],"type":"active"}}}}}
 {"seq":8,"step":"thread_turns_list","kind":"frame","dir":"out","frame":{"id":4,"jsonrpc":"2.0","method":"thread/turns/list","params":{"limit":5,"threadId":"01a1a33c-9dbe-74d0-9309-f9e6d8e10407"}}}
 {"seq":9,"step":"thread_turns_list","kind":"frame","dir":"in","frame":{"id":4,"result":{"data":[{"id":"019a0000-0000-7000-8000-00000000bbbb","items":[],"status":"inProgress"},{"id":"019a0000-0000-7000-8000-00000000aaaa","items":[],"status":"completed"}],"nextCursor":null}}}
 {"seq":10,"step":"steer_mismatch","kind":"frame","dir":"out","frame":{"id":5,"jsonrpc":"2.0","method":"turn/steer","params":{"expectedTurnId":"00000000-0000-7000-8000-000000000000","input":[{"type":"text","text":"crosstalk capture probe: expectedTurnId is deliberately wrong; this text must not be delivered"}],"threadId":"01a1a33c-9dbe-74d0-9309-f9e6d8e10407"}}}
