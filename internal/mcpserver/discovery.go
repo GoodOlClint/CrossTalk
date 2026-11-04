@@ -20,21 +20,25 @@ type Row struct {
 	AgentID   string  `json:"agent_id"`
 	Role      string  `json:"role,omitempty"`
 	Owner     *string `json:"owner"`
+	You       bool    `json:"you,omitempty"`
 }
 
 // listAgents serves unbound callers too; a bound caller is registered first
 // so it appears in its own listing, and a binding failure becomes a notice.
 func (s *Server) listAgentsTool(ctx context.Context, req *mcp.CallToolRequest, _ listIn) (*mcp.CallToolResult, any, error) {
-	var notice string
+	var notice, self string
 	if c, err := s.resolve(ctx, req); err == nil && c.bound() {
 		if a, n, e := s.agent(ctx, c); e != nil {
 			notice = "not registered: " + e.Error()
 		} else {
 			a.Done()
-			notice = n
+			notice, self = n, a.ID()
 		}
 	}
 	rows, warnings := s.listAgents(ctx)
+	for i := range rows {
+		rows[i].You = self != "" && rows[i].AgentID == self
+	}
 	out := map[string]any{"agents": rows}
 	if len(warnings) > 0 {
 		out["warnings"] = warnings
