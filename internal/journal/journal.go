@@ -244,6 +244,8 @@ type Journal struct {
 	now      func() time.Time
 	latest   map[string]Record
 	dispatch map[string]*dispatchState
+	// repairTo is the file size to truncate back to before the next append, or -1.
+	repairTo int64
 }
 
 var ErrClosed = errors.New("journal: closed")
@@ -295,7 +297,7 @@ func Open(stateDir, agentID string, binding Binding, opt Options) (*Journal, Rep
 	if err != nil {
 		return nil, Replay{}, err
 	}
-	j := &Journal{f: f, path: path, binding: binding, now: opt.Now, latest: map[string]Record{}, dispatch: map[string]*dispatchState{}}
+	j := &Journal{f: f, path: path, binding: binding, now: opt.Now, latest: map[string]Record{}, dispatch: map[string]*dispatchState{}, repairTo: -1}
 	for _, r := range kept {
 		j.index(r)
 	}
@@ -423,10 +425,26 @@ func (j *Journal) appendLocked(r Record) (Record, error) {
 		return Record{}, fmt.Errorf("%w: %d bytes, limit %d", ErrRecordTooLarge, len(line), MaxRecordBytes)
 	}
 	line = append(line, '\n')
-	if _, err := j.f.Write(line); err != nil {
+	if j.repairTo >= 0 {
+		if err := j.f.Truncate(j.repairTo); err != nil {
+			return Record{}, fmt.Errorf("journal: unrepaired partial write: %w", err)
+		}
+		j.repairTo = -1
+	}
+	st, err := j.f.Stat()
+	if err != nil {
 		return Record{}, err
 	}
-	if err := j.f.Sync(); err != nil {
+	size := st.Size()
+	_, err = j.f.Write(line)
+	if err == nil {
+		err = j.f.Sync()
+	}
+	if err != nil {
+		if terr := j.f.Truncate(size); terr != nil {
+			j.repairTo = size
+			return Record{}, errors.Join(err, terr)
+		}
 		return Record{}, err
 	}
 	j.index(r)
