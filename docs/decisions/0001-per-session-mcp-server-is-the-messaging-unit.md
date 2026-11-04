@@ -24,5 +24,6 @@ The unit of the system is the **shim**, the `crosstalk mcp` process a harness st
 
 - Every supported harness implements `harness.Harness` (ADR 0008) and needs a verified native inbound path before it is added.
 - Sender identity comes from transport evidence, never from message text (ADR 0004); a session's own identity comes from harness-provided evidence on each call (ADR 0006).
+- The shim is the only writer of its own agent's identity: a claim or release is applied in the target agent's own process, against that agent's own journal, and never written by another shim (ADR 0004).
 - herdr is reduced to pane host and restore; herdr-a2a is superseded.
 - Spawning agents is out of scope for this repo; a separate delegate tool composes "spawn via herdr, then send_message".
