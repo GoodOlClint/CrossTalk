@@ -41,7 +41,7 @@ Tool names are bare here; your harness may prefix them.
 - `unbound`: only `list_agents` works. Tell the user.
 - `not_ready`: retry once.
 - `too_large`, `too_many_pending`, `too_many_asks`: shorten the text or wait.
-- Tool not available (no CrossTalk tools, or the model says the tool "isn't available", with no error): the server did not start, usually because `crosstalk` is not on the PATH the harness was started with. Tell the user to run `command -v crosstalk` in a shell, then restart the harness from that same shell; a passing check elsewhere does not prove the harness has the PATH.
+- Tool not available (no CrossTalk tools, or the model says the tool "isn't available", with no error): the server did not start, usually because `crosstalk` is not on the PATH the harness was started with. Tell the user to run `command -v crosstalk` in a shell, then restart the harness from that same shell; a passing check elsewhere does not prove the harness has the PATH. Claude Code caches a failed server for up to 15 minutes even when `claude mcp list` says Connected, so tell the user to run `/mcp` and reconnect.
 - Anything else: report the `reason` code to the user.
 
 ## Security
