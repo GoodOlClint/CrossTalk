@@ -29,11 +29,14 @@ type Result struct {
 }
 
 type MailboxEntry struct {
+	Direction  string        `json:"direction"`
 	MessageID  string        `json:"message_id"`
 	TaskID     *string       `json:"task_id"`
 	InReplyTo  *string       `json:"in_reply_to"`
 	From       string        `json:"from"`
+	To         string        `json:"to,omitempty"`
 	State      adapter.State `json:"state"`
+	Reason     string        `json:"reason,omitempty"`
 	Text       string        `json:"text,omitempty"`
 	InstanceID string        `json:"instance_id"`
 	SessionRef string        `json:"session_ref"`

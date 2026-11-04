@@ -4,7 +4,7 @@ Cross-harness agent messaging: the shim (`crosstalk mcp`, an MCP server the harn
 
 ## Architecture
 
-- Go, single static binary (`crosstalk`). CrossTalk spawns and wraps nothing: `crosstalk mcp` is the shim, installed once per harness (`claude mcp add --scope user crosstalk -- crosstalk mcp`; Codex `[mcp_servers.crosstalk]` `command = "crosstalk"`, `args = ["mcp"]`). ADR 0002, ADR 0006 (supersedes ADR 0005). Harness support is a plugin interface (`harness.Harness`, ADR 0008): shim, mcpserver and a2a import no harness package. Codex delivery as toolOutput: ADR 0007 (Codex-authored, branch codex/toolout).
+- Go, single static binary (`crosstalk`). CrossTalk spawns and wraps nothing: `crosstalk mcp` is the shim, installed once per harness (`claude mcp add --scope user crosstalk -- crosstalk mcp`; Codex `[mcp_servers.crosstalk]` `command = "crosstalk"`, `args = ["mcp"]`). ADR 0002, ADR 0006 (supersedes ADR 0005). Each harness is one package behind `harness.Harness`, compiled into the one binary (ADR 0008): shim, mcpserver and a2a import no harness package. Codex delivery as toolOutput: ADR 0007 (Codex-authored, branch codex/toolout).
 - Identity per request, never per process: Claude from the parent pid (`~/.claude/sessions/<ppid>.json`), Codex from `params._meta.threadId` on each `tools/call`; neither → `unbound`. One process may serve several Codex threads (pooling); one agent record per (harness, session_ref).
 - Model-facing: MCP over stdio, seven tools (`list_agents`, `send_message`, `reply`, `ask`, `receive_message`, `claim`, `release`).
 - Peer-facing: A2A over loopback HTTP plus a `/tmp/cc-socks`-compatible unix socket speaking Claude Code's two-line peer protocol.

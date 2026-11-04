@@ -38,6 +38,9 @@ const (
 	StateClosed      = "closed"
 	StatePending     = "pending"
 	StateDelivered   = "delivered"
+	StateCompleted   = "completed"
+	StateFailed      = "failed"
+	StateRemoved     = "removed"
 )
 
 type Binding struct {
@@ -55,31 +58,39 @@ func (b Binding) SameConversation(o Binding) bool {
 // Record is one journal line. Which fields are set depends on Type:
 //
 //	dedupe:     Sender, MessageID, State
-//	task:       TaskID, Principal, Kind, State
+//	task:       TaskID, MessageID, ContextID, Principal, Kind, State
+//	            (submitted|working|completed|failed|canceled|removed), Delivery,
+//	            Reason, Text (an ask's reply), Deadline, Message (appended history)
 //	dispatch:   MessageID (State = dispatching)
 //	outcome:    MessageID, State
 //	cancel:     MessageID
 //	route:      Session, MessageID, Sender (original sender), State open|closed
 //	obligation: MessageID (the reply), InReplyTo, To, State pending|delivered
 //	claim:      Owner (agent_id), Claimed
-//	outbound:   MessageID, To (agent_id, harness:session_ref, or an unresolved name), Kind, State
+//	outbound:   MessageID, To (agent_id, harness:session_ref, or an unresolved name), Kind, State, Reason, TaskID (far side's); the first carries Message, whose deadline_seconds and sent_at fix an ask's deadline
 type Record struct {
-	Type      Type      `json:"type"`
-	At        time.Time `json:"at"`
-	Binding   Binding   `json:"binding"`
-	MessageID string    `json:"message_id,omitempty"`
-	Sender    string    `json:"sender,omitempty"`
-	State     string    `json:"state,omitempty"`
-	TaskID    string    `json:"task_id,omitempty"`
-	Principal string    `json:"principal,omitempty"`
-	Kind      string    `json:"kind,omitempty"`
-	Session   string    `json:"session,omitempty"`
-	InReplyTo string    `json:"in_reply_to,omitempty"`
-	To        string    `json:"to,omitempty"`
-	Owner     string    `json:"owner,omitempty"`
-	Claimed   bool      `json:"claimed,omitempty"`
+	Type      Type       `json:"type"`
+	At        time.Time  `json:"at"`
+	Binding   Binding    `json:"binding"`
+	MessageID string     `json:"message_id,omitempty"`
+	Sender    string     `json:"sender,omitempty"`
+	State     string     `json:"state,omitempty"`
+	TaskID    string     `json:"task_id,omitempty"`
+	Principal string     `json:"principal,omitempty"`
+	Kind      string     `json:"kind,omitempty"`
+	Session   string     `json:"session,omitempty"`
+	InReplyTo string     `json:"in_reply_to,omitempty"`
+	To        string     `json:"to,omitempty"`
+	Owner     string     `json:"owner,omitempty"`
+	Claimed   bool       `json:"claimed,omitempty"`
+	ContextID string     `json:"context_id,omitempty"`
+	Delivery  string     `json:"delivery,omitempty"`
+	Reason    string     `json:"reason,omitempty"`
+	Text      string     `json:"text,omitempty"`
+	Deadline  *time.Time `json:"deadline,omitempty"`
 	// Message is the normalized message a dedupe record was accepted with,
-	// kept so the mailbox can return it.
+	// kept so the mailbox can return it; on a task record it is the A2A
+	// message the change appended to the task's history.
 	Message json.RawMessage `json:"message,omitempty"`
 }
 
@@ -119,7 +130,7 @@ func unresolved(latest Record) bool {
 		}
 	case TypeDispatch:
 		return true
-	case TypeOutcome:
+	case TypeOutcome, TypeOutbound:
 		return latest.State == StateUnknown
 	case TypeRoute:
 		return latest.State == StateOpen

@@ -2,6 +2,7 @@ package a2a
 
 import (
 	"context"
+	"log/slog"
 	"maps"
 	"slices"
 	"strconv"
@@ -33,6 +34,7 @@ type task struct {
 	history   []*sdk.Message
 	status    *sdk.Message
 	updated   time.Time
+	deadline  time.Time
 	done      chan struct{}
 	timer     *time.Timer
 }
@@ -43,10 +45,21 @@ type store struct {
 	byMsg     map[string]*task
 	clientIDs map[[2]string]string
 	stopped   bool
+	ts        TaskStore
+	log       *slog.Logger
 }
 
-func newStore() *store {
-	return &store{byID: map[sdk.TaskID]*task{}, byMsg: map[string]*task{}, clientIDs: map[[2]string]string{}}
+func newStore(ts TaskStore, log *slog.Logger) *store {
+	st := &store{byID: map[sdk.TaskID]*task{}, byMsg: map[string]*task{}, clientIDs: map[[2]string]string{}, ts: ts, log: log}
+	st.replay(ts.Load())
+	return st
+}
+
+// saveLocked journals t's current state; a failed write is logged, not returned.
+func (st *store) saveLocked(t *task, appended *sdk.Message) {
+	if err := st.ts.Save(t.record(taskStateNames[t.state], appended)); err != nil {
+		st.log.Warn("a2a: task not journaled", "task", t.id, "message_id", t.messageID, "err", err)
+	}
 }
 
 // alias keeps one assigned message_id per (principal, non-UUIDv7 client id),
@@ -93,8 +106,14 @@ func (st *store) create(principal string, m msg.Message, wire *sdk.Message, maxA
 		updated:   time.Now().UTC(),
 		done:      make(chan struct{}),
 	}
+	if m.Kind == msg.Ask && m.DeadlineSeconds > 0 {
+		t.deadline = t.updated.Add(time.Duration(m.DeadlineSeconds) * time.Second)
+	}
 	wire.TaskID = t.id
 	t.history = []*sdk.Message{wire}
+	if err := st.ts.Save(t.record(journal.StateSubmitted, wire)); err != nil {
+		return nil, false, sdk.NewError(sdk.ErrInternalError, "task could not be recorded")
+	}
 	st.byID[t.id] = t
 	st.byMsg[t.messageID] = t
 	return t, false, nil
@@ -105,6 +124,40 @@ func (st *store) remove(t *task) {
 	defer st.mu.Unlock()
 	delete(st.byID, t.id)
 	delete(st.byMsg, t.messageID)
+	if err := st.ts.Save(t.record(journal.StateRemoved, nil)); err != nil {
+		st.log.Warn("a2a: task removal not journaled", "task", t.id, "err", err)
+	}
+}
+
+func (st *store) byMessage(messageID string) (*task, bool) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	t, ok := st.byMsg[messageID]
+	return t, ok
+}
+
+func (st *store) pending() []string {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	var out []string
+	for _, t := range st.byID {
+		if !t.state.Terminal() {
+			out = append(out, t.messageID)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+// markDispatching records a lost cancel race: the receiver holds the claim.
+func (st *store) markDispatching(t *task) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if t.state == sdk.TaskStateSubmitted {
+		t.state, t.delivery = sdk.TaskStateWorking, journal.StateDispatching
+		t.updated = time.Now().UTC()
+		st.saveLocked(t, nil)
+	}
 }
 
 // lookup returns the task only to the principal that created it; any other
@@ -163,6 +216,7 @@ func (st *store) updateLocked(t *task, state sdk.TaskState, delivery, reason str
 		t.history = append(t.history, status)
 	}
 	t.updated = time.Now().UTC()
+	st.saveLocked(t, status)
 	if state.Terminal() {
 		if t.timer != nil {
 			t.timer.Stop()
@@ -177,6 +231,7 @@ func (st *store) appendHistory(t *task, m *sdk.Message) {
 	defer st.mu.Unlock()
 	t.history = append(t.history, m)
 	t.updated = time.Now().UTC()
+	st.saveLocked(t, m)
 }
 
 func (st *store) completeAsk(messageID, text string) error {
@@ -427,11 +482,7 @@ func (s *Server) start(t *task, in receiver.Inbound) bool {
 	}
 	s.wg.Add(1)
 	s.mu.Unlock()
-	if in.Message.Kind == msg.Ask && in.Message.DeadlineSeconds > 0 {
-		s.tasks.setTimer(t, time.Duration(in.Message.DeadlineSeconds)*time.Second, func() {
-			s.tasks.update(t, sdk.TaskStateFailed, "", ReasonDeadline, failedStatus(t, "failed", ReasonDeadline))
-		})
-	}
+	s.armDeadline(t)
 	go func() {
 		defer s.wg.Done()
 		if s.beforeReceive != nil {
@@ -441,6 +492,20 @@ func (s *Server) start(t *task, in receiver.Inbound) bool {
 		s.apply(t, res)
 	}()
 	return true
+}
+
+func (s *Server) armDeadline(t *task) {
+	if t.deadline.IsZero() {
+		return
+	}
+	expire := func() {
+		s.tasks.update(t, sdk.TaskStateFailed, "", ReasonDeadline, failedStatus(t, "failed", ReasonDeadline))
+	}
+	if d := time.Until(t.deadline); d > 0 {
+		s.tasks.setTimer(t, d, expire)
+	} else {
+		expire()
+	}
 }
 
 func (s *Server) apply(t *task, res receiver.Result) {
@@ -545,12 +610,7 @@ func (h *handler) CancelTask(ctx context.Context, req *sdk.CancelTaskRequest) (*
 		return nil, sdk.NewError(sdk.ErrInternalError, "cancel could not be recorded")
 	}
 	if !won {
-		s.tasks.mu.Lock()
-		if t.state == sdk.TaskStateSubmitted {
-			t.state, t.delivery = sdk.TaskStateWorking, journal.StateDispatching
-			t.updated = time.Now().UTC()
-		}
-		s.tasks.mu.Unlock()
+		s.tasks.markDispatching(t)
 		return nil, sdk.ErrTaskNotCancelable
 	}
 	if !s.tasks.update(t, sdk.TaskStateCanceled, journal.StateCanceled, "", nil) {

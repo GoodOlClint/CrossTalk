@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/GoodOlClint/crosstalk/internal/adapter"
 	"github.com/GoodOlClint/crosstalk/internal/harness/codex"
@@ -421,7 +422,7 @@ func TestAskDeadlineInformsOwnSession(t *testing.T) {
 	}
 }
 
-func TestExitRemovesSocketsAndDescriptorsKeepsJournal(t *testing.T) {
+func TestExitRemovesSocketsKeysAndDescriptorsKeepsJournal(t *testing.T) {
 	w := newWorld(t)
 	alice := w.claude(4001, "sess-alice", "alice")
 	w.codex.addThread("T-bob", "bob")
@@ -446,8 +447,8 @@ func TestExitRemovesSocketsAndDescriptorsKeepsJournal(t *testing.T) {
 		if _, err := os.Stat(journal.Path(w.state, id)); err != nil {
 			t.Errorf("journal %s removed: %v", id, err)
 		}
-		if _, err := os.Stat(udsingress.KeyPath(reg.UDSPath(id))); err != nil {
-			t.Errorf("uds key %s removed: %v", id, err)
+		if _, err := os.Stat(udsingress.KeyPath(reg.UDSPath(id))); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("uds key %s survives exit: %v", id, err)
 		}
 	}
 
@@ -456,4 +457,78 @@ func TestExitRemovesSocketsAndDescriptorsKeepsJournal(t *testing.T) {
 	if d, ok := w.descriptor(alice.agentID()); !ok || d.Name != "alice" {
 		t.Fatalf("re-registration %+v %v", d, ok)
 	}
+}
+
+type pendingTransport struct{ taskID string }
+
+func (p pendingTransport) Send(context.Context, registry.Descriptor, registry.Descriptor, msg.Message, bool) (adapter.State, error) {
+	return adapter.Unknown, errors.New("pending")
+}
+
+func (p pendingTransport) SendTask(context.Context, registry.Descriptor, registry.Descriptor, msg.Message, bool) (string, adapter.State, error) {
+	return p.taskID, adapter.Unknown, errors.New("pending")
+}
+
+func TestMailboxListsOutboundUnknown(t *testing.T) {
+	w := newWorld(t)
+	alice := w.claude(4001, "sess-alice", "alice")
+	w.codex.addThread("T-bob", "bob")
+	na := w.node(alice.pid, pendingTransport{taskID: "task-far"}, nil)
+	nb := w.node(1, w.lb, nil)
+	nb.ok(thread("T-bob"), "receive_message", map[string]any{})
+	sent := na.ok(nil, "send_message", send("bob", "hello"))
+	id := sent["message_id"].(string)
+	if sent["state"] != "unknown" {
+		t.Fatalf("send %v", sent)
+	}
+	ms := na.ok(nil, "receive_message", map[string]any{})["messages"].([]any)
+	if len(ms) != 1 {
+		t.Fatalf("mailbox %v", ms)
+	}
+	e := ms[0].(map[string]any)
+	if e["direction"] != "outbound" || e["message_id"] != id || e["task_id"] != "task-far" || e["state"] != "unknown" || e["reason"] != "pending" || e["to"] != identity.AgentID("codex", "T-bob") {
+		t.Fatalf("entry %v", e)
+	}
+	if ms := nb.ok(thread("T-bob"), "receive_message", map[string]any{})["messages"].([]any); len(ms) != 0 {
+		t.Fatalf("bob mailbox %v", ms)
+	}
+}
+
+func fakeClock(t0 time.Time) func() time.Time { return func() time.Time { return t0 } }
+
+func TestAskDeadlineRearmedAcrossRestart(t *testing.T) {
+	setup := func() (*world, *fakeClaude, time.Time) {
+		w := newWorld(t)
+		alice := w.claude(4001, "sess-alice", "alice")
+		w.codex.addThread("T-bob", "bob")
+		t0 := time.Date(2026, 11, 3, 13, 0, 0, 0, time.UTC)
+		na := w.node(alice.pid, pendingTransport{taskID: "task-far"}, func(o *Options) { o.Now = fakeClock(t0) })
+		nb := w.node(1, w.lb, nil)
+		nb.ok(thread("T-bob"), "receive_message", map[string]any{})
+		na.ok(nil, "ask", map[string]any{"to": "bob", "text": "slow?", "deadline_seconds": 60})
+		na.stop()
+		return w, alice, t0
+	}
+
+	t.Run("past", func(t *testing.T) {
+		w, alice, t0 := setup()
+		w.node(alice.pid, nil, func(o *Options) { o.Now = fakeClock(t0.Add(2 * time.Minute)) }).ok(nil, "receive_message", map[string]any{})
+		waitFor(t, "expiry after restart", func() bool { return len(alice.got()) == 1 })
+		if got := alice.got()[0]; !strings.Contains(got, "expired") {
+			t.Fatalf("alice got %q", got)
+		}
+	})
+
+	t.Run("future", func(t *testing.T) {
+		w, alice, t0 := setup()
+		n := w.node(alice.pid, nil, func(o *Options) { o.Now = fakeClock(t0.Add(10 * time.Second)) })
+		n.ok(nil, "receive_message", map[string]any{})
+		st := n.sh.Agent(alice.agentID())
+		st.mu.Lock()
+		armed := len(st.deadline)
+		st.mu.Unlock()
+		if armed != 1 || len(alice.got()) != 0 {
+			t.Fatalf("armed %d, delivered %v", armed, alice.got())
+		}
+	})
 }
