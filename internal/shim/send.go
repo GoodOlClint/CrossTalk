@@ -192,6 +192,9 @@ func (st *AgentState) deliver(ctx context.Context, m msg.Message) mcpserver.Resu
 		return res
 	}
 	if m.Kind != msg.Inform {
+		if _, state, reason := st.nativeMatch(ctx, m.To); reason == ReasonNoSuchAgent {
+			return finish(m.To, state, reason)
+		}
 		return finish(m.To, adapter.Rejected, ReasonNativeInformOnly)
 	}
 	b, ad, state, reason := st.nativeTarget(ctx, m.To)

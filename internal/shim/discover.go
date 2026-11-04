@@ -48,6 +48,20 @@ func (s *Shim) Discover(ctx context.Context) ([]mcpserver.Session, error) {
 // nativeTarget resolves a name or agent_id with no descriptor to exactly one harness
 // session, injected through this agent's own injectors (§3: inform only).
 func (st *AgentState) nativeTarget(ctx context.Context, name string) (adapter.Binding, adapter.Adapter, adapter.State, string) {
+	c, state, reason := st.nativeMatch(ctx, name)
+	if reason != "" {
+		return adapter.Binding{}, nil, state, reason
+	}
+	b, err := c.h.Register(ctx, c.s.SessionRef)
+	if err != nil {
+		return adapter.Binding{}, nil, adapter.Unreachable, err.Error()
+	}
+	return b, st.injector(c.h), "", ""
+}
+
+// nativeMatch only matches name against discovered sessions; it binds and
+// contacts nothing.
+func (st *AgentState) nativeMatch(ctx context.Context, name string) (found, adapter.State, string) {
 	fs, _ := st.shim.sessions(ctx)
 	var cs []found
 	if name != "" {
@@ -66,18 +80,14 @@ func (st *AgentState) nativeTarget(ctx context.Context, name string) (adapter.Bi
 	}
 	switch len(cs) {
 	case 0:
-		return adapter.Binding{}, nil, adapter.Unknown, ReasonNoSuchAgent
+		return found{}, adapter.Unknown, ReasonNoSuchAgent
 	case 1:
 	default:
-		return adapter.Binding{}, nil, adapter.Rejected, ReasonAmbiguousName
+		return found{}, adapter.Rejected, ReasonAmbiguousName
 	}
 	c := cs[0]
 	if c.s.Harness == st.binding.Harness && c.s.SessionRef == st.binding.SessionRef {
-		return adapter.Binding{}, nil, adapter.Rejected, ReasonSelf
+		return found{}, adapter.Rejected, ReasonSelf
 	}
-	b, err := c.h.Register(ctx, c.s.SessionRef)
-	if err != nil {
-		return adapter.Binding{}, nil, adapter.Unreachable, err.Error()
-	}
-	return b, st.injector(c.h), "", ""
+	return c, "", ""
 }

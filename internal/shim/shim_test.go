@@ -591,3 +591,26 @@ func TestSendToNativeByAgentID(t *testing.T) {
 		t.Fatalf("bob got %q", got)
 	}
 }
+
+func TestNonInformToUnknownTargetIsNoSuchAgent(t *testing.T) {
+	w := newWorld(t)
+	alice := w.claude(4001, "sess-alice", "alice")
+	bob := w.claude(4002, "sess-bob", "bob")
+	n := w.node(alice.pid, nil, nil)
+	for _, tool := range []string{"ask"} {
+		if out := n.ok(nil, tool, send("ghost", "q?")); out["state"] != "unknown" || out["reason"] != ReasonNoSuchAgent {
+			t.Fatalf("%s to unknown %v", tool, out)
+		}
+	}
+	if out := n.ok(nil, "send_message", map[string]any{"to": "ghost", "text": "x", "kind": "command"}); out["state"] != "unknown" || out["reason"] != ReasonNoSuchAgent {
+		t.Fatalf("command to unknown %v", out)
+	}
+	for _, to := range []string{"bob", bob.agentID()} {
+		if out := n.ok(nil, "ask", send(to, "q?")); out["state"] != "rejected" || out["reason"] != ReasonNativeInformOnly {
+			t.Fatalf("ask to native %s %v", to, out)
+		}
+	}
+	if len(bob.got()) != 0 {
+		t.Fatalf("native contacted: %q", bob.got())
+	}
+}
