@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -60,9 +61,11 @@ func harnesses(stateDir string) ([]harness.Harness, error) {
 	if err != nil {
 		return nil, err
 	}
+	ci := appserver.ClientInfo{Name: "crosstalk", Version: mcpserver.Version}
 	cx := codex.NewHarness(codex.HarnessOptions{
+		Adapter:    &codex.Adapter{Logger: slog.Default(), ClientInfo: ci, Endpoints: filepath.SplitList(os.Getenv("CROSSTALK_CODEX_ENDPOINTS"))},
 		Logger:     slog.Default(),
-		ClientInfo: appserver.ClientInfo{Name: "crosstalk", Version: mcpserver.Version},
+		ClientInfo: ci,
 		Directory:  registry.New(stateDir),
 	})
 	return []harness.Harness{cx, cl}, nil

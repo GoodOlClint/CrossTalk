@@ -7,9 +7,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/GoodOlClint/crosstalk/internal/harness/codex"
 )
 
 func TestRun(t *testing.T) {
@@ -56,5 +59,20 @@ func TestMCPExitsCleanlyOnClosedStdin(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(home, ".local", "state", "crosstalk", "agents")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("protocol start created agent state: %v", err)
+	}
+}
+
+func TestCodexEndpointsFromEnv(t *testing.T) {
+	t.Setenv("CROSSTALK_CODEX_ENDPOINTS", "unix:///tmp/a.sock"+string(os.PathListSeparator)+"unix:///tmp/b.sock")
+	hs, err := harnesses(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ad := hs[0].(*codex.Harness).Threads.(*codex.Adapter)
+	got := ad.KnownEndpoints()
+	for _, want := range []string{"unix:///tmp/a.sock", "unix:///tmp/b.sock"} {
+		if !slices.Contains(got, want) {
+			t.Fatalf("KnownEndpoints %v lacks %s", got, want)
+		}
 	}
 }
