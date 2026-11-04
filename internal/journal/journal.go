@@ -62,7 +62,7 @@ func (b Binding) SameConversation(o Binding) bool {
 //	route:      Session, MessageID, Sender (original sender), State open|closed
 //	obligation: MessageID (the reply), InReplyTo, To, State pending|delivered
 //	claim:      Owner (agent_id), Claimed
-//	outbound:   MessageID, To (agent_id, harness:session_ref, or an unresolved name), Kind, State
+//	outbound:   MessageID, To (agent_id, harness:session_ref, or an unresolved name), Kind, State, Reason, TaskID (far side's); the first carries Message, whose deadline_seconds and sent_at fix an ask's deadline
 type Record struct {
 	Type      Type      `json:"type"`
 	At        time.Time `json:"at"`
@@ -76,6 +76,7 @@ type Record struct {
 	Session   string    `json:"session,omitempty"`
 	InReplyTo string    `json:"in_reply_to,omitempty"`
 	To        string    `json:"to,omitempty"`
+	Reason    string    `json:"reason,omitempty"`
 	Owner     string    `json:"owner,omitempty"`
 	Claimed   bool      `json:"claimed,omitempty"`
 	// Message is the normalized message a dedupe record was accepted with,
