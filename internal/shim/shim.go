@@ -57,7 +57,8 @@ type ClaimTransport interface {
 type A2AListener struct {
 	URL           string
 	CredentialRef string
-	Close         func() error
+	// Close must return by ctx's deadline.
+	Close func(ctx context.Context) error
 }
 
 type Options struct {

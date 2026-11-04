@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"context"
+	"errors"
 
 	"github.com/GoodOlClint/crosstalk/internal/adapter"
 	"github.com/GoodOlClint/crosstalk/internal/harness"
@@ -77,9 +78,13 @@ type HarnessBinder interface {
 // listeners. CloseAgent runs while the agent's locks are still held, before
 // the descriptor is removed, and also when a registration fails after
 // BindHarness; it must tolerate an agent it never finished binding.
+// An error wrapping ErrCloseTimeout means a handler may still dispatch or
+// write, so the agent's locks and descriptor are kept until process exit.
 type AgentCloser interface {
 	CloseAgent(a *Agent) error
 }
+
+var ErrCloseTimeout = errors.New("mcpserver: agent handlers did not stop")
 
 type BindInfo struct {
 	A2AURL          string

@@ -43,6 +43,9 @@ type AgentState struct {
 	up       bool
 	closed   bool
 	deadline map[string]*time.Timer
+
+	closeDone chan struct{}
+	closeErr  error
 }
 
 func (st *AgentState) Agent() *mcpserver.Agent      { return st.agent }
@@ -189,17 +192,21 @@ func (s *Shim) CloseAgent(a *mcpserver.Agent) error {
 	return s.closeState(st)
 }
 
-// HandlerCloseWait bounds how long closeState waits for UDS handlers to stop
-// after their context is cancelled.
+// HandlerCloseWait bounds how long closeState waits, in total, for the A2A
+// listener and the UDS handlers to stop after their context is cancelled.
 var HandlerCloseWait = 5 * time.Second
 
 func (s *Shim) closeState(st *AgentState) error {
 	st.mu.Lock()
 	if st.closed {
+		done := st.closeDone
 		st.mu.Unlock()
-		return nil
+		<-done
+		return st.closeErr
 	}
 	st.closed = true
+	st.closeDone = make(chan struct{})
+	defer close(st.closeDone)
 	for _, t := range st.deadline {
 		t.Stop()
 	}
@@ -207,25 +214,47 @@ func (s *Shim) closeState(st *AgentState) error {
 	if st.cancel != nil {
 		st.cancel()
 	}
-	var errs []error
+	ctx, cancel := context.WithTimeout(context.Background(), HandlerCloseWait)
+	defer cancel()
+	a2aDone, udsDone := make(chan error, 1), make(chan error, 1)
 	if st.a2a.Close != nil {
-		errs = append(errs, st.a2a.Close())
+		go func() { a2aDone <- st.a2a.Close(ctx) }()
+	} else {
+		a2aDone <- nil
 	}
 	if st.uds != nil {
-		closed := make(chan error, 1)
 		go func() {
 			err := st.uds.Close()
 			<-st.serve
-			closed <- err
+			udsDone <- err
 		}()
+	} else {
+		udsDone <- nil
+	}
+	var errs []error
+	timedOut := false
+	for range 2 {
 		select {
-		case err := <-closed:
+		case err := <-a2aDone:
+			timedOut = timedOut || errors.Is(err, context.DeadlineExceeded)
+			errs = append(errs, err)
+		case err := <-udsDone:
 			if err != nil && !errors.Is(err, net.ErrClosed) {
 				errs = append(errs, err)
 			}
-		case <-time.After(HandlerCloseWait):
-			s.log.Warn("shim: uds handlers did not stop", "uds", st.udsPath)
+		case <-ctx.Done():
+			timedOut = true
 		}
+		if timedOut {
+			break
+		}
+	}
+	if timedOut {
+		s.log.Warn("shim: handlers did not stop; keeping agent ownership", "uds", st.udsPath, "wait", HandlerCloseWait)
+		st.closeErr = errors.Join(append(errs, fmt.Errorf("%w after %v", mcpserver.ErrCloseTimeout, HandlerCloseWait))...)
+		return st.closeErr
+	}
+	if st.uds != nil {
 		for _, p := range st.uds.Files() {
 			if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
 				errs = append(errs, err)

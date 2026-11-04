@@ -35,7 +35,7 @@ func (a *Adapter) Inject(ctx context.Context, m msg.Message, d adapter.Delivery)
 	if err != nil {
 		return adapter.Unreachable, err
 	}
-	defer c.Close()
+	defer c.CloseContext(ctx)
 	if _, err := CheckVersion(c.ServerVersion()); err != nil {
 		return adapter.Unreachable, err
 	}
