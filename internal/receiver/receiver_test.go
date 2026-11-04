@@ -604,3 +604,23 @@ func TestMailboxFilterAndPagination(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+type closeAfterInject struct {
+	*adapter.Fake
+	j *journal.Journal
+}
+
+func (c closeAfterInject) Inject(ctx context.Context, m msg.Message, d adapter.Delivery) (adapter.State, error) {
+	st, err := c.Fake.Inject(ctx, m, d)
+	c.j.Close()
+	return st, err
+}
+
+func TestOutcomeWriteFailureIsUnknown(t *testing.T) {
+	e := newEnv(t)
+	e.r = New(Config{Journal: e.j, Adapter: closeAfterInject{e.fake, e.j}, Self: e.self})
+	res := e.recv(A2A, alice, newMsg(msg.Inform, "hi"))
+	if res.State != adapter.Unknown || res.Reason != ReasonJournal || e.writes() != 1 {
+		t.Fatalf("res %+v writes %d", res, e.writes())
+	}
+}

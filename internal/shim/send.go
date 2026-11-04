@@ -30,12 +30,12 @@ func (st *AgentState) newMessage(to string, k msg.Kind, d msg.Delivery, text str
 	}
 }
 
-func (st *AgentState) outbound(m msg.Message, to string, state adapter.State, reason string, withBody bool) {
-	st.outboundTask(m, to, state, reason, withBody, "")
+func (st *AgentState) outbound(m msg.Message, to string, state adapter.State, reason string, withBody bool) error {
+	return st.outboundTask(m, to, state, reason, withBody, "")
 }
 
 // outboundTask also keeps the far side's task id, when the Transport reports one.
-func (st *AgentState) outboundTask(m msg.Message, to string, state adapter.State, reason string, withBody bool, taskID string) {
+func (st *AgentState) outboundTask(m msg.Message, to string, state adapter.State, reason string, withBody bool, taskID string) error {
 	r := journal.Record{Type: journal.TypeOutbound, MessageID: m.MessageID, To: to, Kind: string(m.Kind), State: string(state), Reason: reason, TaskID: taskID}
 	if m.InReplyTo != nil {
 		r.InReplyTo = *m.InReplyTo
@@ -43,9 +43,11 @@ func (st *AgentState) outboundTask(m msg.Message, to string, state adapter.State
 	if withBody {
 		r.Message, _ = json.Marshal(m)
 	}
-	if err := st.agent.Journal().Append(r); err != nil {
+	err := st.agent.Journal().Append(r)
+	if err != nil {
 		st.shim.log.Warn("shim: journal outbound", "agent", st.agent.ID(), "message_id", m.MessageID, "err", err)
 	}
+	return err
 }
 
 func (st *AgentState) viaTransport(ctx context.Context, to registry.Descriptor, m msg.Message) (adapter.State, string, string) {
@@ -90,7 +92,10 @@ func (st *AgentState) deliver(ctx context.Context, m msg.Message) mcpserver.Resu
 		if d.AgentID == st.agent.ID() {
 			return finish(d.AgentID, adapter.Rejected, ReasonSelf)
 		}
-		st.outbound(m, d.AgentID, journal.StateSubmitted, "", true)
+		if st.outbound(m, d.AgentID, journal.StateSubmitted, "", true) != nil {
+			res.State, res.Reason = adapter.Unreachable, receiver.ReasonJournal
+			return res
+		}
 		state, reason, taskID := st.viaTransport(ctx, d, m)
 		st.outboundTask(m, d.AgentID, state, reason, false, taskID)
 		res.State, res.Reason = state, reason
@@ -104,7 +109,10 @@ func (st *AgentState) deliver(ctx context.Context, m msg.Message) mcpserver.Resu
 		return finish(m.To, state, reason)
 	}
 	to := string(b.Harness) + ":" + b.SessionRef
-	st.outbound(m, to, journal.StateSubmitted, "", true)
+	if st.outbound(m, to, journal.StateSubmitted, "", true) != nil {
+		res.State, res.Reason = adapter.Unreachable, receiver.ReasonJournal
+		return res
+	}
 	state, err = ad.Inject(ctx, m, adapter.Delivery{Mode: m.Delivery, Target: b, VerifiedSender: true})
 	if !state.Injectable() {
 		state = adapter.Unknown
@@ -332,7 +340,10 @@ func (st *AgentState) sendReply(ctx context.Context, r msg.Message, key string, 
 		return res
 	}
 	r.To = d.Name
-	st.outbound(r, d.AgentID, journal.StateSubmitted, "", true)
+	if st.outbound(r, d.AgentID, journal.StateSubmitted, "", true) != nil {
+		res.State, res.Reason = adapter.Unreachable, receiver.ReasonJournal
+		return res
+	}
 	var taskID string
 	res.State, res.Reason, taskID = st.viaTransport(ctx, d, r)
 	st.outboundTask(r, d.AgentID, res.State, res.Reason, false, taskID)

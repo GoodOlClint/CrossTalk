@@ -249,14 +249,21 @@ func (r *Receiver) Receive(ctx context.Context, in Inbound) Result {
 	rt := route{Session: self.Binding.SessionRef, MessageID: m.MessageID, Sender: in.Sender.AgentID, Name: in.Sender.Name, Kind: m.Kind}
 	routed := in.Sender.registered()
 	if routed {
-		r.openRoute(rt)
+		if err := r.openRoute(rt); err != nil {
+			r.j.Resolve(m.MessageID, string(adapter.Rejected))
+			return reject(ReasonJournal)
+		}
 	}
 	st, _ := r.ad.Inject(ctx, m, adapter.Delivery{Mode: m.Delivery, Target: self.Binding, VerifiedSender: in.Sender.Verified})
 	if !st.Injectable() {
 		st = adapter.Unknown
 	}
-	r.j.Resolve(m.MessageID, string(st))
-	r.j.SetDedupeState(key, m.MessageID, string(st))
+	resolveErr := r.j.Resolve(m.MessageID, string(st))
+	dedupeErr := r.j.SetDedupeState(key, m.MessageID, string(st))
+	if resolveErr != nil || dedupeErr != nil {
+		r.j.SetDedupeState(key, m.MessageID, string(adapter.Unknown))
+		return Result{MessageID: m.MessageID, State: adapter.Unknown, Reason: ReasonJournal}
+	}
 	if routed && (st == adapter.Rejected || st == adapter.Unreachable) {
 		r.closeRoute(rt)
 	}
@@ -336,11 +343,14 @@ func (r *Receiver) unreserve() {
 	r.mu.Unlock()
 }
 
-func (r *Receiver) openRoute(rt route) {
-	r.j.Append(journal.Record{Type: journal.TypeRoute, Session: rt.Session, MessageID: rt.MessageID, Sender: rt.Sender, To: rt.Name, Kind: string(rt.Kind), State: journal.StateOpen})
+func (r *Receiver) openRoute(rt route) error {
+	if err := r.j.Append(journal.Record{Type: journal.TypeRoute, Session: rt.Session, MessageID: rt.MessageID, Sender: rt.Sender, To: rt.Name, Kind: string(rt.Kind), State: journal.StateOpen}); err != nil {
+		return err
+	}
 	r.mu.Lock()
 	r.routes = append(r.routes, rt)
 	r.mu.Unlock()
+	return nil
 }
 
 func (r *Receiver) closeRoute(rt route) {

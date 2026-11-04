@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -736,5 +737,50 @@ func TestAdmission(t *testing.T) {
 	<-entered
 	if _, err := send(t, cl, ctx, textMsg("w2", nil), false); !errors.Is(err, sdk.ErrServerError) {
 		t.Fatalf("second wait admitted: %v", err)
+	}
+}
+
+type failingTaskStore struct {
+	MemoryTaskStore
+	fail bool
+}
+
+func (s *failingTaskStore) Save(r journal.Record) error {
+	if s.fail {
+		return errors.New("injected storage failure")
+	}
+	return s.MemoryTaskStore.Save(r)
+}
+
+func TestTerminalWriteFailureIsNotCompleted(t *testing.T) {
+	ts := &failingTaskStore{}
+	st := newStore(ts, slog.New(slog.DiscardHandler))
+	m := msg.Message{MessageID: msg.NewUUIDv7(), ContextID: "ctx", Kind: msg.Ask}
+	task, _, err := st.create("peer", m, encode(m), 32)
+	if err != nil {
+		t.Fatal(err)
+	}
+	durable := len(ts.Load())
+	ts.fail = true
+	if err := st.completeAsk(m.MessageID, "answer"); err == nil {
+		t.Fatal("completeAsk succeeded despite failed persistence")
+	}
+	if got := st.snapshot(task, nil); got.Status.State.Terminal() || len(got.History) != 1 {
+		t.Fatalf("task moved despite failed persistence: state=%v history=%d", got.Status.State, len(got.History))
+	}
+	select {
+	case <-task.done:
+		t.Fatal("terminal notification closed despite failed persistence")
+	default:
+	}
+	if len(ts.Load()) != durable {
+		t.Fatalf("durable records changed: %d -> %d", durable, len(ts.Load()))
+	}
+	srv := &Server{tasks: st}
+	srv.apply(task, receiver.Result{MessageID: m.MessageID, State: adapter.Accepted})
+	got := st.snapshot(task, nil)
+	ct, _ := got.Metadata[MetaKey].(map[string]any)
+	if got.Status.State != sdk.TaskStateWorking || ct["state"] != string(adapter.Unknown) || ct["reason"] != receiver.ReasonJournal {
+		t.Fatalf("outcome write failure not reported unknown/journal: %v %v", got.Status.State, ct)
 	}
 }

@@ -55,11 +55,12 @@ func newStore(ts TaskStore, log *slog.Logger) *store {
 	return st
 }
 
-// saveLocked journals t's current state; a failed write is logged, not returned.
-func (st *store) saveLocked(t *task, appended *sdk.Message) {
-	if err := st.ts.Save(t.record(taskStateNames[t.state], appended)); err != nil {
+func (st *store) saveLocked(t *task, appended *sdk.Message) error {
+	err := st.ts.Save(t.record(taskStateNames[t.state], appended))
+	if err != nil {
 		st.log.Warn("a2a: task not journaled", "task", t.id, "message_id", t.messageID, "err", err)
 	}
+	return err
 }
 
 // alias keeps one assigned message_id per (principal, non-UUIDv7 client id),
@@ -154,9 +155,12 @@ func (st *store) markDispatching(t *task) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	if t.state == sdk.TaskStateSubmitted {
+		prev := *t
 		t.state, t.delivery = sdk.TaskStateWorking, journal.StateDispatching
 		t.updated = time.Now().UTC()
-		st.saveLocked(t, nil)
+		if st.saveLocked(t, nil) != nil {
+			t.state, t.delivery, t.updated = prev.state, prev.delivery, prev.updated
+		}
 	}
 }
 
@@ -193,17 +197,19 @@ func (st *store) stopTimers() {
 }
 
 // update moves a non-terminal task; terminal states are final, so a late
-// receiver result never overwrites a cancel, a deadline or a reply.
-func (st *store) update(t *task, state sdk.TaskState, delivery, reason string, status *sdk.Message) bool {
+// receiver result never overwrites a cancel, a deadline or a reply. A failed
+// journal write leaves the task as it was and returns the error.
+func (st *store) update(t *task, state sdk.TaskState, delivery, reason string, status *sdk.Message) (bool, error) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	return st.updateLocked(t, state, delivery, reason, status)
 }
 
-func (st *store) updateLocked(t *task, state sdk.TaskState, delivery, reason string, status *sdk.Message) bool {
+func (st *store) updateLocked(t *task, state sdk.TaskState, delivery, reason string, status *sdk.Message) (bool, error) {
 	if t.state.Terminal() {
-		return false
+		return false, nil
 	}
+	prev := *t
 	t.state = state
 	if delivery != "" {
 		t.delivery = delivery
@@ -216,22 +222,43 @@ func (st *store) updateLocked(t *task, state sdk.TaskState, delivery, reason str
 		t.history = append(t.history, status)
 	}
 	t.updated = time.Now().UTC()
-	st.saveLocked(t, status)
+	if err := st.saveLocked(t, status); err != nil {
+		t.state, t.delivery, t.reason, t.status, t.history, t.updated = prev.state, prev.delivery, prev.reason, prev.status, prev.history, prev.updated
+		return false, err
+	}
 	if state.Terminal() {
 		if t.timer != nil {
 			t.timer.Stop()
 		}
 		close(t.done)
 	}
-	return true
+	return true, nil
 }
 
-func (st *store) appendHistory(t *task, m *sdk.Message) {
+// markUnknown holds t at working with an unknown delivery after a harness
+// write whose outcome could not be journaled; it is never terminal.
+func (st *store) markUnknown(t *task) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
+	if t.state.Terminal() {
+		return
+	}
+	t.state, t.delivery, t.reason = sdk.TaskStateWorking, string(adapter.Unknown), receiver.ReasonJournal
+	t.updated = time.Now().UTC()
+	_ = st.saveLocked(t, nil)
+}
+
+func (st *store) appendHistory(t *task, m *sdk.Message) error {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	prev := *t
 	t.history = append(t.history, m)
 	t.updated = time.Now().UTC()
-	st.saveLocked(t, m)
+	if err := st.saveLocked(t, m); err != nil {
+		t.history, t.updated = prev.history, prev.updated
+		return err
+	}
+	return nil
 }
 
 func (st *store) completeAsk(messageID, text string) error {
@@ -246,7 +273,11 @@ func (st *store) completeAsk(messageID, text string) error {
 	if t.delivery == journal.StateSubmitted || t.delivery == journal.StateDispatching {
 		delivery = string(adapter.Accepted)
 	}
-	if !st.updateLocked(t, sdk.TaskStateCompleted, delivery, "", reply) {
+	done, err := st.updateLocked(t, sdk.TaskStateCompleted, delivery, "", reply)
+	if err != nil {
+		return err
+	}
+	if !done {
 		return ErrAskClosed
 	}
 	return nil
@@ -499,7 +530,7 @@ func (s *Server) armDeadline(t *task) {
 		return
 	}
 	expire := func() {
-		s.tasks.update(t, sdk.TaskStateFailed, "", ReasonDeadline, failedStatus(t, "failed", ReasonDeadline))
+		_, _ = s.tasks.update(t, sdk.TaskStateFailed, "", ReasonDeadline, failedStatus(t, "failed", ReasonDeadline))
 	}
 	if d := time.Until(t.deadline); d > 0 {
 		s.tasks.setTimer(t, d, expire)
@@ -521,7 +552,9 @@ func (s *Server) apply(t *task, res receiver.Result) {
 	if state == sdk.TaskStateFailed {
 		status = failedStatus(t, res.State, reason)
 	}
-	s.tasks.update(t, state, delivery, reason, status)
+	if _, err := s.tasks.update(t, state, delivery, reason, status); err != nil {
+		s.tasks.markUnknown(t)
+	}
 }
 
 func (h *handler) continuation(ctx context.Context, snd receiver.Sender, m msg.Message, wire *sdk.Message, wait bool) (sdk.SendMessageResult, error) {
@@ -557,7 +590,9 @@ func (h *handler) continuation(ctx context.Context, snd receiver.Sender, m msg.M
 	}
 	wire.Metadata[MetaKey] = ct
 	if !res.Duplicate {
-		s.tasks.appendHistory(t, wire)
+		if err := s.tasks.appendHistory(t, wire); err != nil {
+			return nil, sdk.NewError(sdk.ErrInternalError, "message could not be recorded")
+		}
 	}
 	if wait {
 		if err := s.await(ctx, t); err != nil {
@@ -613,7 +648,11 @@ func (h *handler) CancelTask(ctx context.Context, req *sdk.CancelTaskRequest) (*
 		s.tasks.markDispatching(t)
 		return nil, sdk.ErrTaskNotCancelable
 	}
-	if !s.tasks.update(t, sdk.TaskStateCanceled, journal.StateCanceled, "", nil) {
+	ok, err = s.tasks.update(t, sdk.TaskStateCanceled, journal.StateCanceled, "", nil)
+	if err != nil {
+		return nil, sdk.NewError(sdk.ErrInternalError, "cancel could not be recorded")
+	}
+	if !ok {
 		return nil, sdk.ErrTaskNotCancelable
 	}
 	return s.tasks.snapshot(t, nil), nil
