@@ -2,6 +2,7 @@ package journal
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"strings"
 	"sync"
@@ -397,5 +398,16 @@ func TestRetentionKeepsUnansweredOutboundAsk(t *testing.T) {
 	j3, _ := reopenAfter(t, dir, now, 50*time.Hour)
 	if _, ok := j3.Latest(Record{Type: TypeOutbound, MessageID: "out"}); ok {
 		t.Error("outbound ask kept after it was answered")
+	}
+}
+
+func TestAppendRefusesOverLimitRecord(t *testing.T) {
+	j, _ := open(t, t.TempDir(), Options{})
+	err := j.Append(Record{Type: TypeDedupe, Sender: "s", MessageID: "m", State: strings.Repeat("x", MaxRecordBytes)})
+	if !errors.Is(err, ErrRecordTooLarge) {
+		t.Fatalf("Append over limit = %v, want ErrRecordTooLarge", err)
+	}
+	if err := j.Append(Record{Type: TypeDedupe, Sender: "s", MessageID: "m2", State: "x"}); err != nil {
+		t.Fatalf("journal unusable after refusal: %v", err)
 	}
 }
