@@ -15,7 +15,7 @@ CrossTalk lets Claude Code and Codex sessions on this Mac message each other by 
    crosstalk version
    ```
    Shell profiles do not reach a harness started outside a shell (a launcher, `env -i`): there `crosstalk` is not found. See the troubleshooting table.
-2. **Claude only: remove a manual entry.** If you ever ran `claude mcp add ... crosstalk`, run `claude mcp remove --scope user crosstalk`, and rewrite any allow, ask or deny rule that names `mcp__crosstalk__*` as `mcp__plugin_crosstalk_crosstalk__*`. **Codex:** keep an existing `[mcp_servers.crosstalk]` entry; it takes priority over the plugin. It does not inherit the plugin's `approve` default: an entry with no `default_tools_approval_mode` makes every CrossTalk tool prompt, and `codex exec` blocks them. Set `default_tools_approval_mode = "approve"` in the entry, or delete the entry knowingly.
+2. **Claude only: remove a manual entry.** If you ever ran `claude mcp add ... crosstalk`, run `claude mcp remove --scope user crosstalk`, and rewrite any allow, ask or deny rule that names `mcp__crosstalk__*` as `mcp__plugin_crosstalk_crosstalk__*`. **Codex:** keep an existing `[mcp_servers.crosstalk]` entry; it takes priority over the plugin. It does not inherit the plugin's `approve` default: an entry with no `default_tools_approval_mode` makes every CrossTalk tool prompt, and `codex exec` blocks them. Keeping the prompts is supported: set `default_tools_approval_mode = "prompt"` explicitly. To run CrossTalk tools without asking, which is the plugin's own default, set `"approve"` in the entry, or delete the entry knowingly.
 3. **Install the plugin.**
    ```sh
    claude plugin install crosstalk --marketplace GoodOlClint/CrossTalk
