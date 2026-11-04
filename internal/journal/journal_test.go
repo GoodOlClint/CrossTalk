@@ -546,3 +546,33 @@ func TestNudgeRecordReplaysAndIsKept(t *testing.T) {
 		t.Fatalf("replayed nudges %v", got)
 	}
 }
+
+func TestNudgeRecordsSurviveRetention(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return now }
+	j, _ := open(t, dir, Options{Now: clock})
+	j.Append(Record{Type: TypeNudge, To: "peer-1", Count: 30})
+	j.Append(Record{Type: TypeNudge, To: "peer-1", Count: 60})
+	j.Accept("alice", "old-done", "accepted")
+	j.Close()
+
+	now = now.Add(25 * time.Hour)
+	j2, _ := open(t, dir, Options{Now: clock})
+	if _, ok := j2.Dedupe("alice", "old-done"); ok {
+		t.Fatal("retention did not run")
+	}
+	rs, err := j2.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, r := range rs {
+		if r.Type == TypeNudge {
+			n++
+		}
+	}
+	if n != 2 {
+		t.Fatalf("%d nudge records after 25h, want 2", n)
+	}
+}

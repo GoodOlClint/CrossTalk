@@ -76,6 +76,7 @@ func (b Binding) SameConversation(o Binding) bool {
 //	obligation: MessageID (the reply), InReplyTo, To, TaskID, State pending|completed|released|delivered, or closed (the ask closed first); the first carries Message
 //	claim:      Owner (agent_id), Claimed
 //	outbound:   MessageID, To (agent_id, harness:session_ref, or an unresolved name), Kind, State, Reason, TaskID (far side's), ContextID; the first carries Message, whose deadline_seconds and sent_at fix an ask's deadline
+//	nudge:      To (the peer), Count (sends to it when the nudge fired); kept past retention, since it is the record of how often the nudge fires
 //	receipt:    MessageID (an admitted inbound reply), InReplyTo (the outbound ask it answers), Sender (the ask's peer agent_id), ContextID (the ask's)
 type Record struct {
 	Type      Type       `json:"type"`
@@ -152,6 +153,8 @@ func unresolved(latest Record) bool {
 		return latest.State != StateDelivered && latest.State != StateClosed
 	case TypeClaim:
 		return latest.Claimed
+	case TypeNudge:
+		return true
 	}
 	return false
 }

@@ -561,7 +561,7 @@ func TestListAgentsMarksCaller(t *testing.T) {
 }
 
 func TestInstructionsSayReadHintEverywhereAndSilenceIsAllowed(t *testing.T) {
-	for _, want := range []string{"hint on every result", "needs no answer", "untrusted"} {
+	for _, want := range []string{"hint on every result", "needs no answer", "an ask still takes its reply", "untrusted"} {
 		if !strings.Contains(Instructions, want) {
 			t.Errorf("instructions lack %q", want)
 		}

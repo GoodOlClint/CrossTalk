@@ -3,6 +3,7 @@ package shim
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -10,7 +11,10 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/GoodOlClint/crosstalk/internal/adapter"
+	"github.com/GoodOlClint/crosstalk/internal/identity"
 	"github.com/GoodOlClint/crosstalk/internal/journal"
+	"github.com/GoodOlClint/crosstalk/internal/msg"
 	"github.com/GoodOlClint/crosstalk/internal/udsingress"
 )
 
@@ -219,5 +223,70 @@ func TestScriptSendEntersTheRealReceiverChainAsUnverified(t *testing.T) {
 	}
 	if rs, _ := na.sh.Agent(alice.agentID()).agent.Journal().Records(); len(rs) == 0 {
 		t.Fatal("receiver chain journaled nothing")
+	}
+}
+
+func sendCount(n *node, from, peer string) int {
+	st := n.sh.Agent(from)
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	return st.sends[peer]
+}
+
+func TestCountingRulesPerOutcome(t *testing.T) {
+	for _, c := range []struct {
+		state adapter.State
+		want  int
+	}{{adapter.Rejected, 0}, {adapter.Unreachable, 0}, {adapter.Accepted, 1}, {adapter.Queued, 1}, {adapter.Unknown, 1}} {
+		t.Run(string(c.state), func(t *testing.T) {
+			w := newWorld(t)
+			alice := w.claude(4001, "sess-alice", "alice")
+			w.codex.addThread("T-bob", "bob")
+			na := w.node(alice.pid, w.lb, nil)
+			nb := w.node(1, w.lb, nil)
+			na.ok(nil, "receive_message", map[string]any{})
+			nb.ok(thread("T-bob"), "receive_message", map[string]any{})
+			w.codex.ScriptInject(adapter.Outcome{State: c.state})
+			na.ok(nil, "send_message", send("bob", "x"))
+			if got := sendCount(na, alice.agentID(), identity.AgentID("codex", "T-bob")); got != c.want {
+				t.Fatalf("a %s send counted %d, want %d", c.state, got, c.want)
+			}
+		})
+	}
+}
+
+func TestReplyAttemptResumeAndStoredRetryCountOnce(t *testing.T) {
+	w := newWorld(t)
+	alice := w.claude(4001, "sess-alice", "alice")
+	w.codex.addThread("T-bob", "bob")
+	failOnce := true
+	na := w.node(alice.pid, w.lb, nil)
+	nb := w.node(1, w.lb, func(o *Options) {
+		o.OnReply = func(context.Context, *AgentState, msg.Message, msg.Message) error {
+			if failOnce {
+				failOnce = false
+				return errors.New("far side down")
+			}
+			return nil
+		}
+	})
+	na.ok(nil, "receive_message", map[string]any{})
+	nb.ok(thread("T-bob"), "receive_message", map[string]any{})
+	ask := na.ok(nil, "ask", send("bob", "q?"))
+	args := map[string]any{"message_id": ask["message_id"], "text": "answer"}
+	bobID, aliceID := identity.AgentID("codex", "T-bob"), alice.agentID()
+
+	if first := nb.ok(thread("T-bob"), "reply", args); first["state"] != "unknown" {
+		t.Fatalf("first attempt %v, want unknown", first)
+	}
+	if got := sendCount(nb, bobID, aliceID); got != 1 {
+		t.Fatalf("an unknown reply attempt counted %d, want 1", got)
+	}
+	if resumed := nb.ok(thread("T-bob"), "reply", args); resumed["state"] != "accepted" {
+		t.Fatalf("resume %v", resumed)
+	}
+	nb.ok(thread("T-bob"), "reply", args)
+	if got := sendCount(nb, bobID, aliceID); got != 1 {
+		t.Fatalf("attempt, resume and stored retry counted %d, want 1", got)
 	}
 }
