@@ -1,6 +1,6 @@
 # Change plan: Antigravity CLI harness via hook mailbox
 
-Status: draft for the brownfield gate, revised after the Codex critique (see Review disposition); no implementation until the operator approves. Decision record: [ADR 0012](../decisions/0012-antigravity-harness-via-hook-mailbox.md). Evidence: [spike 12](../spikes/12-antigravity-cli.md).
+Status: draft for the brownfield gate, revised after the Codex critique (see Review disposition); no implementation until the operator approves. Decision record: [ADR 0012](../decisions/0012-antigravity-harness-via-hook-mailbox.md). Evidence: [spike 12](../spikes/12-antigravity-cli.md). Priority (operator ruling, 2026-11-04): a stretch goal; the plan is kept for when the operator chooses to build it.
 
 Terms. **agy** = Google's Antigravity CLI, version 1.5.0 on macOS. **Conversation** = one agy session with a conversation id; agy's `/clear` starts a new one in the same process. **Root id** = `_meta["antigravity.google/root_conversation_id"]`, the top-level conversation behind a tool call. **`_meta`** = the metadata object on an MCP request. **MCP** = Model Context Protocol, how agy calls CrossTalk's tools. **A2A** = Agent-to-Agent protocol, how shims talk to each other. **Shim** = the `crosstalk mcp` process agy starts. **Hook** = a command agy runs at a lifecycle point, reading JSON on stdin and writing JSON on stdout. **`injectSteps`** = the hook output that adds steps to a conversation. **`ephemeralMessage`** = one kind of injected step; agy documents it as a transient system message. **Pointer** = the short fixed sentence a hook injects, containing no peer text. **Mailbox** = messages held in an agent's journal until its model collects them. **Journal** = the per-agent append-only state file. **Marker** = a small file the shim writes and the hook reads. **Credits/quota** = agy's model-usage allowance. **Flash-low** = `gemini-3.8-flash-low`, the cheap model the spike used.
 
@@ -23,7 +23,7 @@ Binding operator rulings: hook mailbox delivery only; no `agy agentapi`, `agy ac
 
 - Wake an idle agent, or interrupt a model call or a running tool.
 - Put peer text in a user or system position. The body arrives only as a tool result.
-- Reach another machine (non-goal in design §1). **If the father's peers run on the operator's Mac and he does not, this plan does not serve him; see open question Q1.**
+- Reach another machine (non-goal in design §1). The father runs Claude, Codex and agy on one Mac (Q1), so this is not a limit for him.
 - Support the Antigravity App or IDE. They share `~/.gemini/config/` with the CLI, so the shim and hook will run there too, but they stay `unbound` (section 5.2).
 - Prove the model read a message. `accepted` means the tool result was handed to agy.
 - List agy conversations that have never called a CrossTalk tool. agy has no documented session registry.
@@ -245,7 +245,7 @@ Known gaps shipped: G1 stranded name after `/clear` unless commit 11 lands. G2 n
 
 For the operator:
 
-- **Q1. Where are the father's peers?** Cross-machine is out of v1. If he has no Claude or Codex on his own Mac, only agy-to-agy works for him. Decide before building.
+- **Q1. Where are the father's peers? Answered (operator, 2026-11-04):** on one Mac, with Claude, Codex and agy.
 - **Q2.** Is the first-tool-call rule acceptable, or should `--announce` be on, at one model call per conversation?
 - **Q3.** Terms risk (risk 1): proceed, tell the father, and ask Google or not?
 - **Q4.** Give up on the `/clear` name if S2 fails, or block release on it?
