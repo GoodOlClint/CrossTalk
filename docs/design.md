@@ -171,7 +171,7 @@ Out: any wrapper or launcher (`crosstalk run` removed, ADR 0006), launch-time ro
 
 ## 11. Tests that gate "done"
 
-1. Claude→Claude via shim: send, native SendMessage reply is journaled `bounced` at the receiving shim with a bounce injected into the replying session; the `reply` tool then routes to the sender with in_reply_to resolved. 
+1. Claude→Claude via shim: send, native SendMessage reply is journaled `bounced` at the receiving shim with a bounce injected into the replying session; the `reply` tool then routes to the sender with in_reply_to resolved.
 2. Claude→Codex verified immediate while Codex is mid-turn: named tool output is consumed at the next model boundary; no peer `userMessage` item is created.
 3. Claude→Codex while idle, verified immediate sender: new turn starts with tool output. Deferred or unverified input: no-wake append succeeds (`queued`), idle remains idle, and a later independently started turn consumes the data.
 4. Codex→Claude via shim uds: arrives mid-turn with reconstructed envelope and verified sender.
