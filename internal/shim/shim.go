@@ -31,9 +31,10 @@ const (
 	ReasonNotPrimary        = "owner_not_primary"
 	ReasonNotServedHere     = "not_served_here"
 	DefaultDiscoveryTimeout = 3 * time.Second
-	DefaultLoopCap          = 20
-	LoopWindow              = 10 * time.Minute
-	ForwardWindow           = 5 * time.Minute
+	SendCapShort            = 20
+	SendWindowShort         = 10 * time.Minute
+	SendCapLong             = 60
+	SendWindowLong          = time.Hour
 )
 
 // Transport carries a message to an agent served by a shim (A2A in
@@ -85,12 +86,8 @@ type Options struct {
 	// obligation pending and OnReply runs again on the retry or replay.
 	OnReply          func(ctx context.Context, st *AgentState, original, reply msg.Message) error
 	DiscoveryTimeout time.Duration
-	// LoopCap is how many messages one agent may send to one peer within
-	// LoopWindow before send_message and ask refuse with loop_cap; 0 means
-	// DefaultLoopCap.
-	LoopCap int
-	Now     func() time.Time
-	Logger  *slog.Logger
+	Now              func() time.Time
+	Logger           *slog.Logger
 }
 
 // Shim implements mcpserver.Backend, mcpserver.Binder,
@@ -131,9 +128,6 @@ func New(opt Options) (*Shim, error) {
 	}
 	if opt.DiscoveryTimeout == 0 {
 		opt.DiscoveryTimeout = DefaultDiscoveryTimeout
-	}
-	if opt.LoopCap == 0 {
-		opt.LoopCap = DefaultLoopCap
 	}
 	if opt.Now == nil {
 		opt.Now = time.Now

@@ -1,14 +1,103 @@
 package shim
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/GoodOlClint/crosstalk/internal/adapter"
 	"github.com/GoodOlClint/crosstalk/internal/udsingress"
 )
 
-func TestForwardRingIsStoppedByHopChain(t *testing.T) {
+type tickClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (c *tickClock) now() time.Time { c.mu.Lock(); defer c.mu.Unlock(); return c.t }
+func (c *tickClock) add(d time.Duration) {
+	c.mu.Lock()
+	c.t = c.t.Add(d)
+	c.mu.Unlock()
+}
+
+func newClock() *tickClock { return &tickClock{t: time.Date(2026, 11, 4, 9, 0, 0, 0, time.UTC)} }
+
+func TestSlowPingPongStopsWithinTheHourlyWindow(t *testing.T) {
+	w := newWorld(t)
+	alice := w.claude(4001, "sess-alice", "alice")
+	w.codex.addThread("T-bob", "bob")
+	clk := newClock()
+	na := w.node(alice.pid, w.lb, func(o *Options) { o.Now = clk.now })
+	nb := w.node(1, w.lb, func(o *Options) { o.Now = clk.now })
+	na.ok(nil, "receive_message", map[string]any{})
+	nb.ok(thread("T-bob"), "receive_message", map[string]any{})
+
+	start := clk.now()
+	for round := 0; round < 200; round++ {
+		if r := na.ok(nil, "send_message", send("bob", "ping")); r["reason"] == ReasonLoopCap {
+			if clk.now().Sub(start) >= time.Hour {
+				t.Fatalf("stopped after the hour, round %d", round)
+			}
+			clk.add(61 * time.Minute)
+			if r := na.ok(nil, "send_message", send("bob", "ping")); r["reason"] == ReasonLoopCap {
+				t.Fatalf("still capped an hour later: %v", r)
+			}
+			return
+		}
+		nb.ok(thread("T-bob"), "send_message", send("alice", "pong"))
+		clk.add(31 * time.Second)
+	}
+	t.Fatal("200 slow rounds without a stop")
+}
+
+func TestFailedSendsAreNotCounted(t *testing.T) {
+	w := newWorld(t)
+	alice := w.claude(4001, "sess-alice", "alice")
+	w.codex.addThread("T-bob", "bob")
+	na := w.node(alice.pid, w.lb, nil)
+	nb := w.node(1, w.lb, nil)
+	na.ok(nil, "receive_message", map[string]any{})
+	nb.ok(thread("T-bob"), "receive_message", map[string]any{})
+
+	down := adapter.Outcome{State: adapter.Unreachable, Err: errors.New("down")}
+	for i := 0; i < 70; i++ {
+		w.codex.ScriptInject(down)
+		if r := na.ok(nil, "send_message", send("bob", "retry")); r["reason"] == ReasonLoopCap {
+			t.Fatalf("failed send %d counted: %v", i, r)
+		}
+	}
+	if r := na.ok(nil, "send_message", send("bob", "now")); r["state"] != "accepted" && r["state"] != "queued" {
+		t.Fatalf("send after the peer returned: %v", r)
+	}
+}
+
+func TestWorkerStatusToCoordinatorAfterWorkersTalked(t *testing.T) {
+	w := newWorld(t)
+	coord := w.claude(4001, "sess-coord", "coord")
+	w.codex.addThread("T-w1", "w1")
+	w.codex.addThread("T-w2", "w2")
+	nc := w.node(coord.pid, w.lb, nil)
+	nw := w.node(1, w.lb, nil)
+	nc.ok(nil, "receive_message", map[string]any{})
+	nw.ok(thread("T-w1"), "receive_message", map[string]any{})
+	nw.ok(thread("T-w2"), "receive_message", map[string]any{})
+
+	nc.ok(nil, "send_message", send("w1", "kickoff"))
+	nw.ok(thread("T-w1"), "send_message", send("w2", "which api?"))
+	nw.ok(thread("T-w2"), "send_message", send("w1", "v2"))
+	if r := nw.ok(thread("T-w1"), "send_message", send("coord", "status: done")); r["state"] == "rejected" {
+		t.Fatalf("status report %v", r)
+	}
+}
+
+func TestRingStopsOnTheCaps(t *testing.T) {
 	w := newWorld(t)
 	alice := w.claude(4001, "sess-alice", "alice")
 	w.codex.addThread("T-bob", "bob")
@@ -19,14 +108,56 @@ func TestForwardRingIsStoppedByHopChain(t *testing.T) {
 	nbc.ok(thread("T-bob"), "receive_message", map[string]any{})
 	nbc.ok(thread("T-carol"), "receive_message", map[string]any{})
 
-	if r := na.ok(nil, "send_message", send("bob", "start")); r["state"] == "rejected" {
-		t.Fatalf("alice to bob %v", r)
+	for i := 0; i < 100; i++ {
+		for _, step := range []struct {
+			n    *node
+			meta map[string]any
+			to   string
+		}{{na, nil, "bob"}, {nbc, thread("T-bob"), "carol"}, {nbc, thread("T-carol"), "alice"}} {
+			r := step.n.ok(step.meta, "send_message", send(step.to, "around"))
+			if r["reason"] == ReasonLoopCap {
+				return
+			}
+			if r["state"] == "rejected" {
+				t.Fatalf("ring step %d to %s: %v", i, step.to, r)
+			}
+		}
 	}
-	if r := nbc.ok(thread("T-bob"), "send_message", send("carol", "forward")); r["state"] == "rejected" {
-		t.Fatalf("bob to carol %v", r)
+	t.Fatal("the ring ran 100 times without a stop")
+}
+
+func TestPooledThreadsCountSeparately(t *testing.T) {
+	w := newWorld(t)
+	alice := w.claude(4001, "sess-alice", "alice")
+	w.codex.addThread("T-bob", "bob")
+	w.codex.addThread("T-carol", "carol")
+	na := w.node(alice.pid, w.lb, nil)
+	nbc := w.node(1, w.lb, nil)
+	na.ok(nil, "receive_message", map[string]any{})
+	nbc.ok(thread("T-bob"), "receive_message", map[string]any{})
+	nbc.ok(thread("T-carol"), "receive_message", map[string]any{})
+
+	var wg sync.WaitGroup
+	capped := make([]int, 2)
+	for i, th := range []string{"T-bob", "T-carol"} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for n := 0; n < SendCapShort+5; n++ {
+				res, err := nbc.cs.CallTool(context.Background(), &mcp.CallToolParams{Meta: thread(th), Name: "send_message", Arguments: send("alice", "x")})
+				if err != nil {
+					return
+				}
+				b, _ := json.Marshal(res.StructuredContent)
+				if strings.Contains(string(b), ReasonLoopCap) {
+					capped[i]++
+				}
+			}
+		}()
 	}
-	if r := nbc.ok(thread("T-carol"), "send_message", send("alice", "forward")); r["state"] != "rejected" || r["reason"] != "hop_repeat" {
-		t.Fatalf("carol to alice closed the ring: %v", r)
+	wg.Wait()
+	if capped[0] != 5 || capped[1] != 5 {
+		t.Fatalf("capped sends per thread %v, want 5 each", capped)
 	}
 }
 

@@ -8,9 +8,7 @@ var Hints = map[string]string{
 	"agent_held":      "Another CrossTalk server already serves this session, usually a second install. Tell the user to remove the manual crosstalk MCP entry (claude mcp remove --scope user crosstalk) and restart this session; list_agents still works meanwhile.",
 	CodeUnbound:       "CrossTalk cannot tell which session this call came from, so only list_agents works. Tell the user.",
 	CodeNotReady:      "This session is still registering. Retry the call once; if it repeats, call list_agents and tell the user.",
-	"loop_cap":        "You have sent this session many messages in a short time, which looks like a loop. Stop sending to it and tell the user; receive_message shows anything it sent back.",
-	"hop_repeat":      "This message would return to a session already in the chain that led to it, so CrossTalk stopped it. Do not forward it again; answer with reply to the original message, or tell the user.",
-	"hop_overflow":    "This chain of forwards is too long, so CrossTalk stopped it. Do not forward it again; tell the user.",
+	"loop_cap":        "The send cap for this peer is reached (20 sends in 10 minutes or 60 in an hour). This may be a message loop or simply a busy exchange. Stop sending to that peer and tell your user. The block lifts as older sends age out: within 10 minutes for the short cap, within an hour for the hourly one. receive_message shows what the peer sent back.",
 	"no_such_message": "No reply route exists for that message_id. Use send_message to the sender instead.",
 }
 

@@ -13,6 +13,10 @@ Cross-harness agent messaging: the shim (`crosstalk mcp`, an MCP server the harn
 - Discovery: every Claude session and loaded Codex thread from the harness registries, merged with `~/.local/state/crosstalk/agents/<agent_id>.json` descriptors; no daemon, no herdr dependency. ADR 0003.
 - Trust: sender identity from transport (peer pid, bearer credential), never from message text; kinds `inform`, `ask` and `command` in v1 (`kind` is a routing hint, not a trust boundary), `control` deferred. ADR 0004.
 
+## Loop guard
+
+Loops between model sessions are bounded by a rate cap, not a hop chain: each agent may send at most 20 messages per peer in 10 minutes and 60 per hour (`send_message`, `ask`, `reply`; only accepted or queued sends count), then gets `loop_cap`. It lets up to an hour's worth of sends through before it stops, it is sender-side and in memory (a restart resets it), a client that goes around the shim (including `crosstalk send`), native bounced answers and Claude's own SendMessage are outside it, and a capped `reply` to an ask leaves the asker hearing nothing unless a deadline fires. `hopCheck` on the receiver still guards an A2A client that supplies its own chain. Design §4.
+
 ## Canonical pipelines
 
 - All inbound messages, from either ingress, flow through one receiver chain: authenticate → dedupe → hop-chain → policy → inject. Do not inject from an ingress handler directly.
@@ -32,7 +36,7 @@ Every ADR in this repo is provisional (operator ruling, 2026-11-04). An ADR may 
 
 ## Status
 
-v1 implemented on main, with the agent plugins and the skill (ADR 0013; `docs/setup.md`); their live clean-account runs are not done (`docs/plans/agent-plugins-clean-run.md`). Wave 2 on `feat/wave2` adds the A2A hop chain on forwards plus the `loop_cap` send cap (design §4), `CROSSTALK_CODEX_ENDPOINTS`, the notice on pulled messages and `crosstalk send` (design §5). `docs/design.md` is still a draft under operator review, and its §11 tests gate "done" for v1 (test 17, the SDK conformance gate, is open).
+v1 implemented on main, with the agent plugins and the skill (ADR 0013; `docs/setup.md`); their live clean-account runs are not done (`docs/plans/agent-plugins-clean-run.md`). Wave 2 adds a sender-side send cap, `CROSSTALK_CODEX_ENDPOINTS`, the notice on pulled messages and `crosstalk send`. `docs/design.md` is still a draft under operator review, and its §11 tests gate "done" for v1 (test 17, the SDK conformance gate, is open).
 
 The repo is private. It goes public only after CI is in place (operator ruling, 2026-11-04), and after username paths and the stale README are fixed at HEAD. The operator flips the visibility. Commit author email stays as is; no history rewrite.
 

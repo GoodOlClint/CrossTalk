@@ -131,57 +131,42 @@ func (st *AgentState) newMessage(to string, k msg.Kind, d msg.Delivery, text str
 	}
 }
 
-// withinLoopCap records a send to peer and reports whether it stays within
-// the cap. Counts are in memory: a restart resets them.
-func (st *AgentState) withinLoopCap(peer string) bool {
+// reserveSend counts a send to peer against both caps and returns the
+// function that settles it: a send that was not accepted or queued is taken
+// back. Counts are in memory, per agent and per peer; a restart resets them.
+func (st *AgentState) reserveSend(peer string) (settle func(adapter.State), ok bool) {
 	now := st.shim.now()
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	kept := st.sends[peer][:0:0]
+	recent := 0
 	for _, t := range st.sends[peer] {
-		if now.Sub(t) < LoopWindow {
+		if age := now.Sub(t); age < SendWindowLong {
 			kept = append(kept, t)
+			if age < SendWindowShort {
+				recent++
+			}
 		}
 	}
-	if len(kept) >= st.shim.opt.LoopCap {
+	if recent >= SendCapShort || len(kept) >= SendCapLong {
 		st.sends[peer] = kept
-		return false
+		return nil, false
 	}
 	st.sends[peer] = append(kept, now)
-	return true
-}
-
-// forwardChain is the hop_chain for a send to target. The send extends the
-// chain of the newest A2A message this agent received within ForwardWindow
-// that was not a reply, since that message is what a model-made send most
-// likely forwards; a send back to the previous hop starts a fresh chain, so
-// answering a peer is never a loop, and ping-pong is left to withinLoopCap.
-func (st *AgentState) forwardChain(target string) ([]string, error) {
-	self := []string{msg.Hop(st.agent.ID())}
-	j := st.agent.Journal()
-	rs, err := j.Records()
-	if err != nil {
-		return self, nil
-	}
-	now := st.shim.now()
-	for i := len(rs) - 1; i >= 0; i-- {
-		rec := rs[i]
-		if rec.Type != journal.TypeDedupe || len(rec.Message) == 0 {
-			continue
+	return func(state adapter.State) {
+		if state == adapter.Accepted || state == adapter.Queued {
+			return
 		}
-		var m msg.Message
-		if json.Unmarshal(rec.Message, &m) != nil || len(m.HopChain) == 0 || m.InReplyTo != nil || now.Sub(m.SentAt) > ForwardWindow {
-			continue
+		st.mu.Lock()
+		defer st.mu.Unlock()
+		ts := st.sends[peer]
+		for i := len(ts) - 1; i >= 0; i-- {
+			if ts[i].Equal(now) {
+				st.sends[peer] = append(ts[:i:i], ts[i+1:]...)
+				return
+			}
 		}
-		if l, _ := j.Latest(rec); adapter.State(l.State) == adapter.Rejected {
-			continue
-		}
-		if m.HopChain[len(m.HopChain)-1] == msg.Hop(target) {
-			return self, nil
-		}
-		return msg.AppendHop(m.HopChain, self[0])
-	}
-	return self, nil
+	}, true
 }
 
 func (st *AgentState) outbound(m msg.Message, to string, state adapter.State, reason string, withBody bool) error {
@@ -259,23 +244,17 @@ func (st *AgentState) deliver(ctx context.Context, m msg.Message) mcpserver.Resu
 		if d.AgentID == st.agent.ID() {
 			return finish(d.AgentID, adapter.Rejected, ReasonSelf)
 		}
-		if !st.withinLoopCap(d.AgentID) {
+		settle, ok := st.reserveSend(d.AgentID)
+		if !ok {
 			return finish(d.AgentID, adapter.Rejected, ReasonLoopCap)
 		}
-		chain, err := st.forwardChain(d.AgentID)
-		if err != nil {
-			reason := receiver.ReasonHopRepeat
-			if errors.Is(err, msg.ErrHopOverflow) {
-				reason = receiver.ReasonHopOverflow
-			}
-			return finish(d.AgentID, adapter.Rejected, reason)
-		}
-		m.HopChain = chain
 		if st.outbound(m, d.AgentID, journal.StateSubmitted, "", true) != nil {
+			settle(adapter.Unreachable)
 			res.State, res.Reason = adapter.Unreachable, receiver.ReasonJournal
 			return res
 		}
 		state, reason, taskID := st.viaTransport(ctx, d, m)
+		settle(state)
 		st.outboundTask(m, d.AgentID, state, reason, false, taskID)
 		res.State, res.Reason = state, reason
 		return res
@@ -300,10 +279,12 @@ func (st *AgentState) deliver(ctx context.Context, m msg.Message) mcpserver.Resu
 		return finish(m.To, state, reason)
 	}
 	to := string(b.Harness) + ":" + b.SessionRef
-	if !st.withinLoopCap(to) {
+	settle, ok := st.reserveSend(to)
+	if !ok {
 		return finish(to, adapter.Rejected, ReasonLoopCap)
 	}
 	if st.outbound(m, to, journal.StateSubmitted, "", true) != nil {
+		settle(adapter.Unreachable)
 		res.State, res.Reason = adapter.Unreachable, receiver.ReasonJournal
 		return res
 	}
@@ -315,6 +296,7 @@ func (st *AgentState) deliver(ctx context.Context, m msg.Message) mcpserver.Resu
 	if err != nil {
 		reason = err.Error()
 	}
+	settle(state)
 	res = finish(to, state, reason)
 	if reason == "" && (state == adapter.Accepted || state == adapter.Queued) {
 		res.Hint = hintNativeOneWay
@@ -545,16 +527,24 @@ func (s *Shim) Reply(ctx context.Context, from *mcpserver.Agent, messageID, text
 	if mcpserver.IsAgentID(key) && orig.Kind != msg.Ask && !st.rcv.RouteOpen(orig.MessageID) {
 		return mcpserver.Result{}, &mcpserver.Error{Code: mcpserver.CodeInvalid, Reason: ReasonNoSuchMessage, Hint: hintNoRouteExpired}
 	}
-	if !st.withinLoopCap(key) {
+	settle, ok := st.reserveSend(key)
+	if !ok {
 		return mcpserver.Result{}, &mcpserver.Error{Code: mcpserver.CodeRejected, Reason: ReasonLoopCap}
 	}
 	r := st.newMessage(orig.From, msg.Inform, msg.Immediate, text)
 	irt, ctxID := st.replyTarget(orig)
 	r.InReplyTo, r.ContextID = &irt, ctxID
 	if err := st.agent.Journal().Append(st.obligation(r, key, journal.StatePending, true, taskID)); err != nil {
+		settle(adapter.Unreachable)
 		return mcpserver.Result{}, err
 	}
-	return st.completeReply(ctx, orig, r, key, taskID, journal.StatePending)
+	res, err := st.completeReply(ctx, orig, r, key, taskID, journal.StatePending)
+	if err != nil {
+		settle(adapter.Unreachable)
+	} else {
+		settle(res.State)
+	}
+	return res, err
 }
 
 // Obligation stages after pending (journal.StatePending): the ask's task is
