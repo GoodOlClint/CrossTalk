@@ -20,7 +20,7 @@ Setup on the scratch account (once): `brew install go`; `GOBIN="$(brew --prefix)
 1. `codex plugin marketplace add GoodOlClint/CrossTalk && codex plugin add crosstalk@crosstalk`. Expect no prompt for a public repo; note the result for a private one (fact 14).
 2. Start a Codex session and call a CrossTalk tool. Pass (fact 9): no approval prompt with an empty `config.toml`.
 3. Fact 8: `list_agents` from the Codex session shows its own row with `you: true` and `crosstalk: true` (the thread id reached the plugin-started server).
-4. Fact 6: add `[mcp_servers.crosstalk]` with the same command to the scratch `config.toml`; restart; exactly one `crosstalk mcp` process per Codex session Use `ps` from outside the Codex sandbox: `pgrep` fails inside it.
+4. Fact 6: add `[mcp_servers.crosstalk]` with the same command to the scratch `config.toml`; restart; exactly one `crosstalk mcp` process per Codex session. Use `ps` from outside the Codex sandbox: `pgrep` fails inside it.
 5. Fact 9 restriction: set `default_tools_approval_mode = "prompt"` explicitly in that entry (an entry with no mode also prompts, which is not this test); the tools must prompt.
 6. Fact 7: with the plugin only (no manual entry), from a Claude session `ask` the Codex session; the Codex model receives it and a real answer arrives back in the Claude session (delivery uses namespace `crosstalk`).
 7. Plain request: `codex exec --json "Ask the other session in peer-b what branch it is on"`; check the JSON stream for a CrossTalk tool call and record that `peer-b` received the message. Expect `reachable: false` for the exec row itself.
