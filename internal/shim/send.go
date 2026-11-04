@@ -31,8 +31,8 @@ const (
 	hintNativeReachable   = "This session has no CrossTalk binding yet, so it takes no ask or command. send_message with the default kind reaches it; if CrossTalk is installed there, its first CrossTalk call binds it, and then ask works."
 	hintNativeUnreachable = "This session has no CrossTalk binding yet and its harness reports it unreachable, so nothing can reach it now. Check list_agents later; if CrossTalk is installed there, its first CrossTalk call binds it, and then ask works."
 	hintNativeOneWay      = "Delivered one way to a session with no CrossTalk binding. An answer may never come, or may wait on that session's user."
-	hintNoRouteUnbound    = "This message arrived before this session bound, so it has no reply route; nothing expired. Use send_message to the sender."
-	hintNoRouteExpired    = "This inform's reply route expired after one hour. Use send_message to the sender."
+	hintNoRouteUnbound    = "This session has no message with that id: check the message_id against receive_message, or it arrived before this session bound. Use send_message to the sender."
+	hintNoRouteExpired    = "That inform has no open reply route: it was not delivered, it was already answered, or it is over an hour old. Use send_message to the sender."
 	hintAmbiguousName     = "Several sessions carry this name. Find the one you mean in list_agents and address it by agent_id."
 )
 

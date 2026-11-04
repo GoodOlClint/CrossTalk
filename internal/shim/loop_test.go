@@ -1,6 +1,12 @@
 package shim
 
-import "testing"
+import (
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/GoodOlClint/crosstalk/internal/udsingress"
+)
 
 func TestForwardRingIsStoppedByHopChain(t *testing.T) {
 	w := newWorld(t)
@@ -91,4 +97,32 @@ func TestReplyChainStopsAtLoopCap(t *testing.T) {
 		bobTurn = !bobTurn
 	}
 	t.Fatal("100 replies without a stop")
+}
+
+func TestScriptSendEntersTheRealReceiverChainAsUnverified(t *testing.T) {
+	w := newWorld(t)
+	alice := w.claude(4001, "sess-alice", "alice")
+	w.codex.addThread("T-bob", "bob")
+	na := w.node(alice.pid, w.lb, nil)
+	nb := w.node(1, w.lb, nil)
+	na.ok(nil, "receive_message", map[string]any{})
+	nb.ok(thread("T-bob"), "receive_message", map[string]any{})
+	d, ok := w.descriptor(alice.agentID())
+	if !ok {
+		t.Fatal("alice not registered")
+	}
+	ack, err := udsingress.Send(d.UDSPath, "backup finished", 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ack.State != "accepted" {
+		t.Fatalf("ack %+v", ack)
+	}
+	got := alice.got()
+	if len(got) != 1 || !strings.Contains(got[0], "backup finished") || !strings.Contains(got[0], "unverified") {
+		t.Fatalf("alice got %q", got)
+	}
+	if rs, _ := na.sh.Agent(alice.agentID()).agent.Journal().Records(); len(rs) == 0 {
+		t.Fatal("receiver chain journaled nothing")
+	}
 }

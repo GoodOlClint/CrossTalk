@@ -1,13 +1,9 @@
 package main
 
 import (
-	"bufio"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
-	"net"
-	"os"
 	"strings"
 	"time"
 
@@ -18,11 +14,7 @@ import (
 // sendTimeout outlasts the Codex inject timeout (30s), the slowest delivery.
 var sendTimeout = 45 * time.Second
 
-type sendAck struct {
-	MessageID string `json:"message_id"`
-	State     string `json:"state"`
-	Reason    string `json:"reason"`
-}
+type sendAck = udsingress.Ack
 
 func pickTarget(ds []registry.Descriptor, to string) (registry.Descriptor, error) {
 	var hit []registry.Descriptor
@@ -40,31 +32,8 @@ func pickTarget(ds []registry.Descriptor, to string) (registry.Descriptor, error
 	return registry.Descriptor{}, fmt.Errorf("several agents are named %q; use an agent_id", to)
 }
 
-// sendTo writes the uds auth line and one user line, so the message enters
-// the target's receiver chain as an unverified inform.
 func sendTo(d registry.Descriptor, text string) (sendAck, error) {
-	var ack sendAck
-	raw, err := os.ReadFile(udsingress.KeyPath(d.UDSPath))
-	if err != nil {
-		return ack, err
-	}
-	key := strings.TrimSpace(string(raw))
-	c, err := net.DialTimeout("unix", d.UDSPath, 3*time.Second)
-	if err != nil {
-		return ack, err
-	}
-	defer c.Close()
-	c.SetDeadline(time.Now().Add(sendTimeout))
-	auth, _ := json.Marshal(map[string]string{"type": "auth", "token": key})
-	user, _ := json.Marshal(map[string]any{"type": "user", "message": map[string]string{"role": "user", "content": text}})
-	if _, err := c.Write(append(append(auth, '\n'), append(user, '\n')...)); err != nil {
-		return ack, err
-	}
-	line, err := bufio.NewReader(c).ReadBytes('\n')
-	if err != nil {
-		return ack, errors.New("no answer from the agent: the message may still be delivered, or its token was refused; do not retry blindly, a retry can deliver it twice")
-	}
-	return ack, json.Unmarshal(line, &ack)
+	return udsingress.Send(d.UDSPath, text, sendTimeout)
 }
 
 func runSend(args []string, stdin io.Reader, stdout, stderr io.Writer) int {

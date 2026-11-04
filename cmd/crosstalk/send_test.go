@@ -109,3 +109,10 @@ func TestSendTimeoutAfterWriteIsUnknownOutcome(t *testing.T) {
 		t.Fatalf("err %v", err)
 	}
 }
+
+func TestSendTooLargeIsAClearError(t *testing.T) {
+	_, err := sendTo(registry.Descriptor{UDSPath: "/nonexistent/a.sock"}, strings.Repeat("x", 3<<20))
+	if err == nil || !strings.Contains(err.Error(), "limit is") {
+		t.Fatalf("err %v", err)
+	}
+}

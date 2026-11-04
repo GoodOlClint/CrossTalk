@@ -28,18 +28,25 @@ S="$HOME/.codex/crosstalk-tab.sock"
 codex app-server --listen "unix://$S" &
 ```
 
-Add the endpoint to the CrossTalk entry in `~/.codex/config.toml`, then start the tab against that server:
+A plugin install has no entry in `~/.codex/config.toml` to extend, and an entry holding only `env` makes `codex mcp list` fail with "invalid transport". Write a full entry (it takes priority over the plugin, as step 2 says, so keep the approval mode):
 
 ```toml
-[mcp_servers.crosstalk.env]
-CROSSTALK_CODEX_ENDPOINTS = "unix:///Users/you/.codex/crosstalk-tab.sock"
+[mcp_servers.crosstalk]
+command = "crosstalk"
+args = ["mcp"]
+default_tools_approval_mode = "approve"
+env = { CROSSTALK_CODEX_ENDPOINTS = "unix:///Users/you/.codex/crosstalk-tab.sock" }
 ```
+
+Checked in a scratch `CODEX_HOME`: `codex mcp list` accepts this entry. Not checked: running it next to the plugin in a live session.
+
+Then start the tab against that server:
 
 ```sh
 codex --remote "unix://$S"
 ```
 
-`CROSSTALK_CODEX_ENDPOINTS` is a comma-separated list of Codex app-server endpoints (`unix://PATH` or `ws://HOST:PORT`) that CrossTalk queries besides the managed daemon.
+`CROSSTALK_CODEX_ENDPOINTS` is a comma-separated list of Codex app-server endpoints (`unix://PATH` or `ws://HOST:PORT`) that CrossTalk queries besides the managed daemon. A `ws://` endpoint carries peer text in cleartext; use it only on this Mac's loopback.
 
 ## If something is wrong
 

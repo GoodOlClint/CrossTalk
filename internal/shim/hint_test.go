@@ -116,7 +116,7 @@ func TestReplyToFirstContactInformHintsSendMessage(t *testing.T) {
 	}
 }
 
-func TestNoSuchMessageHintSaysWhyItIsGone(t *testing.T) {
+func TestNoSuchMessageHintsAreTrueOnEveryPath(t *testing.T) {
 	w := newWorld(t)
 	alice := w.claude(4001, "sess-alice", "alice")
 	w.codex.addThread("T-bob", "bob")
@@ -126,20 +126,31 @@ func TestNoSuchMessageHintSaysWhyItIsGone(t *testing.T) {
 	clock := func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
 	na := w.node(alice.pid, w.lb, nil)
 	nb := w.node(1, w.lb, func(o *Options) { o.Now = clock })
-
-	early := na.ok(nil, "send_message", send("bob", "before bind"))["message_id"]
 	nb.ok(thread("T-bob"), "receive_message", map[string]any{})
-	_, out := nb.call(thread("T-bob"), "reply", map[string]any{"message_id": early, "text": "x"})
-	if h, _ := out["hint"].(string); !strings.Contains(h, "before this session bound") || !strings.Contains(h, "nothing expired") || !strings.Contains(h, "send_message") {
-		t.Fatalf("pre-bind hint %q", h)
+	hint := func(id any) string {
+		_, out := nb.call(thread("T-bob"), "reply", map[string]any{"message_id": id, "text": "x"})
+		if out["reason"] != ReasonNoSuchMessage {
+			t.Fatalf("reply %v: %v", id, out)
+		}
+		h, _ := out["hint"].(string)
+		return h
+	}
+
+	if h := hint("mistyped-id"); strings.Contains(h, "nothing expired") || strings.Contains(h, "arrived before this session bound, so") || !strings.Contains(h, "check the message_id") || !strings.Contains(h, "send_message") {
+		t.Fatalf("unknown id hint %q", h)
+	}
+
+	w.codex.ScriptInject(adapter.Outcome{State: adapter.Unreachable, Err: errors.New("down")})
+	failed := na.ok(nil, "send_message", send("bob", "never injected"))["message_id"]
+	if h := hint(failed); strings.Contains(h, "one hour") || !strings.Contains(h, "no open reply route") || !strings.Contains(h, "send_message") {
+		t.Fatalf("closed route hint %q", h)
 	}
 
 	old := na.ok(nil, "send_message", send("bob", "fyi"))["message_id"]
 	mu.Lock()
 	now = now.Add(61 * time.Minute)
 	mu.Unlock()
-	_, out = nb.call(thread("T-bob"), "reply", map[string]any{"message_id": old, "text": "x"})
-	if h, _ := out["hint"].(string); !strings.Contains(h, "expired after one hour") || !strings.Contains(h, "send_message") {
+	if h := hint(old); !strings.Contains(h, "no open reply route") || !strings.Contains(h, "send_message") {
 		t.Fatalf("expired hint %q", h)
 	}
 }
