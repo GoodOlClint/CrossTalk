@@ -2,10 +2,13 @@ package shim
 
 import (
 	"context"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/GoodOlClint/crosstalk/internal/identity"
 	"github.com/GoodOlClint/crosstalk/internal/journal"
+	"github.com/GoodOlClint/crosstalk/internal/mcpserver"
 	"github.com/GoodOlClint/crosstalk/internal/msg"
 )
 
@@ -60,4 +63,28 @@ func TestPendingReplyRetryResumes(t *testing.T) {
 		t.Fatalf("obligation %+v", l)
 	}
 	nb.fails(thread("T-bob"), "reply", map[string]any{"message_id": askID, "text": "other"}, "rejected", ReasonAlreadyReplied)
+}
+
+func TestReplyToExpiredInformIsNoSuchMessage(t *testing.T) {
+	w := newWorld(t)
+	alice := w.claude(4001, "sess-alice", "alice")
+	w.codex.addThread("T-bob", "bob")
+	var mu sync.Mutex
+	now := time.Date(2026, 11, 3, 13, 0, 0, 0, time.UTC)
+	clock := func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+	advance := func(d time.Duration) { mu.Lock(); now = now.Add(d); mu.Unlock() }
+	na := w.node(alice.pid, w.lb, nil)
+	nb := w.node(1, w.lb, func(o *Options) { o.Now = clock })
+	nb.ok(thread("T-bob"), "receive_message", map[string]any{})
+
+	old := na.ok(nil, "send_message", send("bob", "fyi"))["message_id"]
+	advance(61 * time.Minute)
+	fresh := na.ok(nil, "send_message", send("bob", "fyi again"))["message_id"]
+	nb.fails(thread("T-bob"), "reply", map[string]any{"message_id": old, "text": "late"}, mcpserver.CodeInvalid, ReasonNoSuchMessage)
+	if rep := nb.ok(thread("T-bob"), "reply", map[string]any{"message_id": fresh, "text": "thanks"}); rep["state"] != "accepted" {
+		t.Fatalf("reply to fresh inform %v", rep)
+	}
+	if len(alice.got()) != 1 {
+		t.Fatalf("alice got %q", alice.got())
+	}
 }

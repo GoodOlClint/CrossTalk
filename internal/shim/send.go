@@ -418,6 +418,9 @@ func (s *Shim) Reply(ctx context.Context, from *mcpserver.Agent, messageID, text
 	if closed {
 		return mcpserver.Result{}, askClosed(orig)
 	}
+	if isAgentID(key) && orig.Kind != msg.Ask && !st.rcv.RouteOpen(orig.MessageID) {
+		return mcpserver.Result{}, &mcpserver.Error{Code: mcpserver.CodeInvalid, Reason: ReasonNoSuchMessage}
+	}
 	r := st.newMessage(orig.From, msg.Inform, msg.Immediate, text)
 	irt := orig.MessageID
 	r.InReplyTo, r.ContextID = &irt, orig.ContextID

@@ -213,9 +213,10 @@ func (r *Receiver) Recover(rp journal.Replay) error {
 	for _, u := range rp.Unresolved {
 		switch {
 		case u.Type == journal.TypeRoute && u.State == journal.StateOpen:
-			if u.Binding.SameConversation(cur) && u.Session == self.Binding.SessionRef {
+			rt := route{Session: u.Session, MessageID: u.MessageID, Sender: u.Sender, Name: u.To, Kind: msg.Kind(u.Kind), OpenedAt: u.At}
+			if u.Binding.SameConversation(cur) && u.Session == self.Binding.SessionRef && !rt.expired(r.now()) {
 				r.mu.Lock()
-				r.routes = append(r.routes, route{Session: u.Session, MessageID: u.MessageID, Sender: u.Sender, Name: u.To, Kind: msg.Kind(u.Kind)})
+				r.routes = append(r.routes, rt)
 				r.mu.Unlock()
 				continue
 			}

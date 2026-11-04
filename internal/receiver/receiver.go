@@ -114,6 +114,14 @@ type Limits struct {
 
 var DefaultLimits = Limits{MaxMessageBytes: 64 << 10, MaxPending: 256}
 
+const (
+	// InformRouteTTL is how long an inform's route stays open after its
+	// journaled open time (ADR 0010); an ask's route follows its task.
+	InformRouteTTL = time.Hour
+	// BounceInformCap bounds the inform routes a bounce lists.
+	BounceInformCap = 10
+)
+
 type Config struct {
 	Journal *journal.Journal
 	Adapter adapter.Adapter
@@ -128,6 +136,15 @@ type route struct {
 	Sender    string
 	Name      string
 	Kind      msg.Kind
+	OpenedAt  time.Time
+}
+
+func (rt route) expired(now time.Time) bool {
+	return rt.Kind != msg.Ask && now.Sub(rt.OpenedAt) > InformRouteTTL
+}
+
+func (rt route) record(state string) journal.Record {
+	return journal.Record{Type: journal.TypeRoute, Session: rt.Session, MessageID: rt.MessageID, Sender: rt.Sender, To: rt.Name, Kind: string(rt.Kind), State: state}
 }
 
 type Receiver struct {
@@ -397,9 +414,12 @@ func (r *Receiver) unreserve() {
 }
 
 func (r *Receiver) openRoute(rt route) error {
-	if err := r.j.Append(journal.Record{Type: journal.TypeRoute, Session: rt.Session, MessageID: rt.MessageID, Sender: rt.Sender, To: rt.Name, Kind: string(rt.Kind), State: journal.StateOpen}); err != nil {
+	rec := rt.record(journal.StateOpen)
+	rec.At = r.now().UTC()
+	if err := r.j.Append(rec); err != nil {
 		return err
 	}
+	rt.OpenedAt = rec.At
 	r.mu.Lock()
 	r.routes = append(r.routes, rt)
 	r.mu.Unlock()
@@ -407,15 +427,44 @@ func (r *Receiver) openRoute(rt route) error {
 }
 
 func (r *Receiver) closeRoute(rt route) {
-	r.j.Append(journal.Record{Type: journal.TypeRoute, Session: rt.Session, MessageID: rt.MessageID, Sender: rt.Sender, To: rt.Name, Kind: string(rt.Kind), State: journal.StateClosed})
+	r.j.Append(rt.record(journal.StateClosed))
 	r.mu.Lock()
 	r.routes = slices.DeleteFunc(r.routes, func(o route) bool { return o.Session == rt.Session && o.MessageID == rt.MessageID })
 	r.mu.Unlock()
 }
 
+// sweep removes expired inform routes, journals them closed, and returns
+// the routes still open.
+func (r *Receiver) sweep() []route {
+	now := r.now()
+	r.mu.Lock()
+	var gone []route
+	r.routes = slices.DeleteFunc(r.routes, func(o route) bool {
+		if o.expired(now) {
+			gone = append(gone, o)
+			return true
+		}
+		return false
+	})
+	open := slices.Clone(r.routes)
+	r.mu.Unlock()
+	for _, rt := range gone {
+		r.j.Append(rt.record(journal.StateClosed))
+	}
+	return open
+}
+
+// RouteOpen reports whether messageID has an open route; an expired inform
+// route is closed first.
+func (r *Receiver) RouteOpen(messageID string) bool {
+	return slices.ContainsFunc(r.sweep(), func(o route) bool { return o.MessageID == messageID })
+}
+
 // CloseRoute removes the open route for a delivered message id and journals
-// it closed; it reports whether one existed.
+// it closed; it reports whether one existed. An expired inform route was
+// already closed and reports false.
 func (r *Receiver) CloseRoute(messageID string) bool {
+	r.sweep()
 	r.mu.Lock()
 	idx := slices.IndexFunc(r.routes, func(o route) bool { return o.MessageID == messageID })
 	if idx < 0 {
@@ -425,7 +474,7 @@ func (r *Receiver) CloseRoute(messageID string) bool {
 	rt := r.routes[idx]
 	r.routes = slices.Delete(r.routes, idx, idx+1)
 	r.mu.Unlock()
-	r.j.Append(journal.Record{Type: journal.TypeRoute, Session: rt.Session, MessageID: rt.MessageID, Sender: rt.Sender, To: rt.Name, Kind: string(rt.Kind), State: journal.StateClosed})
+	r.j.Append(rt.record(journal.StateClosed))
 	return true
 }
 
@@ -452,20 +501,29 @@ func (r *Receiver) bounce(native msg.Message, session string) msg.Message {
 	var b strings.Builder
 	b.WriteString("CrossTalk: your native message was not delivered. Do not reply to this message natively.\n")
 	fmt.Fprintf(&b, "Undelivered text began: %s\n", first)
-	r.mu.Lock()
-	var open []route
-	for _, rt := range r.routes {
-		if rt.Session == session {
-			open = append(open, rt)
+	var asks, informs []route
+	for _, rt := range r.sweep() {
+		switch {
+		case rt.Session != session:
+		case rt.Kind == msg.Ask:
+			asks = append(asks, rt)
+		default:
+			informs = append(informs, rt)
 		}
 	}
-	r.mu.Unlock()
-	if len(open) == 0 {
+	slices.Reverse(informs)
+	slices.SortStableFunc(informs, func(a, b route) int { return b.OpenedAt.Compare(a.OpenedAt) })
+	omitted := max(0, len(informs)-BounceInformCap)
+	informs = informs[:len(informs)-omitted]
+	if len(asks)+len(informs) == 0 {
 		b.WriteString("No open inbound messages; use send_message(to=<name>) to start a conversation.")
 	} else {
 		b.WriteString("Open inbound messages you can answer with the reply tool:")
-		for _, rt := range open {
+		for _, rt := range append(asks, informs...) {
 			fmt.Fprintf(&b, "\n- message_id=%s from=%s kind=%s", rt.MessageID, rt.Name, rt.Kind)
+		}
+		if omitted > 0 {
+			fmt.Fprintf(&b, "\nand %d more informs", omitted)
 		}
 	}
 	id := msg.NewUUIDv7()
