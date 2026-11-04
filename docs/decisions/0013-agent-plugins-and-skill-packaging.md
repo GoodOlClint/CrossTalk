@@ -15,7 +15,7 @@ A manual MCP install gave models the tools but not the knowledge to use them: th
 - MCP `instructions` (at most 512 bytes, in Go, so a manual install gets them) carry the minimum.
 - One skill, `plugins/crosstalk/skills/crosstalk/SKILL.md`, serves both harnesses with bare tool names. A Go test fails when it names a code the source lacks or omits a state or hinted reason.
 - One plugin directory with `.claude-plugin/` and `.codex-plugin/` manifests, two marketplace files, and server key and command exactly `crosstalk`. Versions equal `mcpserver.Version` (test).
-- Install by `go install` with `GOBIN` on Homebrew's `bin`; no tap, no signed release. The Claude permission rule is added by hand. The Codex plugin sets `default_tools_approval_mode = "approve"`.
+- Install by `go install` with `GOBIN` on Homebrew's `bin` (admin accounts; a non-admin account cannot write there, so it uses `GOBIN=$HOME/.local/bin` and a PATH entry in `~/.zprofile` and `~/.zshenv`); no tap, no signed release. The Claude permission rule is added by hand. The Codex plugin sets `default_tools_approval_mode = "approve"`.
 - No hooks, commands or agents in the plugin; hooks stay v1.1.
 
 ## Rejected alternatives
@@ -26,21 +26,23 @@ A manual MCP install gave models the tools but not the knowledge to use them: th
 
 - A release bumps one version number in three places under test.
 - Claude users with a manual entry must remove it (two shims otherwise; the second reports `agent_held`).
+- A Codex `[mcp_servers.crosstalk]` entry overrides the plugin's server and drops its `default_tools_approval_mode = "approve"`: an entry with no mode prompts, and `codex exec` blocks the tools. The entry must set the mode itself.
 - Eval cases live in `plugins/crosstalk/evals/` and run with `claude plugin eval`; Codex has no eval runner.
 
 ## Not yet run live
 
-These plan facts rest on source reading or are untested, and no live run has confirmed them. Steps: `docs/plans/agent-plugins-clean-run.md`.
+State after the first clean-account run (2026-11-04, scratch account `crosstalktest`; the run kept no raw logs, so results are the runner's report). Steps: `docs/plans/agent-plugins-clean-run.md`.
 
 | Fact | Status |
 |---|---|
-| 6. Codex: plugin plus manual entry with the same server name gives one registration | SOURCE only |
-| 7. Codex plugin server key must be `crosstalk` for delivery's hardcoded namespace | SOURCE only |
-| 8. Codex `_meta.threadId` binds through a plugin-started server | UNKNOWN live |
-| 9. Codex honours the plugin's `default_tools_approval_mode` when the user has no entry, and a user `prompt` entry still prompts | SOURCE and docs only |
-| PATH seen by a harness launched outside a shell | UNKNOWN |
-| Codex private-repo marketplace clone | UNKNOWN |
-| Plain-request live runs (plan commit 7) and the install matrix (commit 8) | not run |
-| `docs/setup.md` on a clean account | not run |
+| 6. Codex: plugin plus manual entry with the same server name gives one registration | settled live, one `crosstalk mcp` process, n=1 |
+| 7. Codex plugin server key must be `crosstalk` for delivery's hardcoded namespace | settled with a caveat: the text reached the Codex model, the server used (plugin or manual entry) is unrecorded |
+| 8. Codex `_meta.threadId` binds through a plugin-started server | settled live: own row `you: true`, `crosstalk: true` |
+| 9. Codex honours the plugin's `default_tools_approval_mode` when the user has no entry, and a user `prompt` entry still prompts | settled with a caveat: plugin-only runs without a prompt, a no-mode manual entry prompts; an explicit `prompt` entry is untested |
+| PATH seen by a harness launched outside a shell | Claude settled (`ENOENT`); Codex UNKNOWN (`env -i codex` failed on `node` first) |
+| Codex private-repo marketplace clone | settled live, no prompt with the account's `gh` credentials |
+| Plain-request live runs (plan commit 7) | partial: Claude to unbound peer answered; no cross-harness answer round trip |
+| Install matrix (commit 8): test message, upgrade, uninstall (`docs/setup.md` steps 6 to 8) | not run |
+| `docs/setup.md` on a clean account | partial: steps 1 to 5 run with operator help |
 
 Claude facts 1–5 were run live on 2.1.318 before the plan was approved; the four eval cases (plan commit 6) passed on Haiku against mocked tools, which prove behaviour, not transport. The mocks carry no real tool schemas, and the MCP-only comparison arm of commit 6 was not built.
