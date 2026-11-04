@@ -30,7 +30,7 @@ func (c *clock) advance(d time.Duration) {
 
 func newClockEnv(t *testing.T) (*env, *clock) {
 	e := newEnv(t)
-	c := &clock{t: time.Date(2026, 11, 3, 13, 0, 0, 0, time.UTC)}
+	c := &clock{t: time.Now().UTC()}
 	e.r = New(Config{Journal: e.j, Adapter: e.fake, Self: e.self, Now: c.now})
 	return e, c
 }
