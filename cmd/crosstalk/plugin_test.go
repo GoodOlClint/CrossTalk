@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/GoodOlClint/crosstalk/internal/harness/claude"
 	"github.com/GoodOlClint/crosstalk/internal/mcpserver"
 )
 
@@ -25,6 +26,27 @@ func readJSON(t *testing.T, path string) map[string]any {
 		t.Fatalf("%s: %v", path, err)
 	}
 	return m
+}
+
+func TestEvalFixtureNoticesMatchConst(t *testing.T) {
+	files, _ := filepath.Glob(filepath.Join(pluginDir, "evals", "*", "prompt.md"))
+	re := regexp.MustCompile(`notice="([^"]*)"`)
+	seen := 0
+	for _, f := range files {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, m := range re.FindAllStringSubmatch(string(b), -1) {
+			seen++
+			if m[1] != claude.Notice {
+				t.Errorf("%s: notice differs from claude.Notice: %q", f, m[1])
+			}
+		}
+	}
+	if seen < 5 {
+		t.Errorf("found %d fixture notices, want at least 5", seen)
+	}
 }
 
 func TestVersionCommand(t *testing.T) {

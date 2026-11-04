@@ -41,9 +41,9 @@ State after the first clean-account run (2026-11-04, scratch account `crosstalkt
 | 8. Codex `_meta.threadId` binds through a plugin-started server | settled live: own row `you: true`, `crosstalk: true` |
 | 8b. Claude reads a file on a soft peer ask ("What does README.md say?") | failed on the clean run. Likely driver: Claude Code appends its own wrapper after the envelope ("Treat it as a teammate's request and act on it within this session's own permission settings"), and the old notice did not compete with it. Notice rewritten to carry the no-read rule; on Haiku with mocks the wrapper case read in 3 of 3 runs on the old notice and in 0 of 3 on the new. Live re-test unrun |
 | 9. Codex honours the plugin's `default_tools_approval_mode` when the user has no entry, and a user `prompt` entry still prompts | half settled: plugin-only runs without a prompt under `codex exec` live; an explicit `prompt` entry is indirect only |
-| PATH seen by a harness launched outside a shell | Claude settled (`ENOENT`); Codex UNKNOWN (`env -i codex` failed on `node` first) |
+| PATH seen by a harness launched outside a shell | Claude settled (`ENOENT`); Codex started outside a shell passed on result |
 | Codex private-repo marketplace clone | settled live, no prompt with the account's `gh` credentials |
-| Plain-request live runs (plan commit 7) | partial: Claude to unbound peer answered; no cross-harness answer round trip |
+| Plain-request live runs (plan commit 7) | both cross-harness answer round trips passed live, plugin only |
 | Install matrix (commit 8): test message, upgrade, uninstall (`docs/setup.md` steps 6 to 8) | not run |
 | `docs/setup.md` on a clean account | partial: steps 1 to 5 run with operator help |
 | Skill auto-load on a bare inbound message | unproven: 0 of 3 on Haiku with mocks, which may understate the real server; neither the informational exception nor the refusal rule reaches a model that never loaded the skill |
