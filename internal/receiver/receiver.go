@@ -369,9 +369,10 @@ func (r *Receiver) CloseRoute(messageID string) bool {
 	return true
 }
 
-// takeRoute removes and returns the only open route into session; with zero
-// or several outstanding deliveries it returns false and consumes nothing (F6).
-func (r *Receiver) takeRoute(session string) (route, bool) {
+// soleRoute returns the only open route into session without consuming it;
+// with zero or several outstanding deliveries it returns false (F6). Only the
+// reply tool, which names a message id, closes a route.
+func (r *Receiver) soleRoute(session string) (route, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	idx := -1
@@ -387,21 +388,20 @@ func (r *Receiver) takeRoute(session string) (route, bool) {
 	if idx < 0 {
 		return route{}, false
 	}
-	rt := r.routes[idx]
-	r.routes = slices.Delete(r.routes, idx, idx+1)
-	return rt, true
+	return r.routes[idx], true
 }
 
 // nativeReply handles a native frame from this agent's own session: a reply
 // to an earlier delivery. The destination comes only from the journaled
-// route record, never from the reply text (§5 F4, C8).
+// route record, never from the reply text (§5 F4, C8). A native reply carries
+// no correlation id, so it is forwarded as an inform with in_reply_to as a
+// hint; it never completes an ask and never closes the route.
 func (r *Receiver) nativeReply(ctx context.Context, key string, m msg.Message, self Recipient) Result {
-	rt, ok := r.takeRoute(self.Binding.SessionRef)
+	rt, ok := r.soleRoute(self.Binding.SessionRef)
 	if !ok {
 		r.j.SetDedupeState(key, m.MessageID, string(adapter.Uncorrelated))
 		return Result{MessageID: m.MessageID, State: adapter.Uncorrelated}
 	}
-	r.j.Append(journal.Record{Type: journal.TypeRoute, Session: rt.Session, MessageID: rt.MessageID, Sender: rt.Sender, State: journal.StateClosed})
 	irt := rt.MessageID
 	m.InReplyTo = &irt
 	m.To = rt.Sender

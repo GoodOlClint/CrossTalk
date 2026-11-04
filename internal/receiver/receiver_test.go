@@ -471,7 +471,9 @@ func TestNativeFramesFreshIDNoDedupe(t *testing.T) {
 }
 
 // §5 F4/F6/C8, tests 5 and 13 (core): a native reply from the bound session
-// correlates only when exactly one delivery is outstanding.
+// correlates only when exactly one delivery is outstanding, and never
+// consumes the route: a second native reply still correlates, and only
+// CloseRoute (the reply tool) closes it.
 func TestNativeReplyCorrelation(t *testing.T) {
 	e := newEnv(t)
 	m := newMsg(msg.Ask, "question")
@@ -489,8 +491,14 @@ func TestNativeReplyCorrelation(t *testing.T) {
 	if e.writes() != 1 {
 		t.Fatal("reply was injected into its own session")
 	}
-	if r := e.native(ownSession, "second answer"); r.State != adapter.Uncorrelated {
-		t.Fatalf("consumed route reused: %+v", r)
+	if r := e.native(ownSession, "second answer"); r.State != adapter.Accepted || *r.InReplyTo != m.MessageID {
+		t.Fatalf("native reply consumed the route: %+v", r)
+	}
+	if !e.r.CloseRoute(m.MessageID) {
+		t.Fatal("route should still be open for the reply tool")
+	}
+	if r := e.native(ownSession, "third answer"); r.State != adapter.Uncorrelated {
+		t.Fatalf("closed route reused: %+v", r)
 	}
 
 	a1, a2 := newMsg(msg.Ask, "q1"), newMsg(msg.Ask, "q2")
@@ -500,7 +508,7 @@ func TestNativeReplyCorrelation(t *testing.T) {
 	if r.State != adapter.Uncorrelated || r.InReplyTo != nil {
 		t.Fatalf("two outstanding: %+v", r)
 	}
-	if len(e.fw.all()) != 1 {
+	if len(e.fw.all()) != 2 {
 		t.Fatal("ambiguous reply forwarded")
 	}
 	mb, _ := e.r.Mailbox("", 0)

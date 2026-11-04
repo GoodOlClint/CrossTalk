@@ -377,18 +377,12 @@ type forwarder struct{ st *AgentState }
 
 // Forward routes a native reply from this agent's own session to the
 // original sender recorded in the route (§5 F4); receiver.nativeReply has
-// already journaled it.
+// already journaled it. OnReply is not run: only the reply tool completes an
+// ask.
 func (f forwarder) Forward(ctx context.Context, m msg.Message, toAgentID string) (adapter.State, error) {
 	st := f.st
 	m.From, m.Kind = st.agent.Name(), msg.Inform
 	m.HopChain = []string{msg.Hop(st.agent.ID())}
-	if m.InReplyTo != nil && st.shim.opt.OnReply != nil {
-		if orig, _, ok := st.inbound(*m.InReplyTo); ok {
-			if err := st.shim.opt.OnReply(ctx, st, orig, m); err != nil {
-				st.shim.log.Warn("shim: reply hook", "agent", st.agent.ID(), "message_id", m.MessageID, "err", err)
-			}
-		}
-	}
 	d, ok := st.shim.descriptorByID(toAgentID)
 	if !ok {
 		st.outbound(m, toAgentID, adapter.Unreachable, ReasonNoSuchAgent, true)
