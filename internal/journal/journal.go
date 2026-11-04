@@ -283,6 +283,11 @@ func Open(stateDir, agentID string, binding Binding, opt Options) (*Journal, Rep
 	return j, rp, nil
 }
 
+// MaxRecordBytes bounds one serialized record, the longest line readAll scans.
+const MaxRecordBytes = 16 << 20
+
+var ErrRecordTooLarge = errors.New("journal: record exceeds the line limit")
+
 func readAll(path string) ([]Record, bool, error) {
 	b, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -298,7 +303,7 @@ func readAll(path string) ([]Record, bool, error) {
 	}
 	var out []Record
 	sc := bufio.NewScanner(bytes.NewReader(b))
-	sc.Buffer(make([]byte, 0, 64*1024), 16<<20)
+	sc.Buffer(make([]byte, 0, 64*1024), MaxRecordBytes)
 	for line := 1; sc.Scan(); line++ {
 		if len(sc.Bytes()) == 0 {
 			continue
@@ -384,6 +389,9 @@ func (j *Journal) appendLocked(r Record) (Record, error) {
 	line, err := json.Marshal(r)
 	if err != nil {
 		return Record{}, err
+	}
+	if len(line) >= MaxRecordBytes {
+		return Record{}, fmt.Errorf("%w: %d bytes, limit %d", ErrRecordTooLarge, len(line), MaxRecordBytes)
 	}
 	line = append(line, '\n')
 	if _, err := j.f.Write(line); err != nil {

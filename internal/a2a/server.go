@@ -41,6 +41,9 @@ const (
 
 	DefaultMaxWaiting  = 64
 	DefaultMaxOpenAsks = 32
+
+	// MaxRequestBytes bounds one JSON-RPC request body, read before decode.
+	MaxRequestBytes = 256 << 10
 )
 
 var (
@@ -75,6 +78,9 @@ type Peer struct {
 type Limits struct {
 	MaxWaiting  int
 	MaxOpenAsks int
+	// MaxPending bounds unresolved (submitted or working) tasks.
+	MaxPending      int
+	MaxMessageBytes int
 }
 
 type Config struct {
@@ -122,6 +128,12 @@ func NewServer(c Config) *Server {
 	}
 	if c.Limits.MaxOpenAsks == 0 {
 		c.Limits.MaxOpenAsks = DefaultMaxOpenAsks
+	}
+	if c.Limits.MaxPending == 0 {
+		c.Limits.MaxPending = receiver.DefaultLimits.MaxPending
+	}
+	if c.Limits.MaxMessageBytes == 0 {
+		c.Limits.MaxMessageBytes = receiver.DefaultLimits.MaxMessageBytes
 	}
 	if c.Logger == nil {
 		c.Logger = slog.New(slog.DiscardHandler)
@@ -193,7 +205,7 @@ func (s *Server) Listen() (string, error) {
 		Logger:       s.cfg.Logger,
 	}
 	mux := http.NewServeMux()
-	mux.Handle("/{$}", a2asrv.NewJSONRPCHandler(h))
+	mux.Handle("/{$}", limitBody(a2asrv.NewJSONRPCHandler(h)))
 	mux.Handle(a2asrv.WellKnownAgentCardPath, a2asrv.NewAgentCardHandler(cardProducer{s: s}))
 
 	s.mu.Lock()
@@ -203,6 +215,17 @@ func (s *Server) Listen() (string, error) {
 	s.url = url
 	s.srv = &http.Server{Handler: mux, ReadHeaderTimeout: 10 * time.Second, ErrorLog: slog.NewLogLogger(s.cfg.Logger.Handler(), slog.LevelWarn)}
 	return url, nil
+}
+
+func limitBody(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.ContentLength > MaxRequestBytes {
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, MaxRequestBytes)
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) URL() string {

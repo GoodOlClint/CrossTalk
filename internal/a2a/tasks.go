@@ -2,6 +2,7 @@ package a2a
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"maps"
 	"slices"
@@ -76,7 +77,7 @@ func (st *store) alias(principal, clientID, fresh string) string {
 	return fresh
 }
 
-func (st *store) create(principal string, m msg.Message, wire *sdk.Message, maxAsks int) (*task, bool, error) {
+func (st *store) create(principal string, m msg.Message, wire *sdk.Message, maxAsks, maxPending int) (*task, bool, error) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	if t, ok := st.byMsg[m.MessageID]; ok {
@@ -84,6 +85,15 @@ func (st *store) create(principal string, m msg.Message, wire *sdk.Message, maxA
 			return nil, false, badMessage("message_id is in use by another principal")
 		}
 		return t, true, nil
+	}
+	unresolved := 0
+	for _, t := range st.byID {
+		if !t.state.Terminal() {
+			unresolved++
+		}
+	}
+	if unresolved >= maxPending {
+		return nil, false, rejection(m.MessageID, receiver.ReasonTooManyPending)
 	}
 	if m.Kind == msg.Ask {
 		open := 0
@@ -113,6 +123,9 @@ func (st *store) create(principal string, m msg.Message, wire *sdk.Message, maxA
 	wire.TaskID = t.id
 	t.history = []*sdk.Message{wire}
 	if err := st.ts.Save(t.record(journal.StateSubmitted, wire)); err != nil {
+		if errors.Is(err, journal.ErrRecordTooLarge) {
+			return nil, false, rejection(m.MessageID, receiver.ReasonTooLarge)
+		}
 		return nil, false, sdk.NewError(sdk.ErrInternalError, "task could not be recorded")
 	}
 	st.byID[t.id] = t
@@ -459,7 +472,10 @@ func (h *handler) SendMessage(ctx context.Context, req *sdk.SendMessageRequest) 
 		m.ContextID = m.MessageID
 		wire.ContextID = m.ContextID
 	}
-	t, existing, err := s.tasks.create(who, m, wire, s.cfg.Limits.MaxOpenAsks)
+	if textBytes(m) > s.cfg.Limits.MaxMessageBytes {
+		return nil, rejection(m.MessageID, receiver.ReasonTooLarge)
+	}
+	t, existing, err := s.tasks.create(who, m, wire, s.cfg.Limits.MaxOpenAsks, s.cfg.Limits.MaxPending)
 	if err != nil {
 		return nil, err
 	}
@@ -698,4 +714,12 @@ func (h *handler) CancelTask(ctx context.Context, req *sdk.CancelTaskRequest) (*
 		return nil, sdk.ErrTaskNotCancelable
 	}
 	return s.tasks.snapshot(t, nil), nil
+}
+
+func textBytes(m msg.Message) int {
+	n := 0
+	for _, p := range m.Parts {
+		n += len(p.Text)
+	}
+	return n
 }

@@ -74,6 +74,12 @@ func newEnvOn(t *testing.T, dir string, tasks func(*journal.Journal) TaskStore, 
 	if tasks != nil {
 		ts = tasks(j)
 	}
+	if alim.MaxPending == 0 {
+		alim.MaxPending = lim.MaxPending
+	}
+	if alim.MaxMessageBytes == 0 {
+		alim.MaxMessageBytes = lim.MaxMessageBytes
+	}
 	e.srv = NewServer(Config{
 		Tasks:         ts,
 		Receiver:      rcv,
@@ -756,7 +762,7 @@ func TestTerminalWriteFailureIsNotCompleted(t *testing.T) {
 	ts := &failingTaskStore{}
 	st := newStore(ts, slog.New(slog.DiscardHandler))
 	m := msg.Message{MessageID: msg.NewUUIDv7(), ContextID: "ctx", Kind: msg.Ask}
-	task, _, err := st.create("peer", m, encode(m), 32)
+	task, _, err := st.create("peer", m, encode(m), 32, 256)
 	if err != nil {
 		t.Fatal(err)
 	}
