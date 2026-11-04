@@ -690,16 +690,24 @@ func (s *Server) await(ctx context.Context, t *task) error {
 	}
 }
 
-func (s *Server) start(t *task, in receiver.Inbound, resume bool) bool {
+// admit registers a dispatch-capable receive with the shutdown drain; the
+// caller must call s.wg.Done when it returns true.
+func (s *Server) admit() bool {
 	s.mu.Lock()
+	defer s.mu.Unlock()
 	select {
 	case <-s.closed:
-		s.mu.Unlock()
 		return false
 	default:
 	}
 	s.wg.Add(1)
-	s.mu.Unlock()
+	return true
+}
+
+func (s *Server) start(t *task, in receiver.Inbound, resume bool) bool {
+	if !s.admit() {
+		return false
+	}
 	if !resume {
 		s.armDeadline(t)
 	}
@@ -784,8 +792,12 @@ func (h *handler) continuation(ctx context.Context, snd receiver.Sender, m msg.M
 	tid := string(t.id)
 	m.TaskID = &tid
 
+	if !s.admit() {
+		return nil, sdk.NewError(sdk.ErrServerError, "server closing")
+	}
 	cont, err := s.tasks.beginContinuation(t, wire)
 	if err != nil {
+		s.wg.Done()
 		if errors.Is(err, errBadMessage) || errors.Is(err, sdk.ErrUnsupportedOperation) {
 			return nil, err
 		}
@@ -798,6 +810,7 @@ func (h *handler) continuation(ctx context.Context, snd receiver.Sender, m msg.M
 			s.askClosed(t)
 		}
 	}
+	s.wg.Done()
 	if res.State == adapter.Rejected {
 		return nil, rejection(res.MessageID, res.Reason)
 	}

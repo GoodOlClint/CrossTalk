@@ -321,11 +321,11 @@ func (s *Server) Close() error { return s.CloseContext(context.Background()) }
 // on expiry it returns ErrWorkersRunning.
 func (s *Server) CloseContext(ctx context.Context) error {
 	s.closeOnce.Do(func() {
-		close(s.closed)
-		s.cancel()
 		s.mu.Lock()
+		close(s.closed)
 		srv, ln := s.srv, s.ln
 		s.mu.Unlock()
+		s.cancel()
 		switch {
 		case srv != nil:
 			s.closeErr = srv.Close()
