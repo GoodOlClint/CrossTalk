@@ -36,6 +36,30 @@ type AskTransport interface {
 	AskOpen(agentID, messageID string) (taskID string, open, known bool)
 }
 
+// AskOrigin is a Transport that resolves any handle of an ask task to the
+// task's first message id, the one the asker holds as its outbound ask.
+type AskOrigin interface {
+	AskMessageID(agentID, handle string) (string, bool)
+}
+
+// replyTarget is the in_reply_to and context_id of a reply to orig: for a
+// continuation of an ask task, those of the task's original ask, so the
+// asker can correlate the reply with its outbound ask.
+func (st *AgentState) replyTarget(orig msg.Message) (string, string) {
+	ao, ok := st.shim.opt.Transport.(AskOrigin)
+	if !ok {
+		return orig.MessageID, orig.ContextID
+	}
+	id, ok := ao.AskMessageID(st.agent.ID(), orig.MessageID)
+	if !ok || id == orig.MessageID {
+		return orig.MessageID, orig.ContextID
+	}
+	if first, _, ok := st.inbound(id); ok {
+		return id, first.ContextID
+	}
+	return id, orig.ContextID
+}
+
 func askClosed(orig msg.Message) *mcpserver.Error {
 	return &mcpserver.Error{Code: mcpserver.CodeRejected, Reason: ReasonAskClosed, Message: "ask is closed; send your answer with send_message to " + orig.From}
 }
@@ -422,8 +446,8 @@ func (s *Shim) Reply(ctx context.Context, from *mcpserver.Agent, messageID, text
 		return mcpserver.Result{}, &mcpserver.Error{Code: mcpserver.CodeInvalid, Reason: ReasonNoSuchMessage}
 	}
 	r := st.newMessage(orig.From, msg.Inform, msg.Immediate, text)
-	irt := orig.MessageID
-	r.InReplyTo, r.ContextID = &irt, orig.ContextID
+	irt, ctxID := st.replyTarget(orig)
+	r.InReplyTo, r.ContextID = &irt, ctxID
 	if err := st.agent.Journal().Append(st.obligation(r, key, journal.StatePending, true, taskID)); err != nil {
 		return mcpserver.Result{}, err
 	}

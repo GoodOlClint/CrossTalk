@@ -55,6 +55,7 @@ var (
 	_ shim.TaskTransport  = (*Wire)(nil)
 	_ shim.ClaimTransport = (*Wire)(nil)
 	_ shim.AskTransport   = (*Wire)(nil)
+	_ shim.AskOrigin      = (*Wire)(nil)
 )
 
 // New builds the shim with opt's Transport, StartA2A and OnReply set to this
@@ -258,6 +259,18 @@ func (w *Wire) AskOpen(agentID, messageID string) (taskID string, open, known bo
 		return "", false, false
 	}
 	return srv.AskOpen(messageID)
+}
+
+// AskMessageID returns the original ask message id of the task that handle
+// belongs to, for an agent this Wire serves.
+func (w *Wire) AskMessageID(agentID, handle string) (string, bool) {
+	w.mu.Lock()
+	srv := w.servers[agentID]
+	w.mu.Unlock()
+	if srv == nil {
+		return "", false
+	}
+	return srv.AskMessageID(handle)
 }
 
 func readOwnToken(path string) (string, error) {

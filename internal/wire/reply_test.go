@@ -172,3 +172,40 @@ func TestReplyToOriginalThenContinuationDeliversOnce(t *testing.T) {
 		t.Fatalf("alice got %d replies", n)
 	}
 }
+
+func TestContinuationReplySettlesOriginalAsk(t *testing.T) {
+	dir, alice, bob := pair(t)
+	askID := alice.ok("ask", map[string]any{"to": "bob", "text": "first?", "deadline_seconds": 1})["message_id"].(string)
+	contID, taskID := continueAsk(t, dir, alice, bob, askID, "revised?")
+	if rep := bob.ok("reply", map[string]any{"message_id": contID, "text": "done"}); rep["state"] != "accepted" {
+		t.Fatalf("reply %v", rep)
+	}
+	receipt := false
+	for _, r := range records(t, dir, alice.id()) {
+		if r.Type == journal.TypeReceipt && r.InReplyTo == askID && r.Sender == bob.id() {
+			receipt = true
+		}
+	}
+	if !receipt {
+		t.Fatalf("no receipt on the original ask %s", askID)
+	}
+	var got *msg.Message
+	for _, w := range alice.codex.Writes() {
+		if w.Message.From == "bob" {
+			m := w.Message
+			got = &m
+		}
+	}
+	if got == nil || got.InReplyTo == nil || *got.InReplyTo != askID || got.ContextID != askID {
+		t.Fatalf("alice got reply %+v, want in_reply_to and context %s", got, askID)
+	}
+	time.Sleep(1300 * time.Millisecond)
+	if n := repliesFrom(alice, "crosstalk"); n != 0 {
+		t.Fatalf("alice got %d expiry notices after the answer", n)
+	}
+	tok, _ := readOwnToken(descriptor(t, dir, alice.id()).CredentialRef)
+	task, err := (&a2a.Client{Name: "alice"}).GetTask(context.Background(), descriptor(t, dir, bob.id()).A2AURL, tok, taskID)
+	if err != nil || task.TaskState != sdk.TaskStateCompleted || task.Reply != "done" {
+		t.Fatalf("task %+v %v", task, err)
+	}
+}

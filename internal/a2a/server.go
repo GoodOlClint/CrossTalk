@@ -23,6 +23,7 @@ import (
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
 
 	"github.com/GoodOlClint/crosstalk/internal/adapter"
+	"github.com/GoodOlClint/crosstalk/internal/msg"
 	"github.com/GoodOlClint/crosstalk/internal/receiver"
 	"github.com/GoodOlClint/crosstalk/internal/udsingress"
 )
@@ -361,6 +362,16 @@ func (s *Server) CompleteAsk(messageID, replyText string) error {
 // is still open; a reply to a known, closed ask must not be sent.
 func (s *Server) AskOpen(messageID string) (taskID string, open, known bool) {
 	return s.tasks.askOpen(messageID)
+}
+
+// AskMessageID returns the first message id of the ask task that handle (its
+// first message or a continuation) belongs to.
+func (s *Server) AskMessageID(handle string) (string, bool) {
+	t, ok := s.tasks.byMessage(handle)
+	if !ok || t.kind != msg.Ask {
+		return "", false
+	}
+	return t.messageID, true
 }
 
 // Resolve applies a delivery outcome learned after the receive returned (a
