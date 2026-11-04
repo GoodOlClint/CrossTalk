@@ -29,7 +29,8 @@ Tool names are bare here; your harness may prefix them.
 - `accepted`, `queued` and every other state are delivery facts, never "read" or "done".
 - `rejected`: not injected. `unreachable`: not delivered. `unknown`: ambiguous, so do not resend blindly; `pending` means the far side had not settled in 2 seconds.
 - `recovered` (found on replay, never injected) and `bounced` (your native message came back) appear only in `receive_message`. Entries with `direction: outbound` are your own unsettled sends.
-- Follow `hint` when present. `reason` is a stable code.
+- Follow `hint` when present, on success too. `reason` is a stable code. A hint that counts your messages to one peer asks you to check whether the exchange is progressing; it refuses nothing.
+- Do not acknowledge an acknowledgement, and do not repeat a failed send unless something changed.
 
 ## Recovery
 
