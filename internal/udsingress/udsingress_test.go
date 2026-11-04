@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -398,8 +399,11 @@ func sendNoAuth(t *testing.T, path, line string) string {
 	defer c.Close()
 	c.Write([]byte(line + "\n"))
 	c.SetReadDeadline(time.Now().Add(3 * time.Second))
-	got, _ := bufio.NewReader(c).ReadString('\n')
-	return strings.TrimSpace(got)
+	got, err := io.ReadAll(c)
+	if err != nil {
+		t.Fatalf("connection did not close: %v (read %q)", err, got)
+	}
+	return strings.TrimSpace(string(got))
 }
 
 func TestCapturedNativeLineWithoutAuthFromVerifiedPeer(t *testing.T) {
@@ -407,9 +411,8 @@ func TestCapturedNativeLineWithoutAuthFromVerifiedPeer(t *testing.T) {
 	dir := staticDir{{AgentID: "aaaa", Name: "claude-a", Role: registry.RolePrimary, PID: pid, StartedAt: st}}
 	rcv := &recordingReceiver{}
 	s, _ := start(t, dir, rcv)
-	a := ackOf(t, sendNoAuth(t, s.Path, capturedLine))
-	if a.State != "accepted" {
-		t.Fatalf("%+v", a)
+	if got := sendNoAuth(t, s.Path, capturedLine); got != "" {
+		t.Fatalf("native shape got reply bytes %q", got)
 	}
 	got := rcv.all()
 	if len(got) != 1 {
@@ -460,5 +463,58 @@ func TestTwoLinePathStillWorksAndBadTokenCloses(t *testing.T) {
 	}
 	if len(rcv.all()) != 1 {
 		t.Fatalf("%d receives", len(rcv.all()))
+	}
+}
+
+type gateReceiver struct {
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (g *gateReceiver) Receive(context.Context, receiver.Inbound) receiver.Result {
+	close(g.entered)
+	<-g.release
+	return receiver.Result{MessageID: "m", State: adapter.Accepted}
+}
+
+func TestNativeShapeClosesOnlyAfterReceiverReturns(t *testing.T) {
+	pid, st := os.Getpid(), ownStart(t)
+	dir := staticDir{{AgentID: "aaaa", PID: pid, StartedAt: st}}
+	g := &gateReceiver{entered: make(chan struct{}), release: make(chan struct{})}
+	s, _ := start(t, dir, g)
+	c, err := net.Dial("unix", s.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	c.Write([]byte(capturedLine + "\n"))
+	<-g.entered
+	c.SetReadDeadline(time.Now().Add(200 * time.Millisecond))
+	var ne net.Error
+	if _, err := c.Read(make([]byte, 1)); !errors.As(err, &ne) || !ne.Timeout() {
+		t.Fatalf("connection closed or written before receiver returned: %v", err)
+	}
+	close(g.release)
+	c.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if n, err := c.Read(make([]byte, 1)); n != 0 || !errors.Is(err, io.EOF) {
+		t.Fatalf("want bare EOF, got n=%d err=%v", n, err)
+	}
+}
+
+func TestNativeShapeRejectionsWriteNothing(t *testing.T) {
+	pid, st := os.Getpid(), ownStart(t)
+	dir := staticDir{{AgentID: "aaaa", PID: pid, StartedAt: st}}
+	rcv := &recordingReceiver{}
+	s, _ := start(t, dir, rcv, func(s *Server) { s.MaxFrame = 1024 })
+	big := userLineJSON(strings.Repeat("x", 2048), nil)
+	if got := sendNoAuth(t, s.Path, big); got != "" {
+		t.Fatalf("oversize reply %q", got)
+	}
+	bad := userLineJSON(`<cross-session-message kind="command">x`, nil)
+	if got := sendNoAuth(t, s.Path, bad); got != "" {
+		t.Fatalf("invalid frame reply %q", got)
+	}
+	if len(rcv.all()) != 0 {
+		t.Fatal("rejected frame reached the receiver")
 	}
 }

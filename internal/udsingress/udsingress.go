@@ -231,7 +231,8 @@ func (s *Server) handle(ctx context.Context, c *net.UnixConn) {
 		return
 	}
 	var sender receiver.Sender
-	if lineType(line) == "user" {
+	native := lineType(line) == "user"
+	if native {
 		if perr != nil || serr != nil {
 			return
 		}
@@ -258,7 +259,9 @@ func (s *Server) handle(ctx context.Context, c *net.UnixConn) {
 	}
 	f, err := ParseUserFrame(line)
 	if err != nil {
-		writeAck(c, ack{State: string(adapter.Rejected), Reason: receiver.ReasonInvalid})
+		if !native {
+			writeAck(c, ack{State: string(adapter.Rejected), Reason: receiver.ReasonInvalid})
+		}
 		return
 	}
 
@@ -274,6 +277,9 @@ func (s *Server) handle(ctx context.Context, c *net.UnixConn) {
 	}
 	c.SetDeadline(time.Time{})
 	res := s.Receiver.Receive(ctx, in)
+	if native {
+		return
+	}
 	c.SetWriteDeadline(time.Now().Add(rt))
 	writeAck(c, ack{MessageID: res.MessageID, State: string(res.State), Reason: res.Reason})
 }
