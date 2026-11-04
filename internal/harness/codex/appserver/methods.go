@@ -179,3 +179,28 @@ func (c *Client) McpServerStatus(ctx context.Context, threadID, serverName strin
 	}
 	return c.CallRaw(ctx, "mcpServerStatus/list", params)
 }
+
+type ToolOutput struct {
+	Name      string `json:"name"`
+	Namespace string `json:"namespace"`
+	Output    string `json:"output"`
+	Retain    bool   `json:"retain"`
+}
+
+func (c *Client) StartToolOutput(ctx context.Context, threadID, text string) (json.RawMessage, error) {
+	return c.CallRaw(ctx, "turn/start", map[string]any{
+		"threadId":   threadID,
+		"input":      []UserInput{},
+		"toolOutput": ToolOutput{Name: "receive_message", Namespace: "crosstalk", Output: text, Retain: true},
+	})
+}
+
+// Raw outputs wait for a later model request; this call never starts a turn.
+func (c *Client) InjectToolOutput(ctx context.Context, threadID, text string) (json.RawMessage, error) {
+	return c.CallRaw(ctx, "thread/inject_items", map[string]any{
+		"threadId": threadID,
+		"items": []any{map[string]any{
+			"type": "function_call_output", "name": "receive_message", "namespace": "crosstalk", "output": text,
+		}},
+	})
+}

@@ -47,6 +47,8 @@ type Thread struct {
 	NotSteerable string
 	Steered      []string
 	Started      []string
+	ToolOutputs  []appserver.ToolOutput
+	Injected     []appserver.ToolOutput
 }
 
 type Call struct {
@@ -170,6 +172,8 @@ func (s *Server) Thread(id string) Thread {
 	cp.Turns = slices.Clone(t.Turns)
 	cp.Steered = slices.Clone(t.Steered)
 	cp.Started = slices.Clone(t.Started)
+	cp.ToolOutputs = slices.Clone(t.ToolOutputs)
+	cp.Injected = slices.Clone(t.Injected)
 	return cp
 }
 
@@ -380,8 +384,15 @@ func (s *Server) handle(method string, raw json.RawMessage) (any, *appserver.RPC
 		ExpectedTurnID string                `json:"expectedTurnId"`
 		Input          []appserver.UserInput `json:"input"`
 		Limit          int                   `json:"limit"`
+		ToolOutput     *appserver.ToolOutput `json:"toolOutput"`
+		Items          []struct {
+			Type string `json:"type"`
+			appserver.ToolOutput
+		} `json:"items"`
 	}
-	_ = json.Unmarshal(raw, &p)
+	if err := json.Unmarshal(raw, &p); err != nil {
+		return nil, invalid("invalid request params")
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	switch method {
@@ -442,16 +453,45 @@ func (s *Server) handle(method string, raw json.RawMessage) (any, *appserver.RPC
 		}
 		t.Steered = append(t.Steered, text)
 		return map[string]any{"turnId": act}, nil
+	case "thread/inject_items":
+		if !t.Loaded || (t.CanAcceptDirectInput != nil && !*t.CanAcceptDirectInput) {
+			return nil, invalid("thread does not accept direct input")
+		}
+		if len(p.Items) == 0 {
+			return nil, invalid("items must not be empty")
+		}
+		for _, item := range p.Items {
+			if item.Type != "function_call_output" || item.Name == "" || item.Namespace == "" || item.Output == "" {
+				return nil, invalid("invalid named tool output item")
+			}
+		}
+		for _, item := range p.Items {
+			t.Injected = append(t.Injected, item.ToolOutput)
+		}
+		return map[string]any{}, nil
 	case "turn/start":
 		if !t.Loaded {
 			return nil, invalid("thread not loaded")
 		}
+		if t.CanAcceptDirectInput != nil && !*t.CanAcceptDirectInput {
+			return nil, invalid("thread does not accept direct input")
+		}
+		if p.ToolOutput != nil && (p.Input == nil || len(p.Input) != 0 || p.ToolOutput.Name == "" || p.ToolOutput.Namespace == "" || p.ToolOutput.Output == "") {
+			return nil, invalid("invalid named tool output")
+		}
 		if activeTurn(t) != "" && t.NotSteerable != "" {
 			return nil, NotSteerableError(t.NotSteerable)
 		}
-		id := s.newTurnIDLocked()
-		t.Turns = append(t.Turns, appserver.Turn{ID: id, Status: appserver.TurnInProgress})
-		t.Started = append(t.Started, text)
+		id := activeTurn(t)
+		if p.ToolOutput != nil {
+			t.ToolOutputs = append(t.ToolOutputs, *p.ToolOutput)
+		} else {
+			t.Started = append(t.Started, text)
+		}
+		if id == "" || p.ToolOutput == nil {
+			id = s.newTurnIDLocked()
+			t.Turns = append(t.Turns, appserver.Turn{ID: id, Status: appserver.TurnInProgress})
+		}
 		return map[string]any{"turn": map[string]any{"id": id, "status": appserver.TurnInProgress, "items": []any{}}}, nil
 	}
 	return nil, &appserver.RPCError{Code: CodeMethodNotFound, Message: "method not found: " + method}

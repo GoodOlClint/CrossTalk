@@ -1,6 +1,4 @@
-// Package codex is the Codex harness adapter (design §6): binding to the
-// app-server endpoint that hosts a thread, immediate delivery over
-// turn/steer and turn/start, and next-turn delivery through `codex queue`.
+// Package codex binds sessions and delivers peer data through the owning app-server.
 package codex
 
 import (
@@ -8,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os/exec"
 	"slices"
 	"sync"
 
@@ -26,31 +23,13 @@ var (
 	ErrNoThread          = errors.New("codex: no thread id")
 )
 
-// Runner runs an external command. err is non-nil only when the command
-// could not be started; exitCode is -1 when it was killed by a signal.
-type Runner func(ctx context.Context, name string, args ...string) (exitCode int, output []byte, err error)
-
-// ExecRunner runs the command with os/exec.
-func ExecRunner(ctx context.Context, name string, args ...string) (int, []byte, error) {
-	cmd := exec.CommandContext(ctx, name, args...)
-	out, err := cmd.CombinedOutput()
-	if cmd.ProcessState == nil {
-		return -1, out, err
-	}
-	return cmd.ProcessState.ExitCode(), out, nil
-}
-
 type Adapter struct {
 	// ControlSocket is the managed daemon endpoint; "" means
 	// appserver.DefaultControlSocket().
 	ControlSocket string
 	// Endpoints are further known endpoints (harness_endpoint values from
 	// descriptors), queried alongside ControlSocket (§3 CQ10).
-	Endpoints []string
-	// CodexBin is the codex executable for `codex queue`; "" means "codex".
-	CodexBin string
-	// Run executes `codex queue`; nil means ExecRunner.
-	Run        Runner
+	Endpoints  []string
 	Logger     *slog.Logger
 	ClientInfo appserver.ClientInfo
 
