@@ -37,7 +37,7 @@ func (s *Server) addClaimTools() {
 }
 
 func (s *Server) claimTarget(a *Agent, name string) (registry.Descriptor, error) {
-	t, ok, err := s.reg.Lookup(name)
+	t, ok, err := s.reg.Resolve(name)
 	if err != nil {
 		return registry.Descriptor{}, err
 	}
@@ -70,7 +70,7 @@ func (s *Server) claim(ctx context.Context, a *Agent, name string) (any, error) 
 		return nil, err
 	}
 	out := claimOut{Name: t.Name, Owner: self.Name}
-	out.Inform, out.InformError = s.inform(ctx, a, t.Name, fmt.Sprintf("%s claimed you: you are now its subagent.", self.Name))
+	out.Inform, out.InformError = s.inform(ctx, a, t.AgentID, fmt.Sprintf("%s claimed you: you are now its subagent.", self.Name))
 	return out, nil
 }
 
@@ -90,7 +90,7 @@ func (s *Server) release(ctx context.Context, a *Agent, name string) (any, error
 		return nil, err
 	}
 	out := claimOut{Name: t.Name}
-	out.Inform, out.InformError = s.inform(ctx, a, t.Name, fmt.Sprintf("%s released you: you are primary again.", a.Name()))
+	out.Inform, out.InformError = s.inform(ctx, a, t.AgentID, fmt.Sprintf("%s released you: you are primary again.", a.Name()))
 	return out, nil
 }
 

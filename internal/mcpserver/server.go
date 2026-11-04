@@ -335,7 +335,7 @@ func boundTool[In any](s *Server, t *mcp.Tool, h func(context.Context, *Agent, I
 type listIn struct{}
 
 type sendIn struct {
-	To       string `json:"to" jsonschema:"agent name"`
+	To       string `json:"to" jsonschema:"agent name or agent_id"`
 	Text     string `json:"text"`
 	Kind     string `json:"kind,omitempty" jsonschema:"routing hint; not a trust boundary"`
 	Delivery string `json:"delivery,omitempty" jsonschema:"Codex scheduling; no-op for Claude"`
@@ -347,7 +347,7 @@ type replyIn struct {
 }
 
 type askIn struct {
-	To              string `json:"to" jsonschema:"agent name"`
+	To              string `json:"to" jsonschema:"agent name or agent_id"`
 	Text            string `json:"text"`
 	DeadlineSeconds int    `json:"deadline_seconds,omitempty" jsonschema:"0 = no deadline"`
 }
@@ -358,7 +358,7 @@ type receiveIn struct {
 }
 
 type nameIn struct {
-	Name string `json:"name" jsonschema:"agent name"`
+	Name string `json:"name" jsonschema:"agent name or agent_id"`
 }
 
 func schemaFor[T any](edit func(*jsonschema.Schema)) *jsonschema.Schema {
@@ -389,7 +389,7 @@ func (s *Server) addTools() {
 
 	boundTool(s, &mcp.Tool{
 		Name:        "send_message",
-		Description: "Send text to an agent by name. Returns {message_id, state}.",
+		Description: "Send text to an agent by name or agent_id. Returns {message_id, state}.",
 		InputSchema: schemaFor[sendIn](func(sch *jsonschema.Schema) {
 			enumProp(sch, "kind", "inform", "inform", "command", "ask")
 			enumProp(sch, "delivery", "immediate", "immediate", "next_turn")
@@ -421,7 +421,7 @@ func (s *Server) addTools() {
 
 	boundTool(s, &mcp.Tool{
 		Name:        "ask",
-		Description: "Send a reply-required message. Returns {message_id, state} at once; the answer arrives through reply.",
+		Description: "Send a reply-required message to an agent by name or agent_id. Returns {message_id, state} at once; the answer arrives through reply.",
 		InputSchema: schemaFor[askIn](func(sch *jsonschema.Schema) {
 			zero := 0.0
 			sch.Properties["deadline_seconds"].Minimum = &zero

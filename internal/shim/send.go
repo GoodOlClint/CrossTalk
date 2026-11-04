@@ -164,7 +164,7 @@ func (st *AgentState) viaTransport(ctx context.Context, to registry.Descriptor, 
 	return state, "", taskID
 }
 
-// deliver sends m by name: a descriptor means a shim-served agent (Transport);
+// deliver sends m by name or agent_id: a descriptor means a shim-served agent (Transport);
 // otherwise a native session injected through this agent's adapters.
 // Every outbound is journaled before and after the attempt.
 func (st *AgentState) deliver(ctx context.Context, m msg.Message) mcpserver.Result {
@@ -174,7 +174,7 @@ func (st *AgentState) deliver(ctx context.Context, m msg.Message) mcpserver.Resu
 		res.State, res.Reason = state, reason
 		return res
 	}
-	d, ok, err := st.shim.reg.Lookup(m.To)
+	d, ok, err := st.shim.reg.Resolve(m.To)
 	if err != nil {
 		return finish(m.To, adapter.Unreachable, "registry: "+err.Error())
 	}

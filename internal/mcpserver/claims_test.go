@@ -60,7 +60,7 @@ func TestClaimRelease(t *testing.T) {
 	if inf, _ := out["inform"].(map[string]any); inf["state"] != "accepted" {
 		t.Errorf("claim inform %v", out)
 	}
-	if s := lastSend(t, e); s.From != codexID("A") || s.Send.To != "b" || s.Send.Kind != "inform" || !strings.Contains(s.Send.Text, "claimed") {
+	if s := lastSend(t, e); s.From != codexID("A") || s.Send.To != codexID("B") || s.Send.Kind != "inform" || !strings.Contains(s.Send.Text, "claimed") {
 		t.Errorf("target not informed: %+v", s)
 	}
 	if r := claimRecord(t, e, codexID("B")); !r.Claimed || r.Owner != codexID("A") || r.Binding.SessionRef != "B" {
@@ -88,7 +88,7 @@ func TestClaimRelease(t *testing.T) {
 	if out["name"] != "b" {
 		t.Fatalf("release result %v", out)
 	}
-	if s := lastSend(t, e); s.Send.To != "b" || !strings.Contains(s.Send.Text, "released") {
+	if s := lastSend(t, e); s.Send.To != codexID("B") || !strings.Contains(s.Send.Text, "released") {
 		t.Errorf("release inform %+v", s)
 	}
 	if d := e.descriptor(codexID("B")); d.Role != registry.RolePrimary || d.Owner != nil {

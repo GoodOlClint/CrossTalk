@@ -535,3 +535,59 @@ func TestAskDeadlineRearmedAcrossRestart(t *testing.T) {
 		}
 	})
 }
+
+func askWorld(t *testing.T) (w *world, na *node, bobID string) {
+	w = newWorld(t)
+	alice := w.claude(4001, "sess-alice", "alice")
+	w.codex.addThread("T-bob", "bob")
+	na = w.node(alice.pid, w.lb, nil)
+	nb := w.node(1, w.lb, nil)
+	na.ok(nil, "receive_message", map[string]any{})
+	nb.ok(thread("T-bob"), "receive_message", map[string]any{})
+	return w, na, identity.AgentID("codex", "T-bob")
+}
+
+func TestAskByAgentIDReachesShimServedAgent(t *testing.T) {
+	w, na, bobID := askWorld(t)
+	out := na.ok(nil, "ask", send(bobID, "q by id?"))
+	if out["reason"] == ReasonNativeInformOnly || out["state"] == "rejected" {
+		t.Fatalf("ask by agent_id %v", out)
+	}
+	ws := w.codex.Writes()
+	if len(ws) == 0 || !strings.Contains(ws[len(ws)-1].Message.Parts[0].Text, "q by id?") {
+		t.Fatalf("bob not asked: %+v", ws)
+	}
+}
+
+func TestAskByNameReachesShimServedAgent(t *testing.T) {
+	w, na, _ := askWorld(t)
+	out := na.ok(nil, "ask", send("bob", "q by name?"))
+	if out["state"] == "rejected" {
+		t.Fatalf("ask by name %v", out)
+	}
+	ws := w.codex.Writes()
+	if len(ws) == 0 || !strings.Contains(ws[len(ws)-1].Message.Parts[0].Text, "q by name?") {
+		t.Fatalf("bob not asked: %+v", ws)
+	}
+}
+
+func TestAskToSelfByAgentIDIsRejected(t *testing.T) {
+	_, na, _ := askWorld(t)
+	self := identity.AgentID("claude", "sess-alice")
+	if out := na.ok(nil, "ask", send(self, "me?")); out["state"] != "rejected" || out["reason"] != ReasonSelf {
+		t.Fatalf("self by id %v", out)
+	}
+}
+
+func TestSendToNativeByAgentID(t *testing.T) {
+	w := newWorld(t)
+	alice := w.claude(4001, "sess-alice", "alice")
+	bob := w.claude(4002, "sess-bob", "bob")
+	n := w.node(alice.pid, nil, nil)
+	if out := n.ok(nil, "send_message", send(bob.agentID(), "by id")); out["state"] != "accepted" {
+		t.Fatalf("native by id %v", out)
+	}
+	if got := bob.got(); len(got) != 1 || !strings.Contains(got[0], "by id") {
+		t.Fatalf("bob got %q", got)
+	}
+}

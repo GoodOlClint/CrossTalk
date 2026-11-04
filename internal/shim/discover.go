@@ -6,6 +6,7 @@ import (
 
 	"github.com/GoodOlClint/crosstalk/internal/adapter"
 	"github.com/GoodOlClint/crosstalk/internal/harness"
+	"github.com/GoodOlClint/crosstalk/internal/identity"
 	"github.com/GoodOlClint/crosstalk/internal/mcpserver"
 )
 
@@ -44,14 +45,23 @@ func (s *Shim) Discover(ctx context.Context) ([]mcpserver.Session, error) {
 	return out, err
 }
 
-// nativeTarget resolves a name with no descriptor to exactly one harness
+// nativeTarget resolves a name or agent_id with no descriptor to exactly one harness
 // session, injected through this agent's own injectors (§3: inform only).
 func (st *AgentState) nativeTarget(ctx context.Context, name string) (adapter.Binding, adapter.Adapter, adapter.State, string) {
 	fs, _ := st.shim.sessions(ctx)
 	var cs []found
-	for _, f := range fs {
-		if f.s.Name == name {
-			cs = append(cs, f)
+	if name != "" {
+		for _, f := range fs {
+			if identity.AgentID(string(f.s.Harness), f.s.SessionRef) == name {
+				cs = append(cs, f)
+			}
+		}
+		if len(cs) == 0 {
+			for _, f := range fs {
+				if f.s.Name == name {
+					cs = append(cs, f)
+				}
+			}
 		}
 	}
 	switch len(cs) {

@@ -419,3 +419,29 @@ func TestNameLockPathConfined(t *testing.T) {
 		t.Error("distinct names share a lock")
 	}
 }
+
+func TestResolveByAgentIDNameAndEmpty(t *testing.T) {
+	r := New(t.TempDir())
+	a, _ := r.Acquire(req("t1", "alpha"))
+	defer a.Close()
+	a.Publish(Descriptor{SessionRef: "t1"})
+	b, _ := r.Acquire(req("t2", ""))
+	defer b.Close()
+	b.Publish(Descriptor{SessionRef: "t2"})
+	ida, idb := a.Descriptor().AgentID, b.Descriptor().AgentID
+	if d, ok, _ := r.Resolve(ida); !ok || d.AgentID != ida {
+		t.Fatal("agent_id does not resolve")
+	}
+	if d, ok, _ := r.Resolve(idb); !ok || d.AgentID != idb {
+		t.Fatal("empty-named agent does not resolve by agent_id")
+	}
+	if d, ok, _ := r.Resolve("alpha"); !ok || d.AgentID != ida {
+		t.Fatal("name does not resolve")
+	}
+	if _, ok, _ := r.Resolve(""); ok {
+		t.Fatal("empty target resolves")
+	}
+	if _, ok, _ := r.Lookup(""); ok {
+		t.Fatal("empty name resolves")
+	}
+}
