@@ -165,6 +165,19 @@ func rejected(id, reason string) Result {
 // resolved by the ingress) → dedupe → hop_chain → policy and admission →
 // dispatch claim → inject → record outcome.
 func (r *Receiver) Receive(ctx context.Context, in Inbound) Result {
+	return r.receive(ctx, in, false)
+}
+
+// Resume re-runs the chain for a message accepted before a restart. A dedupe
+// record still submitted with no dispatch claim proves nothing reached the
+// harness, so the chain continues from policy; a claim without an outcome is
+// unknown (reason journal) and is never re-injected. Any other prior state is
+// returned as a duplicate, as Receive does.
+func (r *Receiver) Resume(ctx context.Context, in Inbound) Result {
+	return r.receive(ctx, in, true)
+}
+
+func (r *Receiver) receive(ctx context.Context, in Inbound, resume bool) Result {
 	self := r.self()
 	m := in.Message
 	if in.Native {
@@ -206,7 +219,18 @@ func (r *Receiver) Receive(ctx context.Context, in Inbound) Result {
 		return rejected(m.MessageID, ReasonJournal)
 	}
 	if dup {
-		return Result{MessageID: m.MessageID, State: adapter.State(prior), Duplicate: true}
+		if !resume || prior != journal.StateSubmitted {
+			return Result{MessageID: m.MessageID, State: adapter.State(prior), Duplicate: true}
+		}
+		if l, claimed := r.j.DispatchState(m.MessageID); claimed {
+			switch l.Type {
+			case journal.TypeCancel:
+				return rejected(m.MessageID, ReasonCanceled)
+			case journal.TypeOutcome:
+				return Result{MessageID: m.MessageID, State: adapter.State(l.State), Duplicate: true}
+			}
+			return Result{MessageID: m.MessageID, State: adapter.Unknown, Reason: ReasonJournal, Duplicate: true}
+		}
 	}
 	reject := func(reason string) Result {
 		r.j.SetDedupeState(key, m.MessageID, string(adapter.Rejected))

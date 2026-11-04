@@ -88,6 +88,9 @@ type Config struct {
 	Claim  ClaimFunc
 	Limits Limits
 	Logger *slog.Logger
+	// ResolveSender rebuilds the sender of a replayed task from its
+	// principal; nil, or false, falls back to the principal alone.
+	ResolveSender func(principal string) (receiver.Sender, bool)
 	// Tasks persists tasks; nil keeps them in memory for this Server only.
 	Tasks TaskStore
 }
@@ -134,6 +137,40 @@ func NewServer(c Config) *Server {
 		}
 	}
 	return s
+}
+
+// Resumer is a Receiver that can re-run the chain for a message accepted
+// before a restart without treating its own dedupe record as a duplicate.
+type Resumer interface {
+	Resume(ctx context.Context, in receiver.Inbound) receiver.Result
+}
+
+// Resume restarts every replayed task still submitted: its journaled message
+// goes through the receiver again, which re-runs policy and dispatch only
+// when no dispatch claim exists. A task whose message cannot be rebuilt is
+// resolved unknown with reason journal. Call it once, after journal recovery
+// and reconcile, so submitted work never stays silently inaccessible.
+func (s *Server) Resume() {
+	if s.cfg.Receiver == nil {
+		return
+	}
+	for _, id := range s.tasks.pending() {
+		t, ok := s.tasks.byMessage(id)
+		if !ok {
+			continue
+		}
+		in, ok := s.tasks.resumeInbound(t, s.cfg.ResolveSender)
+		if !ok {
+			s.apply(t, receiver.Result{MessageID: id, State: adapter.Unknown, Reason: receiver.ReasonJournal})
+			continue
+		}
+		if in == nil {
+			continue
+		}
+		if !s.start(t, *in, true) {
+			return
+		}
+	}
 }
 
 // Listen reads (creating it on first start) the peer token and binds

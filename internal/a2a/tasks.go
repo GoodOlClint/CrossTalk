@@ -120,6 +120,43 @@ func (st *store) create(principal string, m msg.Message, wire *sdk.Message, maxA
 	return t, false, nil
 }
 
+// resumeInbound rebuilds the receiver input of a replayed submitted task from
+// its journaled first message. It returns (nil, true) for a task that is not
+// submitted, and false when the message or sender cannot be rebuilt.
+func (st *store) resumeInbound(t *task, resolve func(string) (receiver.Sender, bool)) (*receiver.Inbound, bool) {
+	st.mu.Lock()
+	submitted, first := t.state == sdk.TaskStateSubmitted, (*sdk.Message)(nil)
+	if len(t.history) > 0 {
+		first = t.history[0]
+	}
+	who := t.principal
+	st.mu.Unlock()
+	if !submitted {
+		return nil, true
+	}
+	if first == nil {
+		return nil, false
+	}
+	m, err := decode(first)
+	if err != nil {
+		return nil, false
+	}
+	var snd receiver.Sender
+	switch {
+	case who == receiver.PrincipalLocalUser:
+		snd = receiver.Sender{Verified: true, Principal: who}
+	default:
+		ok := false
+		if resolve != nil {
+			snd, ok = resolve(who)
+		}
+		if !ok {
+			snd = receiver.Sender{Verified: true, AgentID: who}
+		}
+	}
+	return &receiver.Inbound{Ingress: receiver.A2A, Message: m, Sender: snd}, true
+}
+
 func (st *store) remove(t *task) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
@@ -428,7 +465,7 @@ func (h *handler) SendMessage(ctx context.Context, req *sdk.SendMessageRequest) 
 	}
 	submitted := s.tasks.snapshot(t, nil)
 	if !existing {
-		if !s.start(t, receiver.Inbound{Ingress: receiver.A2A, Message: m, Sender: snd}) {
+		if !s.start(t, receiver.Inbound{Ingress: receiver.A2A, Message: m, Sender: snd}, false) {
 			s.tasks.remove(t)
 			return nil, sdk.NewError(sdk.ErrServerError, "server closing")
 		}
@@ -503,7 +540,7 @@ func (s *Server) await(ctx context.Context, t *task) error {
 	}
 }
 
-func (s *Server) start(t *task, in receiver.Inbound) bool {
+func (s *Server) start(t *task, in receiver.Inbound, resume bool) bool {
 	s.mu.Lock()
 	select {
 	case <-s.closed:
@@ -513,14 +550,19 @@ func (s *Server) start(t *task, in receiver.Inbound) bool {
 	}
 	s.wg.Add(1)
 	s.mu.Unlock()
-	s.armDeadline(t)
+	if !resume {
+		s.armDeadline(t)
+	}
 	go func() {
 		defer s.wg.Done()
 		if s.beforeReceive != nil {
 			s.beforeReceive(t.messageID)
 		}
-		res := s.cfg.Receiver.Receive(s.base, in)
-		s.apply(t, res)
+		recv := s.cfg.Receiver.Receive
+		if rs, ok := s.cfg.Receiver.(Resumer); ok && resume {
+			recv = rs.Resume
+		}
+		s.apply(t, recv(s.base, in))
 	}()
 	return true
 }

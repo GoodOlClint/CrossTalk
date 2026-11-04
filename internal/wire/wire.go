@@ -95,6 +95,10 @@ func (r agentReceiver) Receive(ctx context.Context, in receiver.Inbound) receive
 	return r.st.Receive(ctx, in)
 }
 
+func (r agentReceiver) Resume(ctx context.Context, in receiver.Inbound) receiver.Result {
+	return r.st.Receiver().Resume(ctx, in)
+}
+
 func (r agentReceiver) Cancel(messageID string) (bool, error) {
 	return r.st.Receiver().Cancel(messageID)
 }
@@ -124,12 +128,14 @@ func (w *Wire) startA2A(_ context.Context, st *shim.AgentState) (shim.A2AListene
 		Version:       mcpserver.Version,
 		PeerTokenPath: w.PeerTokenPath(),
 		ResolvePeer:   w.resolvePeer,
+		ResolveSender: w.resolveSender,
 		Claim: func(ctx context.Context, snd receiver.Sender, claimed bool) error {
 			return claimError(w.shim.ApplyClaim(ctx, registry.Descriptor{AgentID: snd.AgentID, Name: snd.Name}, id, claimed))
 		},
 		Logger: w.log.With("agent", id),
 	})
 	reconcile(srv, a.Journal(), w.log.With("agent", id))
+	srv.Resume()
 	url, err := srv.Listen()
 	if err != nil {
 		srv.Close()
@@ -185,6 +191,23 @@ func (w *Wire) resolvePeer(name string) (a2a.Peer, bool) {
 		role = registry.RolePrimary
 	}
 	return a2a.Peer{AgentID: d.AgentID, Role: role, TokenPath: d.CredentialRef}, true
+}
+
+func (w *Wire) resolveSender(agentID string) (receiver.Sender, bool) {
+	ds, err := w.shim.Registry().List()
+	if err != nil {
+		return receiver.Sender{}, false
+	}
+	for _, d := range ds {
+		if d.AgentID == agentID {
+			role := d.Role
+			if role == "" {
+				role = registry.RolePrimary
+			}
+			return receiver.Sender{Verified: true, AgentID: agentID, Name: d.Name, Role: role}, true
+		}
+	}
+	return receiver.Sender{}, false
 }
 
 func claimError(err error) error {

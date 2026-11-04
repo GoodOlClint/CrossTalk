@@ -2,6 +2,7 @@ package receiver
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -622,5 +623,40 @@ func TestOutcomeWriteFailureIsUnknown(t *testing.T) {
 	res := e.recv(A2A, alice, newMsg(msg.Inform, "hi"))
 	if res.State != adapter.Unknown || res.Reason != ReasonJournal || e.writes() != 1 {
 		t.Fatalf("res %+v writes %d", res, e.writes())
+	}
+}
+
+func TestResumeSubmittedWithoutClaimRunsChain(t *testing.T) {
+	e := newEnv(t)
+	m := newMsg(msg.Inform, "hi")
+	m.From, m.To = "alice", "bob"
+	body, _ := json.Marshal(m)
+	if _, _, err := e.j.AcceptRecord(journal.Record{Sender: alice.AgentID, MessageID: m.MessageID, State: journal.StateSubmitted, Message: body}); err != nil {
+		t.Fatal(err)
+	}
+	if res := e.recv(A2A, alice, m); !res.Duplicate || res.State != journal.StateSubmitted || e.writes() != 0 {
+		t.Fatalf("Receive on submitted dedupe: %+v writes=%d", res, e.writes())
+	}
+	res := e.r.Resume(context.Background(), Inbound{Ingress: A2A, Message: m, Sender: alice})
+	if res.Duplicate || res.State != adapter.Accepted || e.writes() != 1 {
+		t.Fatalf("Resume: %+v writes=%d", res, e.writes())
+	}
+	if again := e.r.Resume(context.Background(), Inbound{Ingress: A2A, Message: m, Sender: alice}); !again.Duplicate || e.writes() != 1 {
+		t.Fatalf("second Resume: %+v writes=%d", again, e.writes())
+	}
+}
+
+func TestResumeClaimWithoutOutcomeIsUnknown(t *testing.T) {
+	e := newEnv(t)
+	m := newMsg(msg.Inform, "hi")
+	if _, _, err := e.j.AcceptRecord(journal.Record{Sender: alice.AgentID, MessageID: m.MessageID, State: journal.StateSubmitted}); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := e.j.Claim(m.MessageID); err != nil || !ok {
+		t.Fatal(ok, err)
+	}
+	res := e.r.Resume(context.Background(), Inbound{Ingress: A2A, Message: m, Sender: alice})
+	if res.State != adapter.Unknown || res.Reason != ReasonJournal || e.writes() != 0 {
+		t.Fatalf("Resume: %+v writes=%d", res, e.writes())
 	}
 }
