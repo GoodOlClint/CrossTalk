@@ -182,7 +182,7 @@ Prerequisites: spike S1 passed (or the install target changed); ADR 0012 accepte
 | 7a | `crosstalk hook` `stop`, `--stop-delivery` | Stop guard table; not installed by default |
 | 8 | Install, uninstall, `--check` | Fixture: existing hooks and servers survive; 0-byte file; bad JSON writes nothing; install twice is byte-identical; conflicting existing `crosstalk` entry aborts with no writes; pre-existing permission string survives uninstall; user edit between install and uninstall is left and reported |
 | 9 | Version gate | Major 2 refused, 1.6 warns, unparseable handled |
-| 10 | Docs: design, CLAUDE.md, ADRs (section 10) | None: doc only |
+| 10 | Docs: design, AGENTS.md, ADRs (section 10) | None: doc only |
 | 11 | Conditional on S2: `Superseded` from recorded root | Design test 32's cases for agy; subagent call does not supersede |
 | 12 | Conditional on Q2: `--announce` | Fires only at `invocationNum` 0 with no descriptor |
 | 13 | Live definition of done (section 7) recorded in `docs/spikes/` | The run itself |
@@ -239,7 +239,7 @@ Known gaps shipped: G1 stranded name after `/clear` unless commit 11 lands. G2 n
 | ADR 0010 | Inform route expiry for a mailboxed message starts at collection |
 | ADR 0007 | No change; ADR 0012 cites it. Its rejected "receiver mailbox" was scoped to Codex |
 | `docs/design.md` | Terms; §2; §3 (identity, name, descriptor `harness`); §5 (retention list, task mapping); §6 new adapter; §8 (`receive_message` no longer read-only for `mailboxed`; states list; `accepted` definition; `reply` reason `not_collected`); §3 Superseded sessions and §9 Exit (`/clear` takes over the name only where a harness proves supersession); §9 install and "SessionStart hooks are v1.1"; §10 out-list wording on hooks; §11 tests; §12 ADR 0008 note and next harnesses |
-| `CLAUDE.md` | Architecture, adapters, trust paragraph; back-link ADR 0012; install command |
+| `AGENTS.md` | Architecture, adapters, trust paragraph; back-link ADR 0012; install command |
 
 ## 11. Open questions
 

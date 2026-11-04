@@ -54,6 +54,6 @@ ADR 0008's extension points grow by two optional interfaces, `MailSignal` and `T
 - The sender-side evidence is stronger than for other harnesses in one way (the model's own tool call took the message) and weaker in another (no wake).
 - `_meta` keys and hook behaviour are changelog-level or measured contracts, pinned by fixtures from spike 12. Identity fails closed if they change.
 - Whether this setup is permitted by Google's terms is unresolved. The operator decides and the user is told before install; the consequence named in the terms falls on the user's account.
-- Text in ADRs 0003, 0006, 0008 and 0010, `docs/design.md` and `CLAUDE.md` must change when this is built. The plan's section 10 lists it; none is edited yet.
+- Text in ADRs 0003, 0006, 0008 and 0010, `docs/design.md` and `AGENTS.md` must change when this is built. The plan's section 10 lists it; none is edited yet.
 - `liveSet` in the journal keeps outbound asks at `mailboxed`, so an asker's deadline and receipt survive retention while the recipient holds the ask.
 - Implementation commits carry `Provisional-ADR: 0012`.

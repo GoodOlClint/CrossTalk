@@ -10,4 +10,4 @@ Each ADR should answer:
 - **Rejected alternatives** — what was considered and why not
 - **Consequences** — what this commits the project to
 
-`CLAUDE.md` should reference relevant ADRs from the "Canonical pipelines" or "Architecture" sections so they enter context at session start.
+`AGENTS.md` should reference relevant ADRs from the "Canonical pipelines" or "Architecture" sections so they enter context at session start.
