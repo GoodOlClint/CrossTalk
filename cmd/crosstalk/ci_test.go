@@ -169,4 +169,7 @@ func TestPagesWorkflow(t *testing.T) {
 	if !strings.Contains(build, "contents: read") || strings.Count(build, ": write") != 0 {
 		t.Error("build permissions are not contents: read only")
 	}
+	if !strings.Contains(src, "group: pages-${{ github.event_name == 'pull_request' && github.ref || 'deploy' }}") {
+		t.Error("pages.yml: pull request runs share the production concurrency group")
+	}
 }
