@@ -11,7 +11,8 @@ Both marketplace files pin the plugin source to a release tag (`ref`, plan 0.1.3
 
 ## Decision
 
-- On a final tag only, a `marketplace` job in `release.yml` runs after the `release` job publishes: it mints a 1-hour token from the same GitHub App as ADR 0018 (installed on CrossTalk with Contents and Pull requests write), rewrites only the two `ref` values with `scripts/release-build.sh bump-marketplaces TAG`, runs the marketplace tests, pushes branch `marketplace-<tag>`, opens a PR and enables auto-merge.
+- On a final tag only, a `marketplace` job in `release.yml` runs after the `release` job publishes: it mints a 1-hour token from the same GitHub App as ADR 0018 (installed on CrossTalk with Contents and Pull requests write), rewrites only the two `ref` values with `scripts/release-build.sh bump-marketplaces TAG`, runs the marketplace tests, pushes branch `marketplace-<tag>`, opens a PR and enables auto-merge, then waits until the PR is merged and `main`'s refs equal the tag; otherwise the job fails. `bump-marketplaces` refuses a tag older than `main`'s current ref, so a late older release cannot downgrade it.
+- The `homebrew` job (ADR 0018) needs this job, so the formula moves only after the plugin ref it depends on is on `main`.
 - A ruleset on CrossTalk's `main` requires the CI checks (`test (ubuntu-latest)`, `test (macos-latest)`, `govulncheck`) and blocks force-push and deletion, with the operator as bypass. The tap gets the same with its test-bot checks.
 - The bump never creates a tag, and `release.yml` triggers only on `v*` tags (and manual dispatch guarded to tags), so the bump's merge runs `ci.yml` alone.
 
