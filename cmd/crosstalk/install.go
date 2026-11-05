@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"time"
@@ -178,6 +179,10 @@ func runInstall(mode string, args []string, in io.Reader, tty bool, stdout, stde
 				fmt.Fprintf(stdout, "- %s\n%s\n", s.Title, installIndent(s.Change))
 			}
 		}
+		if files := installPathFiles(runtime.GOOS, home); o.path && len(files) > 0 {
+			s := installPathStep(o.binDir, files)
+			fmt.Fprintf(stdout, "- %s\n%s\n", s.Title, installIndent(s.Change))
+		}
 		fmt.Fprintf(stderr, "crosstalk %s: no terminal to confirm on; nothing changed. Run it in a terminal or pass --yes.\n", mode)
 		return 2
 	}
@@ -198,6 +203,17 @@ func runInstall(mode string, args []string, in io.Reader, tty bool, stdout, stde
 	}
 	if mode == "uninstall" {
 		return 0
+	}
+	files := installPathFiles(runtime.GOOS, home)
+	if len(files) > 0 && (o.path || !o.yes) && !installOnLoginPath(o.binDir) {
+		s := installPathStep(o.binDir, files)
+		fmt.Fprintf(stdout, "- %s\n%s\n", s.Title, installIndent(s.Change))
+		if o.path && o.yes || installConfirm(answers, stdout) {
+			if err := s.Apply(ctx); err != nil {
+				fmt.Fprintf(stderr, "PATH: %v\n", err)
+				return 1
+			}
+		}
 	}
 	failed := installChecks(ctx, stdout, targets, env)
 	fmt.Fprintln(stdout, "Running Claude and Codex sessions keep their old CrossTalk server. Restart them (in Claude, /mcp and reconnect also works).")
@@ -229,11 +245,14 @@ func installStillRegistered(ctx context.Context, all, targets []installTarget, e
 func installRemoveSteps(o installOpts, all, targets []installTarget, env harness.InstallEnv, stateDir string, w io.Writer) []harness.Step {
 	steps := []harness.Step{{
 		Title:  "binary",
-		Change: "delete " + env.Bin + " unless another harness still runs it",
+		Change: "delete " + env.Bin + " and the PATH lines install marked, unless another harness still runs it",
 		Apply: func(ctx context.Context) error {
 			if still := installStillRegistered(ctx, all, targets, env); len(still) > 0 {
 				fmt.Fprintf(w, "    kept %s: %s still runs it\n", env.Bin, strings.Join(still, ", "))
 				return nil
+			}
+			if err := installRemovePath(installPathFiles(runtime.GOOS, env.Home), installPathLine(filepath.Dir(env.Bin))); err != nil {
+				return err
 			}
 			if err := os.Remove(env.Bin); err != nil && !errors.Is(err, os.ErrNotExist) {
 				return err
@@ -425,4 +444,80 @@ func installChecks(ctx context.Context, w io.Writer, targets []installTarget, en
 		failed = true
 	}
 	return failed
+}
+
+// installPathFiles are the shell startup files the PATH step edits on goos.
+// Both a login and a non-login shell must see the bin dir.
+func installPathFiles(goos, home string) []string {
+	switch goos {
+	case "darwin":
+		return []string{filepath.Join(home, ".zprofile"), filepath.Join(home, ".zshenv")}
+	}
+	return nil
+}
+
+func installPathLine(binDir string) string {
+	return `export PATH="` + binDir + `:$PATH" # crosstalk`
+}
+
+func installAddPath(files []string, line string) error {
+	for _, f := range files {
+		b, err := os.ReadFile(f)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		s := string(b)
+		if slices.Contains(strings.Split(s, "\n"), line) {
+			continue
+		}
+		if s != "" && !strings.HasSuffix(s, "\n") {
+			s += "\n"
+		}
+		if err := harness.ReplaceFile(f, []byte(s+line+"\n")); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func installRemovePath(files []string, line string) error {
+	for _, f := range files {
+		b, err := os.ReadFile(f)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		lines := strings.Split(string(b), "\n")
+		kept := slices.DeleteFunc(slices.Clone(lines), func(l string) bool { return l == line })
+		if len(kept) == len(lines) {
+			continue
+		}
+		if err := harness.ReplaceFile(f, []byte(strings.Join(kept, "\n"))); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// installOnLoginPath reports that a login shell already has binDir on PATH.
+func installOnLoginPath(binDir string) bool {
+	sh := os.Getenv("SHELL")
+	if sh == "" {
+		sh = "/bin/sh"
+	}
+	out, err := exec.Command(sh, "-lc", `printf %s "$PATH"`).Output()
+	return err == nil && slices.Contains(filepath.SplitList(string(out)), binDir)
+}
+
+func installPathStep(binDir string, files []string) harness.Step {
+	line := installPathLine(binDir)
+	return harness.Step{
+		Title:  "PATH (optional, only for typing crosstalk send)",
+		Change: "append " + line + " to " + strings.Join(files, " and "),
+		Apply: func(context.Context) error {
+			return installAddPath(files, line)
+		},
+	}
 }
