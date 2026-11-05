@@ -139,3 +139,28 @@ func TestSkillCoversStatesAndCodes(t *testing.T) {
 		}
 	}
 }
+
+func TestMarketplacesPinToReleaseTag(t *testing.T) {
+	tag := regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
+	for _, f := range []string{"../../.claude-plugin/marketplace.json", "../../.agents/plugins/marketplace.json"} {
+		n := 0
+		for _, p := range readJSON(t, f)["plugins"].([]any) {
+			e := p.(map[string]any)
+			if e["name"] != "crosstalk" {
+				continue
+			}
+			n++
+			src, _ := e["source"].(map[string]any)
+			if len(src) != 4 || src["source"] != "git-subdir" || src["url"] != "https://github.com/GoodOlClint/CrossTalk.git" || src["path"] != "plugins/crosstalk" {
+				t.Errorf("%s: source %v", f, e["source"])
+				continue
+			}
+			if r, _ := src["ref"].(string); !tag.MatchString(r) {
+				t.Errorf("%s: ref %q is not a release tag", f, src["ref"])
+			}
+		}
+		if n != 1 {
+			t.Errorf("%s: %d crosstalk entries", f, n)
+		}
+	}
+}

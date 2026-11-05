@@ -7,7 +7,12 @@
   "plugins": [
     {
       "name": "crosstalk",
-      "source": "./plugins/crosstalk",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/GoodOlClint/CrossTalk.git",
+        "path": "plugins/crosstalk",
+        "ref": "v0.1.2"
+      },
       "description": "Message other running agent sessions (Claude Code, Codex) on this Mac by name.",
       "version": "0.1.2",
       "author": {
