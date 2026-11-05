@@ -97,8 +97,22 @@ func runInstall(mode string, args []string, in io.Reader, tty bool, stdout, stde
 		fmt.Fprintf(stderr, "crosstalk %s: %v\n", mode, err)
 		return 1
 	}
+	var brewBin string
 	if o.binDir == "" {
 		o.binDir = filepath.Join(home, ".local", "bin")
+		if exe, err := installExecutable(); err == nil {
+			switch bin, linked, ok := installHomebrew(exe); {
+			case ok && linked:
+				brewBin, o.binDir = bin, filepath.Dir(bin)
+				if old := filepath.Join(home, ".local", "bin", "crosstalk"); mode != "uninstall" {
+					if _, err := os.Stat(old); err == nil {
+						fmt.Fprintf(stdout, "%s from an earlier install is left in place; rm %s removes it\n", old, old)
+					}
+				}
+			case ok:
+				fmt.Fprintf(stdout, "Homebrew's keg is not linked into its prefix (%s is missing or points elsewhere); using %s instead\n", bin, o.binDir)
+			}
+		}
 	}
 	if o.binDir, err = filepath.Abs(o.binDir); err != nil {
 		fmt.Fprintf(stderr, "crosstalk %s: %v\n", mode, err)
@@ -160,7 +174,7 @@ func runInstall(mode string, args []string, in io.Reader, tty bool, stdout, stde
 	}
 	var groups []group
 	if mode != "uninstall" {
-		groups = append(groups, group{"crosstalk", []harness.Step{installBinaryStep(env.Bin)}})
+		groups = append(groups, group{"crosstalk", []harness.Step{installBinaryStep(env.Bin, brewBin != "")}})
 	}
 	for _, t := range targets {
 		var steps []harness.Step
@@ -362,7 +376,34 @@ func installBinary(src, dst string) (skipped bool, err error) {
 	return false, err
 }
 
-func installBinaryStep(bin string) harness.Step {
+// installHomebrew reports whether exe is a Homebrew keg binary
+// (<prefix>/Cellar/crosstalk/<version>/bin/crosstalk), with bin the
+// <prefix>/bin/crosstalk Homebrew links to it and linked that the link
+// resolves to the same file.
+func installHomebrew(exe string) (bin string, linked, ok bool) {
+	exe, err := filepath.EvalSymlinks(exe)
+	if err != nil || filepath.Base(exe) != "crosstalk" {
+		return "", false, false
+	}
+	keg := filepath.Dir(exe)
+	cellar := filepath.Dir(filepath.Dir(filepath.Dir(keg)))
+	if filepath.Base(keg) != "bin" || filepath.Base(filepath.Dir(filepath.Dir(keg))) != "crosstalk" || filepath.Base(cellar) != "Cellar" {
+		return "", false, false
+	}
+	bin = filepath.Join(filepath.Dir(cellar), "bin", "crosstalk")
+	a, err1 := os.Stat(exe)
+	b, err2 := os.Stat(bin)
+	return bin, err1 == nil && err2 == nil && os.SameFile(a, b), true
+}
+
+func installBinaryStep(bin string, brew bool) harness.Step {
+	if brew {
+		return harness.Step{
+			Title:  "binary",
+			Change: fmt.Sprintf("use Homebrew's %s (no copy)", bin),
+			Apply:  func(context.Context) error { return nil },
+		}
+	}
 	src, err := installExecutable()
 	if err == nil {
 		src, err = filepath.EvalSymlinks(src)
