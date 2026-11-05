@@ -115,7 +115,7 @@ jobs:
             }
             gh release upload "$TAG" "${files[@]}" --clobber --repo "$repo"
           else
-            gh release create "$TAG" "${files[@]}" --draft "${pre[@]}" --verify-tag --generate-notes --title "$TAG" --repo "$repo"
+            gh release create "$TAG" "${files[@]}" --draft ${pre[@]+"${pre[@]}"} --verify-tag --generate-notes --title "$TAG" --repo "$repo"
           fi
           gh release edit "$TAG" --draft=false --repo "$repo"
       - name: Remove keychain and key files

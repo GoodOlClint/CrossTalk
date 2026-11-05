@@ -19,7 +19,7 @@ CrossTalk lets Claude Code and Codex sessions on this Mac message each other by 
 
    First run on macOS: the binary is signed with a Developer ID certificate and its zip is notarized, but a bare command-line binary cannot be stapled, so macOS finds the ticket online. `curl` does not set the quarantine flag, so the download above skips the Gatekeeper prompt (this is how macOS behaves for curl downloads; not re-checked on a release build before the first release). If you download the zip with a browser instead, the extracted file may carry the quarantine flag; whether Gatekeeper then opens it silently or shows a prompt for a notarized bare binary is unverified. If it blocks, `xattr -d com.apple.quarantine ~/.local/bin/crosstalk` clears the flag. `spctl --assess` on a bare binary reports "rejected" even when it is signed, because it judges apps; do not use it as the check, use `codesign --verify --strict --verbose=2 ~/.local/bin/crosstalk`. None of this has been run against a real release build yet: the first release run is unproven.
 
-   Alternative, build from source with Go. The repo is public, so `go` needs no `GOPRIVATE`, no `gh auth` and no GitHub login. `@latest` resolves to the newest release tag. Admin account:
+   Alternative, build from source with Go. The repo is public, so `go` needs no `GOPRIVATE`, no `gh auth` and no GitHub login. `@latest` resolves to the newest release tag, or to the latest commit on `main` while no release tag exists. Admin account:
    ```sh
    brew install go
    GOBIN="$(brew --prefix)/bin" go install github.com/GoodOlClint/crosstalk/cmd/crosstalk@latest

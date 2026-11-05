@@ -36,9 +36,10 @@ Public-repo secret handling:
 
 ## Consequences
 
-- The first run is unproven. Nothing here has run with real credentials: the local proof covers the build, `lipo`, version check, zip, checksum and an ad hoc signature, not the certificate import, the notarization status or `spctl`. Watch on the first run: the certificate import step, the `notarytool` status (must be `Accepted`), the `spctl` line (a bare binary may print "rejected"; the check that counts is `codesign --verify --strict`), `lipo -archs` (both `arm64` and `x86_64`), and the release assets `crosstalk-<tag>-macos-universal.zip` and `.zip.sha256`.
+- The first run is unproven. Nothing here has run with real credentials: the local proof covers the build, `lipo`, version check, zip, checksum and an ad hoc signature, not the certificate import, the notarization status or `spctl`. Watch on the first run: the certificate import step, the `notarytool` status (must be `Accepted`), the `spctl` line (a bare binary may print "rejected"; the check that counts is `codesign --verify --check-notarization -R=notarized`), `lipo -archs` (both `arm64` and `x86_64`), and the release assets `crosstalk-<tag>-macos-universal.zip` and `.zip.sha256`.
 - A release needs the Mac-only toolchain on the runner (`codesign`, `notarytool`, `lipo`); `macos-latest` provides it.
-- A run that fails before publish leaves no release, or a draft; rerun from the tag as above. A published release is never overwritten: delete it by hand and rerun. A tag is public to the Go module proxy at once, so a fix to `release.yml` needs a new tag (a new `-rc.N`, or a bumped version), not a moved one. Rehearse with `v0.1.2-rc.1` before the real `v0.1.2`.
+- A run that fails before publish leaves no release, or a draft; rerun from the tag as above. A published release is never overwritten, and once immutable releases are on, deleting it and rerunning under the same tag fails: a bad published release needs a new tag. A tag is public to the Go module proxy at once, so a fix to `release.yml` needs a new tag (a new `-rc.N`, or a bumped version), not a moved one. Rehearse with `v0.1.2-rc.1` before the real `v0.1.2`.
+- A rc run rehearses everything except the plain-tag path through the publish step; that path is first exercised by `v0.1.2` itself.
 - The x86_64 slice is built and inspected but has never been executed (the runner is arm64).
 - Linux binaries are not built.
 
@@ -46,7 +47,7 @@ Public-repo secret handling:
 
 Nothing here is set by the repo. In order:
 
-1. Create the environment `release` (Settings, Environments). Before adding any secret, set Deployment branches and tags to "Selected branches and tags" with one rule of ref type Tag, pattern `v*`, and no Branch rule. Add a required reviewer (yourself).
+1. Create the environment `release` (Settings, Environments). Before adding any secret, set Deployment branches and tags to "Selected branches and tags" with one rule of ref type Tag, pattern `v*`, and no Branch rule. Add a required reviewer (yourself) and leave "Prevent self-review" off: you push the tag and are the only reviewer, so with it on nobody can approve.
 2. Add these environment secrets in `release`, not repo secrets. Pipe base64 output to `pbcopy` rather than the terminal.
    - `APPLE_CERT_P12`: the Developer ID Application certificate and its private key exported from Keychain Access as a `.p12`, then `base64 -i cert.p12 | pbcopy`.
    - `APPLE_CERT_PASSWORD`: the password chosen at that export.
@@ -55,9 +56,11 @@ Nothing here is set by the repo. In order:
    - `AC_API_KEY_ID`: that key's id.
    - `AC_API_ISSUER`: the issuer id shown on the App Store Connect keys page.
 3. Delete the local `.p12` and `.p8` copies after upload.
-4. Add a tag ruleset: target `refs/tags/v*`, Active, restrict creations, updates and deletions, block force pushes, bypass Repository admin only, no App.
+4. Add a tag ruleset: target `refs/tags/v*`, Active, restrict creations, updates and deletions, block force pushes, bypass Repository admin only, no App. Afterwards check that the ruleset's `conditions.ref_name.include` is exactly `refs/tags/v*` (`GET /repos/GoodOlClint/CrossTalk/rulesets/<id>`); GitHub's docs do not say whether the field takes `v*` or the full ref.
 5. Actions permissions: the repo's workflow token default can stay read-only, since the job asks for `contents: write` itself.
-6. Rehearse: push `v0.1.2-rc.1` (it publishes a prerelease), watch the run, then tag the real `v0.1.2` only after an rc run succeeds.
+6. Recommended: enable immutable releases, so published assets and tags are locked (draft then publish is the pattern GitHub recommends for it). Recommended: protect `main`, or read `git diff <last-tag>..<new-tag> -- .github scripts` before approving a run.
+7. Negative check, as a write collaborator: pushing a `v*` tag must be refused, and a dispatch from `main` must skip the job.
+8. Rehearse: push `v0.1.2-rc.1` (it publishes a prerelease), watch the run, then tag the real `v0.1.2` only after an rc run succeeds.
 
 ## Trial record
 
