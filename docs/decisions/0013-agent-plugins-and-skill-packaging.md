@@ -4,6 +4,7 @@
 - **Date:** 2026-11-04
 - **Deciders:** operator (Q1–Q6 of the plan), session
 - **Context source:** `docs/plans/agent-plugins.md` (approved 2026-11-04), including its Codex review (R1–R3)
+- **Note (2026-11-05):** [ADR 0016](0016-crosstalk-install-registers-mcp-at-the-installed-path.md), planned for 0.1.3 and not yet built, reverses this ADR's rejection of `crosstalk install` and its plugin-supplied server; this text still describes the code until those slices land, then is edited to match.
 
 ## Context
 

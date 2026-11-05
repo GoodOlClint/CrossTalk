@@ -1,0 +1,47 @@
+# ADR 0016 — `crosstalk install` registers the MCP server at the installed binary's absolute path; the plugin carries only the skill
+
+- **Status:** Provisional (operator 2026-11-05)
+- **Date:** 2026-11-05
+- **Deciders:** operator (rulings 2026-11-05) + Claude (Opus 5.5)
+- **Context source:** `docs/plans/release-0.1.3.md` section (a); ADR 0013 (rejected `crosstalk install`, plugin-supplied server); `docs/setup.md` ENOENT row; the 2026-11-04 clean-account run and the 2026-11-05 Linux run
+
+## Context
+
+ADR 0013 ships the MCP server inside the plugin with the bare command `crosstalk`, so the binary must be on the PATH the harness sees. A harness started outside a shell does not see shell-profile PATH entries, which fails as `ENOENT` on Claude (ADR 0013 "Not yet run live", PATH row; setup.md troubleshooting table). Setup is eight manual steps, two of them easy to get wrong: removing a manual MCP entry (two shims, `agent_held`) and removing a Codex `[mcp_servers.crosstalk]` table without its `tools.*` sub-tables (Codex refuses the whole config with `invalid transport`). The operator reversed ADR 0013's rejection of `crosstalk install` for 0.1.3 and ruled that MCP registration uses the absolute installed path.
+
+Terms: shim = the `crosstalk mcp` process a harness starts. Allow rule = an entry in Claude Code's `permissions.allow` list in `~/.claude/settings.json`. Bin dir = the directory install copies the binary into.
+
+## Decision
+
+- `crosstalk install [claude|codex]`, `crosstalk uninstall [claude|codex]` and `crosstalk reinstall [claude|codex]` exist. With no harness name, the command finds each of `claude` and `codex` on the PATH and acts on each one found; with a name, it acts on that one.
+- Install copies the running binary (`os.Executable`, symlinks resolved) to a stable bin dir, default `~/.local/bin` (no admin rights), by writing a temporary file in that directory and renaming it over the target, so a running shim keeps its old file and is never killed or blocked. When the running binary already is the target, the copy is skipped. A binary from `go install` installs the same way.
+- The MCP server is registered by install, not by the plugin, with the command set to the absolute path of the installed binary: Claude through `claude mcp add --scope user crosstalk -- <path> mcp`; Codex as a `[mcp_servers.crosstalk]` table in `~/.codex/config.toml` with `default_tools_approval_mode = "approve"`. An existing entry keeps its approval mode, environment and tool sub-tables; only its command changes. The server key stays `crosstalk` (the Codex delivery namespace in `internal/harness/codex/appserver/methods.go:203` depends on it).
+- Install runs each harness's own plugin commands (`claude plugin install`, `codex plugin marketplace add` and `codex plugin add`), so the skill arrives in the same run. The plugin manifests carry the skill only: no `mcpServers` key, no `claude.mcp.json` or `codex.mcp.json`.
+- Install adds the Claude allow rule `mcp__crosstalk__*` and rewrites every allow, ask or deny rule that names the old `mcp__plugin_crosstalk_crosstalk__` prefix to the new one, so no restriction is lost.
+- Adding the bin dir to the PATH is optional and only serves a person typing `crosstalk send`; the harnesses no longer need it.
+- Each step is shown and confirmed on a terminal; `--yes` runs every required step without asking (the PATH step needs `--path` too); without a terminal and without `--yes`, install changes nothing and exits non-zero. Every changed config file is written atomically after a backup copy next to it.
+- Install ends with checks, each reported pass or fail: the plugin is installed at the binary's version and ships no server; exactly one `crosstalk` MCP server is registered per harness; `codex mcp list` succeeds (Codex's own parser) and no `[mcp_servers.crosstalk.tools.*]` table is left without its parent; the allow rule is present and no deny rule names the prefix; the registered command is the installed path and is executable; a live MCP handshake with the registered command lists the seven tools and reports the binary's version. Install prints that running sessions keep their old server until restarted.
+- Uninstall reverses each step, including deleting the binary (the earlier "uninstall leaves the binary" default is void). It leaves `~/.local/state/crosstalk` (journals) in place.
+- Harness-specific install code lives in the harness package behind an optional `harness.Installer` interface (as `NativeIngress` and `Supersession` are optional), per ADR 0008; the binary copy, PATH step, prompts and check runner live in `cmd/crosstalk`.
+
+## Rejected alternatives
+
+- **Keep the plugin-supplied server with a bare command (ADR 0013).** The PATH failure stays, and setup stays eight manual steps.
+- **`${HOME}/.local/bin/crosstalk` in the static plugin manifests.** Claude expands environment variables in plugin MCP config; Codex support is unknown, and any bin dir other than the default breaks.
+- **Ship the binary in the plugin repo.** About 16 MB per version in git history.
+- **README-first: the plugin README says "install this plugin, then run `crosstalk install`", and install does only settings and MCP.** Leaves the plugin and the MCP registration in two steps the user can do out of order (plugin 0.1.2 still carries a server, so a 0.1.2 plugin plus an install-registered server gives two shims). Kept as the fallback text in the plugin README and as open question Q1 of the plan.
+- **A TOML library for the Codex config.** Round-tripping drops comments and reorders a file Codex itself rewrites; a bounded line edit plus `codex mcp list` as the parser check is enough.
+
+## Consequences
+
+- Reverses two parts of ADR 0013: its rejection of `crosstalk install` and its plugin-supplied server. ADR 0013 is edited in place (AGENTS.md: all ADRs are provisional and edited in place).
+- Claude tool names change prefix from `mcp__plugin_crosstalk_crosstalk__` to `mcp__crosstalk__`. Allow rules, eval graders under `plugins/crosstalk/evals/` and any other repo or settings file naming the old prefix need the new one.
+- Moving the binary needs `crosstalk reinstall`.
+- `docs/setup.md` shrinks to: download, verify, `./crosstalk install`.
+- A plugin version without a server must ship before or with the install that registers one, or a user gets two shims; the install's "exactly one server" check catches it.
+
+## Trial record
+
+- Rests on: ADR 0008 (adapter seam), ADR 0013 (plugin tree), ADR 0015 (signed binary to install from).
+- Commits: none yet (plan only). Implementing commits carry `Provisional-ADR: 0016`.
+- Pinning tests: named per slice in `docs/plans/release-0.1.3.md` section (a).

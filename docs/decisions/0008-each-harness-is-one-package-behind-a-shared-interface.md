@@ -3,6 +3,7 @@
 - **Status:** Provisional
 - **Date:** 2026-11-03
 - **Deciders:** operator + Claude
+- **Note (2026-11-05):** [ADR 0016](0016-crosstalk-install-registers-mcp-at-the-installed-path.md) plans an optional `harness.Installer` interface for 0.1.3, so installation stops being outside the interface once it lands.
 - **Context source:** operator instruction during the first live run: adding a harness such as Gemini must not require rewriting the Claude or Codex support. ADR 0007 is reserved for Codex toolOutput delivery (Codex-authored).
 
 ## Context
