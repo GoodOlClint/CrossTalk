@@ -1,6 +1,6 @@
 # Change plan: CrossTalk 0.1.3 (crosstalk install, Linux, small fixes, Windows map)
 
-Status: draft for the brownfield gate, 2026-11-05, revised after the Codex critique (section 9: 4 findings, all fixed). No implementation until the operator approves. Evidence tags: VERIFIED-LIVE (run on this Mac today: Claude Code 2.1.318, codex-cli 0.166.0, Go 1.27.3), VERIFIED-SOURCE (read in this repo at 3122f22), VERIFIED-RUN (from the 2026-11-05 Linux run report), UNKNOWN.
+Status: draft for the brownfield gate, 2026-11-05, revised after the Codex critique (section 9: 4 findings, all fixed). No implementation until the operator approves. Evidence tags: VERIFIED-LIVE (run on this Mac today: Claude Code 2.1.318, codex-cli 0.166.0, Go 1.27.3), VERIFIED-SOURCE (read in this repo at 3122f22), VERIFIED-RUN (seen on an earlier Linux test VM run), UNKNOWN.
 
 Terms: shim = the `crosstalk mcp` process a harness starts for one MCP connection. Harness = the agent CLI (Claude Code, Codex). Adapter = a harness package behind `harness.Harness` (ADR 0008). Bin dir = the directory `crosstalk install` copies the binary into. Allow rule = an entry in `permissions.allow` of `~/.claude/settings.json`. Slice = one small commit with its own test. DoD = definition of done: what must be true, evidenced, for the slice to count. Fails-before / passes-after = the named test fails on the parent commit and passes on the slice's commit. S / M / L = under 1 hour / about half a day / more than half a day.
 
@@ -108,24 +108,24 @@ Builds: `linux/amd64` and `linux/arm64`. arm64 is in because it costs one `go bu
 | B1 | `build-linux` and `package-linux` in the release script | `scripts/release-build.sh`, `cmd/crosstalk/release_test.go` | `TestReleaseBuildLinux`: runs `scripts/release-build.sh build-linux $tmp` and `package-linux $tmp v<Version>`; both tarballs exist, each holds exactly `crosstalk`, mode 0755, `debug/elf` reads `EM_X86_64` and `EM_AARCH64`, each `.sha256` verifies with `shasum -a 256 -c`. Fails before (unknown subcommand) | Green on Linux and macOS CI; `shellcheck` clean |
 | B2 | Release job builds, packages and publishes Linux assets outside the signing path | `.github/workflows/release.yml`, ADR 0015 line 44, ADR 0017 | Static: `actionlint` clean; a grep check that `dist-linux` appears in no step that runs `codesign`, `notarytool`, `security` or `lipo`; publish `files=(...)` lists the four Linux files | Next rc tag run (operator yes needed) publishes 2 macOS + 4 Linux files; downloading the amd64 tarball on a Linux host and `shasum -c` prints OK |
 | B3 | Install on Linux | `cmd/crosstalk/install.go` (PATH files), tests already in A2 and A8 run on `ubuntu-latest` | A8 test asserts Linux writes `~/.profile` and `~/.bashrc`, macOS `~/.zprofile` and `~/.zshenv` | Green on both CI OSes |
-| B4 | setup.md Linux section | `docs/setup.md` | grep: section heading `Linux` exists and names `linux-amd64.tar.gz` (fails before) | Covers the report's mismatches: tarball and checksum (no `brew`, no Go), `~/.local/bin` on PATH via Debian `~/.profile`, Codex needs the full `codex-package-*` tarball (`codex-code-mode-host`, `app-server daemon start`), `model_reasoning_effort = "low"` in `config.toml` as the lowest the default model takes, the bubblewrap warning, and that any `-c` override starts an embedded Codex server (C3). F1 is stated as unmeasured until B5 |
-| B5 | Planned llm VM run (not executed by this plan) | Run sheet below; report to the coordinator archive (private) | Pass criteria below | Report with raw logs; setup.md Linux section corrected from it |
+| B4 | setup.md Linux section | `docs/setup.md` | grep: section heading `Linux` exists and names `linux-amd64.tar.gz` (fails before) | Covers the setup.md mismatches seen on Linux: tarball and checksum (no `brew`, no Go), `~/.local/bin` on PATH via Debian `~/.profile`, Codex needs the full `codex-package-*` tarball (`codex-code-mode-host`, `app-server daemon start`), `model_reasoning_effort = "low"` in `config.toml` as the lowest the default model takes, the bubblewrap warning, and that any `-c` override starts an embedded Codex server (C3). F1 is stated as unmeasured until B5 |
+| B5 | Planned Linux test VM run (not executed by this plan) | Run sheet below; run report kept outside the repo | Pass criteria below | Report with raw logs; setup.md Linux section corrected from it |
 
 ### 4.1 B5 run sheet (planned, not executed)
 
-Preconditions: 0.1.3 implemented through A9 and B4; an rc tag published (operator yes), so the run tests the real asset. Fallback before a tag: cross-build on the Mac as on 2026-11-05.
+Preconditions: 0.1.3 implemented through A9 and B4; an rc tag published (operator yes), so the run tests the real asset. Fallback before a tag: cross-build on the Mac.
 
-1. Tell homelab coordinator t1p before starting, with the planned window.
-2. Everything within the limits file in the coordinator archive (one throwaway user, home only, no package installs, memory floor, ports, logouts before removal); this plan copies none of its detail.
+1. Tell the homelab coordinator before starting, with the planned window.
+2. The run follows operator-held limits for the Linux test VM.
 3. As the throwaway user: download the `linux-amd64` tarball and `.sha256`, `shasum -a 256 -c`, extract, `./crosstalk install --yes --path`. Record K1-K7.
 4. Operator does the Claude and Codex logins.
 5. Codex config: `model_reasoning_effort = "low"` in `~/.codex/config.toml`. Start plain `codex` with no `-c` and no `--remote`.
 6. Measure F1: does plain `codex` attach to the managed daemon (`list_agents` row `reachable: true`, non-empty `cwd`)? Record either way. If not, start `codex app-server daemon start` and retry once, recording which made it reachable.
 7. Repeat run tests (a) discovery, (c) Claude to Codex both ways, (e) `crosstalk send`. F3 (Codex shim outliving its TUI) is observed and logged, not chased.
 8. `crosstalk uninstall --yes`; record that binary, MCP entries, allow rule and PATH lines are gone and the state dir remains.
-9. Logouts, remove the user, prove removal as in the 2026-11-05 report. Tell t1p it finished.
+9. Logouts, remove the user, prove the removal. Tell the homelab coordinator it finished.
 
-Pass: K1-K7 pass on install (K7 may warn), (a) (c) (e) pass with plain `codex` or the daemon outcome is recorded as F1 data, uninstall leaves nothing but the state dir, VM services unchanged.
+Pass: K1-K7 pass on install (K7 may warn), (a) (c) (e) pass with plain `codex` or the daemon outcome is recorded as F1 data, uninstall leaves nothing but the state dir.
 
 Size: B1 S, B2 S, B3 S, B4 S, B5 M (operator time for logins). About 1.5 days.
 
@@ -197,8 +197,8 @@ Each has options and a recommendation. Settled by rulings and not asked again: i
 - **Q7. Linux arm64.** (a) Build and ship it unexecuted, setup.md says so (recommended: one `go build`); (b) amd64 only until an arm64 host can run it.
 - **Q8. Windows.** (a) Separate phase after 0.1.3 with its own gate, starting with a 1-2 hour probe on the Windows 11 VM (recommended); (b) fold only W1 and W2 plus a Windows compile CI step into 0.1.3 (S); (c) fold the whole map into 0.1.3. Also: which Windows 11 VM, and who does its logins.
 - **Q9. Claude MCP scope.** (a) `--scope user` (recommended: one entry for every project, matching the old plugin); (b) let `--scope` be chosen. A project-scope `crosstalk` entry would shadow it; K2 warns.
-- **Q11. Marketplace pin.** The marketplaces serve `main`, so a 0.1.2 user who updates the plugin after 0.1.3 merges gets a skill-only plugin and no server until they install the 0.1.3 binary and run `crosstalk install`. (a) One PR at the release boundary plus release notes and README (recommended now; no new mechanism); (b) also pin the marketplace plugin source to a release tag, if both marketplace formats support a git ref (Claude's does per its docs; Codex UNKNOWN), so plugin updates move only at a release; (c) keep a plugin-supplied server one more release for old binaries (two shims for anyone who also runs install: rejected by ADR 0016).
 - **Q10. B5 timing.** (a) After an rc tag, on the real Linux asset (recommended); (b) before any tag, on a Mac cross-build.
+- **Q11. Marketplace pin.** The marketplaces serve `main`, so a 0.1.2 user who updates the plugin after 0.1.3 merges gets a skill-only plugin and no server until they install the 0.1.3 binary and run `crosstalk install`. (a) One PR at the release boundary plus release notes and README (recommended now; no new mechanism); (b) also pin the marketplace plugin source to a release tag, if both marketplace formats support a git ref (Claude's does per its docs; Codex UNKNOWN), so plugin updates move only at a release; (c) keep a plugin-supplied server one more release for old binaries (two shims for anyone who also runs install: rejected by ADR 0016).
 
 ## 9. Review disposition
 

@@ -3,11 +3,11 @@
 - **Status:** Provisional (operator 2026-11-05)
 - **Date:** 2026-11-05
 - **Deciders:** operator (ruling 2026-11-05: Linux in 0.1.3) + Claude (Opus 5.5)
-- **Context source:** `docs/plans/release-0.1.3.md` section (b); the 2026-11-05 Linux run on a live VM (all seven tests pass; setup.md step 1 had no Linux asset, so the binary was cross-built by hand); ADR 0015
+- **Context source:** `docs/plans/release-0.1.3.md` section (b); a Linux test VM run (all seven tests pass; setup.md step 1 had no Linux asset, so the binary was cross-built by hand); ADR 0015
 
 ## Context
 
-The code builds and tests on Linux (CI runs `ubuntu-latest`), and a live Linux run passed, but a Linux user has no release asset and no Go on the target machine. The release job (ADR 0015) runs on `macos-latest` and signs and notarizes the one macOS binary. Linux binaries need no signature, and a Linux file must never reach `codesign` or `notarytool`.
+The code builds and tests on Linux (CI runs `ubuntu-latest`), and a Linux test VM run passed, but a Linux user has no release asset and no Go on the target machine. The release job (ADR 0015) runs on `macos-latest` and signs and notarizes the one macOS binary. Linux binaries need no signature, and a Linux file must never reach `codesign` or `notarytool`.
 
 ## Decision
 

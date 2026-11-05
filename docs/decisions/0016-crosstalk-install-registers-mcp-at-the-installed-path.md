@@ -3,7 +3,7 @@
 - **Status:** Provisional (operator 2026-11-05)
 - **Date:** 2026-11-05
 - **Deciders:** operator (rulings 2026-11-05) + Claude (Opus 5.5)
-- **Context source:** `docs/plans/release-0.1.3.md` section (a); ADR 0013 (rejected `crosstalk install`, plugin-supplied server); `docs/setup.md` ENOENT row; the 2026-11-04 clean-account run and the 2026-11-05 Linux run
+- **Context source:** `docs/plans/release-0.1.3.md` section (a); ADR 0013 (rejected `crosstalk install`, plugin-supplied server); `docs/setup.md` ENOENT row; the 2026-11-04 clean-account run and a Linux test VM run
 
 ## Context
 
