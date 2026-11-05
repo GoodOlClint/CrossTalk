@@ -232,7 +232,7 @@ Asked in this terminal, one batch of four plus one follow-up for (a)-(e); for (f
 3. Environment secrets `RELEASE_APP_ID` (the App's ID) and `RELEASE_APP_PRIVATE_KEY` (a `.pem` from the App's settings). Not repository secrets, so a PR workflow cannot read them.
 4. Settings, General, "Allow auto-merge" on in both repos.
 5. CrossTalk ruleset on `main`: require status checks `test (ubuntu-latest)` and `test (macos-latest)` (not `govulncheck`, section 7); block force-push and deletion; bypass list: repository admin (the operator), so a hand merge still works. Require a pull request only if you want your own pushes to go through PRs too.
-6. Tap ruleset on `main`: require `test-bot (macos-26)` and `test-bot (ubuntu-latest)`; block force-push and deletion; bypass: repository admin.
+6. Tap ruleset on `main`: require `test-bot (macos-26)` and `test-bot (ubuntu-latest, ghcr.io/homebrew/brew:main, --privileged)` (the full check-run name the tap job produces); block force-push and deletion; bypass: repository admin. Done 2026-11-05; the CrossTalk ruleset also requires a pull request (0 approvals, threads resolved), so every change to main, bot or human, goes through a PR.
 7. Signing cert renewal before 2027-02-01 (existing thread; not 0.1.4 work).
 8. Buy `getcrosstalk.dev`.
 9. DNS at the registrar: apex `A` records `185.199.108.153`, `185.199.109.153`, `185.199.110.153`, `185.199.111.153`; apex `AAAA` records `2606:50c0:8000::153`, `2606:50c0:8001::153`, `2606:50c0:8002::153`, `2606:50c0:8003::153`; `www` `CNAME` `goodolclint.github.io`. No wildcard record (a wildcard lets someone else's Pages site claim a subdomain).
