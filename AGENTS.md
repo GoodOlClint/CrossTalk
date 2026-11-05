@@ -38,7 +38,7 @@ Every ADR in this repo is provisional (operator ruling, 2026-11-04). An ADR may 
 
 v1 implemented on main, with the agent plugins and the skill (ADR 0013; `docs/setup.md`); a first live clean-account run was done on 2026-11-04 with gaps (ADR 0013 "Not yet run live"; `docs/plans/agent-plugins-clean-run.md`). Wave 2 adds the per-peer nudge, `CROSSTALK_CODEX_ENDPOINTS`, the notice on pulled messages and `crosstalk send`. `docs/design.md` is still a draft under operator review, and its §11 tests gate "done" for v1 (test 17, the SDK conformance gate, is open). CI (`.github/workflows/ci.yml`: build, `go test -race`, vet and a gofmt check on Linux and macOS) runs on push to main and on pull requests.
 
-The repo is private. It goes public only after CI is in place (operator ruling, 2026-11-04), and after username paths and the stale README are fixed at HEAD. The operator flips the visibility. Commit author email stays as is; no history rewrite.
+The repo is public (the operator flipped it on 2026-11-04) at https://github.com/GoodOlClint/CrossTalk; a stranger installs with no credentials (`docs/setup.md`). Commit author email stays as is; no history rewrite.
 
 ## Build / run / test
 

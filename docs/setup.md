@@ -2,10 +2,10 @@
 
 CrossTalk lets Claude Code and Codex sessions on this Mac message each other by name. You need macOS, Homebrew, and Claude Code and/or Codex. A first clean-account run (2026-11-04) passed the basic plumbing and the Codex authority case; both cross-harness answer round trips passed live with the plugin only, and Codex started outside a shell passed on result. A Claude peer read a file on a soft ask on that run. In a live replica at c4025a9 (typed and bound Claude session, real Codex asker, harmless question answered first), Claude did not read the file before its user approved in 3 of 3 Haiku runs and 1 of 1 Sonnet run, where the older text read in 1 of 1; the sample is small and the rule is advice to the model, not enforcement, so a session in auto mode could still read on a peer's word. An explicit `prompt` approval entry is indirect only ([open facts](decisions/0013-agent-plugins-and-skill-packaging.md#not-yet-run-live)).
 
-1. **Install the binary.** While the repo is private, set `GOPRIVATE=github.com/GoodOlClint/*` and run `gh auth setup-git` once so `go` can clone over https; drop both once public. Admin account:
+1. **Install the binary.** The repo is public, so `go` needs no `GOPRIVATE`, no `gh auth` and no GitHub login. The repo has no tags, so `@latest` resolves to a pseudo-version of the newest commit on main (checked 2026-11-04 through the public proxy: `v0.0.0-20261105023416-bb3d521b8a6c`); `crosstalk version` prints the version the code carries (`0.1.2`). Admin account:
    ```sh
    brew install go
-   GOPRIVATE=github.com/GoodOlClint/* GOBIN="$(brew --prefix)/bin" go install github.com/GoodOlClint/crosstalk/cmd/crosstalk@latest
+   GOBIN="$(brew --prefix)/bin" go install github.com/GoodOlClint/crosstalk/cmd/crosstalk@latest
    crosstalk version
    ```
    A binary older than 0.1.2 has no `version` subcommand, so do not use it to check an existing install; compare the installed plugin version instead.
@@ -16,7 +16,7 @@ CrossTalk lets Claude Code and Codex sessions on this Mac message each other by 
    claude plugin install crosstalk --marketplace GoodOlClint/CrossTalk
    codex plugin marketplace add GoodOlClint/CrossTalk && codex plugin add crosstalk@crosstalk
    ```
-   The Claude plugin install clones the marketplace over SSH (`git@github.com`), not HTTPS, so the account needs a GitHub SSH key while the repo is private.
+   The Claude plugin install tries SSH (`git@github.com`) first and falls back to HTTPS on its own, so no SSH key or GitHub credential is needed (checked 2026-11-04 in a scratch HOME with no key: "SSH clone failed, retrying with HTTPS"). Codex clones over HTTPS directly. If you want to skip the failed SSH attempt, add the marketplace by URL first: `claude plugin marketplace add https://github.com/GoodOlClint/CrossTalk.git`, then `claude plugin install crosstalk@crosstalk` (the URL form was not run).
 4. **Claude only: allow the tools.** A Claude plugin cannot pre-allow its tools. Add `"mcp__plugin_crosstalk_crosstalk__*"` to `permissions.allow` in `~/.claude/settings.json`.
 5. **Restart** every running Claude and Codex session. A running session keeps the old server.
 6. **Try it.** Open one Claude and one Codex session (or two of either). In one, say: "List the other agents, then ask the session named `<its name>` what directory it is in." Name a target from the list. The answer arrives as a new message. `ask` needs the target to have made its first CrossTalk call; before that, use `send_message`. A Claude session nobody has typed into yet cannot answer: type one line in it first. An `ask` has one reply: if the peer refuses, that spends it, and after its user approves, a second `reply` is rejected and the answer goes by `send_message`. A new directory shows a folder-trust dialog; accept it. If a peer asks you before answering anything else, that is the notice working: allow it or answer for it.
