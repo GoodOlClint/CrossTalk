@@ -12,7 +12,7 @@ Today a user downloads a release asset, checks its `.sha256` and runs `./crossta
 ## Decision
 
 - Distribute through a formula, `Formula/crosstalk.rb` in `GoodOlClint/homebrew-tap`, that downloads the release assets (`macos-universal.zip` on macOS, `linux-amd64` or `linux-arm64` `.tar.gz` on Linux) with their published SHA-256 sums and runs `bin.install "crosstalk"`. No bottles, no `post_install`.
-- `scripts/release-build.sh formula` renders the formula from the assets' `.sha256` files. A `homebrew` job in `release.yml`, after the `release` job and after the `marketplace` job has merged the new plugin ref (ADR 0019), only on a final tag (`is-final`), mints a 1-hour GitHub App token for the tap, opens a PR with the new formula and enables auto-merge; the tap's `brew test-bot` checks gate the merge.
+- `scripts/release-build.sh formula` renders the formula from the assets' `.sha256` files. A `homebrew` job in `release.yml`, after the `release` job and after the `marketplace` job has merged the new plugin ref (ADR 0019), only on a final tag (`is-final`), mints a 1-hour GitHub App token for the tap and hands the new formula to `scripts/release-build.sh land-pr`, which opens or reuses the PR, enables auto-merge and waits until it is merged, failing the run otherwise; the tap's `brew test-bot` checks gate the merge. A re-run after the formula is already on the tap's `main` is a no-op.
 - The job runs in its own environment that holds only the App's secrets, with no required reviewer: it runs only after the operator approved the `release` job, and never sees the signing secrets.
 - `crosstalk install` detects a Homebrew keg binary (resolved path under `<prefix>/Cellar/crosstalk/`, with `<prefix>/bin/crosstalk` resolving to the same file) and uses `<prefix>/bin/crosstalk` as the installed binary: no copy, and that path is what both harnesses register. `--bin-dir` overrides detection; an unlinked keg falls back to the copy.
 - `uninstall --purge` keeps the state directory while any harness still has CrossTalk set up, whichever binary path it names, because a Homebrew and a `~/.local/bin` install can coexist.
@@ -38,5 +38,5 @@ Today a user downloads a release asset, checks its `.sha256` and runs `./crossta
 
 - Rests on: ADR 0015, 0016, 0017; ADR 0019 (shared App and auto-merge pattern).
 - Commits: none yet. Implementing commits carry `Provisional-ADR: 0018`.
-- Pinning tests (planned): `TestIsFinal`, `TestFormulaRender`, `TestReleaseWorkflowPostReleaseJobs`, `TestInstallHomebrewBinary`, `TestInstallHomebrewUnlinked`, `TestInstallHomebrewBinDirOverride`, `TestUninstallHomebrewKeepsBinary`, `TestUninstallPurgeKeepsStateForOtherBinary`.
+- Pinning tests (planned): `TestIsFinal`, `TestFormulaRender`, `TestLandPR`, `TestReleaseWorkflowPostReleaseJobs`, `TestInstallHomebrewBinary`, `TestInstallHomebrewUnlinked`, `TestInstallHomebrewBinDirOverride`, `TestUninstallHomebrewKeepsBinary`, `TestUninstallPurgeKeepsStateForOtherBinary`.
 - Not yet run live: signature and quarantine of the keg binary on this Mac (slice H6); the first final-tag tap PR.
