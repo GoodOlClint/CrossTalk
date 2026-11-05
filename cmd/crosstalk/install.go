@@ -225,21 +225,38 @@ func runInstall(mode string, args []string, in io.Reader, tty bool, stdout, stde
 	return 0
 }
 
-// installStillRegistered names the found harnesses outside targets whose
-// registration still runs env.Bin.
-func installStillRegistered(ctx context.Context, all, targets []installTarget, env harness.InstallEnv) []string {
+// installStillRegistered names the harnesses outside targets whose config
+// still runs env.Bin, whether or not their CLI is on PATH. An error means a
+// config could not be read, so the binary and state must stay.
+func installStillRegistered(all, targets []installTarget, env harness.InstallEnv) ([]string, error) {
 	var out []string
+	var errs []error
 	for _, t := range all {
-		if slices.ContainsFunc(targets, func(x installTarget) bool { return x.name == t.name }) || !t.in.Found() {
+		if slices.ContainsFunc(targets, func(x installTarget) bool { return x.name == t.name }) {
 			continue
 		}
-		for _, r := range t.in.Checks(ctx, env) {
-			if r.ID == "K5" && r.OK {
-				out = append(out, t.name)
-			}
+		ok, err := t.in.Registered(env)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", t.name, err))
+		}
+		if ok {
+			out = append(out, t.name)
 		}
 	}
-	return out
+	return out, errors.Join(errs...)
+}
+
+// installKeep reports why the binary and state stay, or "" when nothing
+// else runs the binary.
+func installKeep(all, targets []installTarget, env harness.InstallEnv) string {
+	still, err := installStillRegistered(all, targets, env)
+	switch {
+	case err != nil:
+		return "cannot tell whether another harness still runs it: " + err.Error()
+	case len(still) > 0:
+		return strings.Join(still, ", ") + " still runs it"
+	}
+	return ""
 }
 
 // installRemoveSteps delete the binary and, with --purge, the state dir,
@@ -249,8 +266,8 @@ func installRemoveSteps(o installOpts, all, targets []installTarget, env harness
 		Title:  "binary",
 		Change: "delete " + env.Bin + " and the PATH lines install marked, unless another harness still runs it",
 		Apply: func(ctx context.Context) error {
-			if still := installStillRegistered(ctx, all, targets, env); len(still) > 0 {
-				fmt.Fprintf(w, "    kept %s: %s still runs it\n", env.Bin, strings.Join(still, ", "))
+			if why := installKeep(all, targets, env); why != "" {
+				fmt.Fprintf(w, "    kept %s: %s\n", env.Bin, why)
 				return nil
 			}
 			if err := installRemovePath(installPathFiles(runtime.GOOS, env.Home), installPathLine(filepath.Dir(env.Bin))); err != nil {
@@ -269,8 +286,8 @@ func installRemoveSteps(o installOpts, all, targets []installTarget, env harness
 		Title:  "state",
 		Change: "delete " + stateDir + " (journals, tokens, descriptors) unless another harness is still installed or a shim is running",
 		Apply: func(ctx context.Context) error {
-			if still := installStillRegistered(ctx, all, targets, env); len(still) > 0 {
-				fmt.Fprintf(w, "    kept %s: %s still installed\n", stateDir, strings.Join(still, ", "))
+			if why := installKeep(all, targets, env); why != "" {
+				fmt.Fprintf(w, "    kept %s: %s\n", stateDir, why)
 				return nil
 			}
 			held, err := registry.New(stateDir).HeldAgents()

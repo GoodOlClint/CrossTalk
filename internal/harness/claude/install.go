@@ -477,6 +477,11 @@ func shadowing(home string) []string {
 	return out
 }
 
+func (h *Harness) Registered(env harness.InstallEnv) (bool, error) {
+	e, err := userEntry(env.Home)
+	return e != nil && e.Command == env.Bin, err
+}
+
 func (h *Harness) Checks(ctx context.Context, env harness.InstallEnv) []harness.CheckResult {
 	k1 := harness.CheckResult{ID: "K1"}
 	k2 := harness.CheckResult{ID: "K2"}

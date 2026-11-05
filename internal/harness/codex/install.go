@@ -377,6 +377,21 @@ func (h *Harness) UninstallSteps(env harness.InstallEnv) []harness.Step {
 	}
 }
 
+func (h *Harness) Registered(env harness.InstallEnv) (bool, error) {
+	b, err := os.ReadFile(configPath(env.Home))
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if otherForm(strings.Split(string(b), "\n")) {
+		return false, fmt.Errorf("%s declares the crosstalk server in a form install does not read", configPath(env.Home))
+	}
+	e, ok := readEntry(string(b))
+	return ok && e.command == env.Bin, nil
+}
+
 // pluginCache holds one directory per installed version of the plugin.
 func pluginCache(home string) string {
 	return filepath.Join(codexHome(home), "plugins", "cache", "crosstalk", "crosstalk")

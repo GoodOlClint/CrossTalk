@@ -156,3 +156,38 @@ func TestScopedUninstallKeepsSharedBinary(t *testing.T) {
 		t.Errorf("binary still there after the last uninstall: %v", err)
 	}
 }
+
+func TestUninstallKeepsWhenOwnershipUncertain(t *testing.T) {
+	home := installSandbox(t, "claude", "codex")
+	_, config, state := installUserFiles(t, home)
+	bin := filepath.Join(home, "bin")
+	if code, out := installRunCmd(t, "install", "--yes", "--bin-dir", bin); code != 0 {
+		t.Fatalf("install: %d\n%s", code, out)
+	}
+	path := os.Getenv("PATH")
+	os.Remove(filepath.Join(path, "codex"))
+	if code, out := installRunCmd(t, "uninstall", "--yes", "--purge", "--bin-dir", bin); code != 0 {
+		t.Fatalf("uninstall without codex on PATH: %d\n%s", code, out)
+	}
+	if _, err := os.Stat(filepath.Join(bin, "crosstalk")); err != nil {
+		t.Errorf("binary deleted while codex config still runs it: %v", err)
+	}
+	if _, err := os.Stat(state); err != nil {
+		t.Errorf("state purged while codex is still set up: %v", err)
+	}
+
+	if code, out := installRunCmd(t, "install", "claude", "--yes", "--bin-dir", bin); code != 0 {
+		t.Fatalf("reinstall claude: %d\n%s", code, out)
+	}
+	os.Chmod(config, 0)
+	defer os.Chmod(config, 0o600)
+	if code, out := installRunCmd(t, "uninstall", "--yes", "--purge", "--bin-dir", bin); code != 0 {
+		t.Fatalf("uninstall with an unreadable codex config: %d\n%s", code, out)
+	}
+	if _, err := os.Stat(filepath.Join(bin, "crosstalk")); err != nil {
+		t.Errorf("binary deleted with an unreadable codex config: %v", err)
+	}
+	if _, err := os.Stat(state); err != nil {
+		t.Errorf("state purged with an unreadable codex config: %v", err)
+	}
+}

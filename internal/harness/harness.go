@@ -170,6 +170,10 @@ type Installer interface {
 	InstallSteps(env InstallEnv) []Step
 	UninstallSteps(env InstallEnv) []Step
 	Checks(ctx context.Context, env InstallEnv) []CheckResult
+	// Registered reports, from the harness's config files alone, whether its
+	// CrossTalk server runs env.Bin; it works without the harness CLI. An
+	// error means it cannot tell, and uninstall then keeps the binary.
+	Registered(env InstallEnv) (bool, error)
 }
 
 type InstallEnv struct {
