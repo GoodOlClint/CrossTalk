@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"flag"
@@ -144,6 +145,7 @@ func runInstall(mode string, args []string, in io.Reader, tty bool, stdout, stde
 		Run:          installRun,
 		Handshake:    installHandshake,
 		SkipRulePort: o.noPort,
+		Marketplace:  cmp.Or(os.Getenv("CROSSTALK_MARKETPLACE"), "GoodOlClint/CrossTalk"),
 	}
 	ctx := context.Background()
 	if o.check {

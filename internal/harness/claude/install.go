@@ -232,9 +232,9 @@ func installedPlugin(ctx context.Context, env harness.InstallEnv) (*pluginEntry,
 func pluginStep(env harness.InstallEnv) harness.Step {
 	return harness.Step{
 		Title:  "Claude plugin",
-		Change: "claude plugin marketplace add GoodOlClint/CrossTalk, then claude plugin install " + pluginID + " (marketplace update and plugin update when it is installed)",
+		Change: "claude plugin marketplace add " + env.Marketplace + ", then claude plugin install " + pluginID + " (marketplace update and plugin update when it is installed)",
 		Apply: func(ctx context.Context) error {
-			if _, err := env.Run(ctx, "claude", "plugin", "marketplace", "add", "GoodOlClint/CrossTalk"); err != nil {
+			if _, err := env.Run(ctx, "claude", "plugin", "marketplace", "add", env.Marketplace); err != nil {
 				return err
 			}
 			p, err := installedPlugin(ctx, env)

@@ -219,3 +219,20 @@ func TestInstallBinarySameFileSkips(t *testing.T) {
 		}
 	}
 }
+
+func TestInstallMarketplaceOverride(t *testing.T) {
+	home := installSandbox(t, "claude", "codex")
+	t.Setenv("CROSSTALK_MARKETPLACE", "/scratch/mkt")
+	if code, out := installRunCmd(t, "install", "--yes", "--bin-dir", filepath.Join(home, "bin")); code != 0 {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	b, _ := os.ReadFile(filepath.Join(home, "fake.log"))
+	for _, c := range []string{"claude plugin marketplace add /scratch/mkt\n", "codex plugin marketplace add /scratch/mkt\n"} {
+		if !strings.Contains(string(b), c) {
+			t.Errorf("not run: %s", c)
+		}
+	}
+	if strings.Contains(string(b), "GoodOlClint/CrossTalk") {
+		t.Errorf("default marketplace used:\n%s", b)
+	}
+}

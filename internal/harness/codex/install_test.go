@@ -54,7 +54,7 @@ func codexEnv(t *testing.T, fixture string) (harness.InstallEnv, *installRecorde
 			t.Fatal(err)
 		}
 	}
-	return harness.InstallEnv{Bin: "/opt/x/crosstalk", Version: "9.9.9", Home: home, Run: r.run}, r
+	return harness.InstallEnv{Bin: "/opt/x/crosstalk", Version: "9.9.9", Home: home, Run: r.run, Marketplace: "GoodOlClint/CrossTalk"}, r
 }
 
 func applySteps(steps []harness.Step) error {

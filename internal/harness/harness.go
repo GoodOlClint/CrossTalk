@@ -182,6 +182,9 @@ type InstallEnv struct {
 	// SkipRulePort lets install continue past old-prefix rules it cannot
 	// edit; the checks then warn about each.
 	SkipRulePort bool
+	// Marketplace is what each harness's `plugin marketplace add` is given:
+	// owner/repo or a local directory holding a marketplace named crosstalk.
+	Marketplace string
 }
 
 type Step struct {

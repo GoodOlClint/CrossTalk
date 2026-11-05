@@ -280,10 +280,10 @@ func writeVerified(ctx context.Context, env harness.InstallEnv, cfg string, chec
 func pluginStep(env harness.InstallEnv) harness.Step {
 	return harness.Step{
 		Title:  "Codex plugin",
-		Change: "codex plugin marketplace add GoodOlClint/CrossTalk, codex plugin marketplace upgrade crosstalk, codex plugin add " + pluginID,
+		Change: "codex plugin marketplace add " + env.Marketplace + ", codex plugin marketplace upgrade crosstalk, codex plugin add " + pluginID,
 		Apply: func(ctx context.Context) error {
 			for _, args := range [][]string{
-				{"plugin", "marketplace", "add", "GoodOlClint/CrossTalk"},
+				{"plugin", "marketplace", "add", env.Marketplace},
 				{"plugin", "marketplace", "upgrade", "crosstalk"},
 				{"plugin", "add", pluginID},
 			} {

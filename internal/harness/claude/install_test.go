@@ -70,7 +70,7 @@ func installEnv(t *testing.T, r *recorder) harness.InstallEnv {
 	old := managedSettingsPath
 	managedSettingsPath = filepath.Join(t.TempDir(), "managed-settings.json")
 	t.Cleanup(func() { managedSettingsPath = old })
-	return harness.InstallEnv{Bin: "/opt/x/crosstalk", Version: "9.9.9", Home: home, Run: r.run}
+	return harness.InstallEnv{Bin: "/opt/x/crosstalk", Version: "9.9.9", Home: home, Run: r.run, Marketplace: "GoodOlClint/CrossTalk"}
 }
 
 // applyAll applies steps in order and stops at the first error, as install does.
