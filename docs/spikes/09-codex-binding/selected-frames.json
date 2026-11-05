@@ -25,7 +25,7 @@
       "id": "creator-1",
       "result": {
         "userAgent": "codex-tui/0.166.0 (Mac OS 27.2.0; arm64) Apple_Terminal/488.9 (crosstalk_binding_probe_creator; 0.1)",
-        "codexHome": "/Users/goodolclint/.codex",
+        "codexHome": "/Users/USER/.codex",
         "platformFamily": "unix",
         "platformOs": "macos"
       }
@@ -57,7 +57,7 @@
       "id": "caller-1",
       "result": {
         "userAgent": "codex-tui/0.166.0 (Mac OS 27.2.0; arm64) Apple_Terminal/488.9 (crosstalk_binding_probe_caller; 0.1)",
-        "codexHome": "/Users/goodolclint/.codex",
+        "codexHome": "/Users/USER/.codex",
         "platformFamily": "unix",
         "platformOs": "macos"
       }
@@ -89,7 +89,7 @@
       "id": "observer-1",
       "result": {
         "userAgent": "codex-tui/0.166.0 (Mac OS 27.2.0; arm64) Apple_Terminal/488.9 (crosstalk_binding_probe_observer; 0.1)",
-        "codexHome": "/Users/goodolclint/.codex",
+        "codexHome": "/Users/USER/.codex",
         "platformFamily": "unix",
         "platformOs": "macos"
       }
@@ -121,7 +121,7 @@
       "id": "nonexperimental-1",
       "result": {
         "userAgent": "codex-tui/0.166.0 (Mac OS 27.2.0; arm64) Apple_Terminal/488.9 (crosstalk_binding_probe_nonexperimental; 0.1)",
-        "codexHome": "/Users/goodolclint/.codex",
+        "codexHome": "/Users/USER/.codex",
         "platformFamily": "unix",
         "platformOs": "macos"
       }

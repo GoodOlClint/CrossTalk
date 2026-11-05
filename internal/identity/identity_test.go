@@ -53,7 +53,7 @@ func (s takenSet) taken(n string) bool { return s[n] }
 // Test 29 (CQ8).
 func TestFallbackSpike9FourThreadsOneCwd(t *testing.T) {
 	held := takenSet{}
-	cwd := "/Users/goodolclint/Source/crosstalk"
+	cwd := "/Users/x/Source/crosstalk"
 	for _, ref := range spike9Threads {
 		id := AgentID("codex", ref)
 		name := ChooseName("", "codex", cwd, id, held.taken)

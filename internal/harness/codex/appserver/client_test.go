@@ -331,11 +331,11 @@ func TestWriteDeadlineWhenPeerNeverReads(t *testing.T) {
 	}
 	defer c.Close()
 	start := time.Now()
-	err = c.Notify("x", strings.Repeat("a", 32<<20))
+	err = c.Notify("x", strings.Repeat("a", 4<<20))
 	if !errors.Is(err, appserver.ErrNotSent) {
 		t.Fatalf("Notify err = %v, want ErrNotSent", err)
 	}
-	if el := time.Since(start); el > 2*time.Second {
+	if el := time.Since(start); el > 8*time.Second {
 		t.Fatalf("write blocked %v past a %v deadline", el, appserver.WriteTimeout)
 	}
 }

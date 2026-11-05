@@ -2,7 +2,7 @@
 
 **The proposed targeted call works on Codex 0.166.0. A second app-server client can call a thread's MCP tool while that thread is idle or active, without `experimentalApi`. The receiving tool request already contains `_meta.threadId`; a normal model-issued call additionally contains `_meta.sessionId`. Prefer that metadata to nonce-based inference. Elicitation did not reach an unrelated observer connection.**
 
-MCP means Model Context Protocol. A thread is a Codex conversation. A nonce is a unique test string used to match a request to its receipt. Process identifiers distinguish operating-system processes. The control endpoint was `/Users/goodolclint/.codex/app-server-control/app-server-control.sock`, served by process 83168. Four independent WebSocket clients were used: `creator`, `caller`, `observer`, and `nonexperimental`. Only the last initialized with `experimentalApi:false`.
+MCP means Model Context Protocol. A thread is a Codex conversation. A nonce is a unique test string used to match a request to its receipt. Process identifiers distinguish operating-system processes. The control endpoint was `/Users/USER/.codex/app-server-control/app-server-control.sock`, served by process 83168. Four independent WebSocket clients were used: `creator`, `caller`, `observer`, and `nonexperimental`. Only the last initialized with `experimentalApi:false`.
 
 ## Results
 

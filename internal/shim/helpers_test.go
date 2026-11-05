@@ -29,7 +29,7 @@ var fakeStart = time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC)
 func fakePID(pid int) bool { return pid >= 4000 && pid < 5000 }
 
 func startTime(pid int) (time.Time, error) {
-	if fakePID(pid) {
+	if fakePID(pid) && pid != os.Getpid() {
 		return fakeStart, nil
 	}
 	return procstart.StartTime(pid)
