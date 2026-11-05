@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -130,5 +131,36 @@ func TestReleaseWorkflowLinuxOutsideSigning(t *testing.T) {
 				t.Errorf("publish files=(...) lacks %s", want)
 			}
 		}
+	}
+}
+
+func TestCheckIdentity(t *testing.T) {
+	const want = "Developer ID Application: Test (ABCDE12345)"
+	line := func(n int, name string) string {
+		return "  " + strconv.Itoa(n) + ") 0123456789ABCDEF0123456789ABCDEF01234567 \"" + name + "\"\n"
+	}
+	cases := []struct {
+		name   string
+		output string
+		ok     bool
+	}{
+		{"none", "     0 valid identities found\n", false},
+		{"one", line(1, want) + "     1 valid identities found\n", true},
+		{"two", line(1, want) + line(2, want) + "     2 valid identities found\n", false},
+		{"near miss", line(1, want+" copy") + "     1 valid identities found\n", false},
+		{"one among others", line(1, "Other") + line(2, want) + "     2 valid identities found\n", true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			bin := t.TempDir()
+			fake := "#!/bin/sh\ncat <<'EOF'\n" + c.output + "EOF\n"
+			if err := os.WriteFile(filepath.Join(bin, "security"), []byte(fake), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			out, err := releaseScript(t, []string{"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"), "APPLE_CODESIGN_IDENTITY=" + want}, "check-identity", "unused.keychain-db")
+			if (err == nil) != c.ok {
+				t.Errorf("err = %v, want ok=%v\n%s", err, c.ok, out)
+			}
+		})
 	}
 }

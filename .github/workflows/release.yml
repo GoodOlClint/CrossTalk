@@ -44,7 +44,7 @@ jobs:
           APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
           APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
         run: |
-          set -eu
+          set -euo pipefail
           umask 077
           mkdir "$RUNNER_TEMP/release-secrets"
           keychain="$RUNNER_TEMP/release-signing.keychain-db"
@@ -63,7 +63,8 @@ jobs:
         env:
           APPLE_CODESIGN_IDENTITY: ${{ secrets.APPLE_CODESIGN_IDENTITY }}
         run: |
-          set -eu
+          set -euo pipefail
+          scripts/release-build.sh check-identity "$RUNNER_TEMP/release-signing.keychain-db"
           codesign --force --timestamp --options runtime \
             --keychain "$RUNNER_TEMP/release-signing.keychain-db" \
             --sign "$APPLE_CODESIGN_IDENTITY" "$RUNNER_TEMP/dist/crosstalk"

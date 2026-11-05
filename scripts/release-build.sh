@@ -32,6 +32,14 @@ check-tag)
 		;;
 	esac
 	;;
+check-identity)
+	keychain="${2:?usage: release-build.sh check-identity KEYCHAIN}"
+	matches="$(security find-identity -v -p codesigning "$keychain" 2>/dev/null | awk -F '"' 'NF > 2 && $2 == ENVIRON["APPLE_CODESIGN_IDENTITY"] { n++ } END { print n + 0 }')"
+	[ "$matches" = 1 ] || {
+		echo "expected exactly 1 valid codesigning identity matching APPLE_CODESIGN_IDENTITY in the temporary keychain, found $matches" >&2
+		exit 1
+	}
+	;;
 build)
 	out="${2:?usage: release-build.sh build OUTDIR}"
 	mkdir -p "$out"
@@ -90,7 +98,7 @@ package-linux)
 	done
 	;;
 *)
-	echo "usage: release-build.sh check-tag TAG | build OUTDIR | package OUTDIR TAG | build-linux OUTDIR | package-linux OUTDIR TAG" >&2
+	echo "usage: release-build.sh check-tag TAG | check-identity KEYCHAIN | build OUTDIR | package OUTDIR TAG | build-linux OUTDIR | package-linux OUTDIR TAG" >&2
 	exit 2
 	;;
 esac
