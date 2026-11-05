@@ -472,6 +472,25 @@ func TestBumpMarketplaces(t *testing.T) {
 		})
 	}
 
+	t.Run("write failure is reported", func(t *testing.T) {
+		if os.Geteuid() == 0 {
+			t.Skip("root ignores directory permissions")
+		}
+		env, files := setup(t, "v9.9.0")
+		dir := filepath.Dir(files[0])
+		if err := os.Chmod(dir, 0o555); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { os.Chmod(dir, 0o755) })
+		out, err := releaseScript(t, env, "bump-marketplaces", "v9.9.9")
+		if err == nil {
+			t.Errorf("exit 0 although the write failed\n%s", out)
+		}
+		if strings.Contains(out, "ref ->") {
+			t.Errorf("success message after failed write\n%s", out)
+		}
+	})
+
 	t.Run("version order not string order", func(t *testing.T) {
 		env, files := setup(t, "v9.9.10")
 		if out, err := releaseScript(t, env, "bump-marketplaces", "v9.10.0"); err != nil {

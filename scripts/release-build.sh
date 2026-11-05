@@ -199,7 +199,8 @@ bump-marketplaces)
 		exit 0
 	}
 	for f in $todo; do
-		sed "s|^\([[:space:]]*\"ref\": \"\)v[0-9.]*\(\"\)|\1$tag\2|" "$f" >"$f.tmp" && mv "$f.tmp" "$f"
+		sed "s|^\([[:space:]]*\"ref\": \"\)v[0-9.]*\(\"\)|\1$tag\2|" "$f" >"$f.tmp"
+		mv "$f.tmp" "$f"
 		echo "$f: ref -> $tag"
 	done
 	;;
