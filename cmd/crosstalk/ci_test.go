@@ -134,4 +134,13 @@ func TestWorkflowHygiene(t *testing.T) {
 	if !strings.Contains(ci, "\nconcurrency:") || !strings.Contains(ci, "cancel-in-progress: ${{ github.event_name == 'pull_request' }}") {
 		t.Error("ci.yml: no top-level concurrency group cancelling superseded PR runs")
 	}
+	vuln := workflowJobs(ci)["govulncheck"]
+	if !regexp.MustCompile(`go run golang\.org/x/vuln/cmd/govulncheck@v\d+\.\d+\.\d+ \./\.\.\.`).MatchString(vuln) {
+		t.Error("ci.yml: no govulncheck job running a version-pinned govulncheck")
+	}
+	for _, trigger := range []string{"\n  pull_request:", "\n  push:", "\n  schedule:"} {
+		if !strings.Contains(ci, trigger) {
+			t.Errorf("ci.yml: trigger %q missing", strings.TrimSpace(trigger))
+		}
+	}
 }
