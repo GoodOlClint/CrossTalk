@@ -209,6 +209,25 @@ func editConfig(cfg, bin string) (string, error) {
 	return strings.Join(slices.Concat(lines[:t.start+1], body, lines[t.end:]), "\n"), nil
 }
 
+// removeTables drops the crosstalk server table and every sub-table, and
+// leaves the file ending in one newline.
+func removeTables(cfg string) string {
+	lines := strings.Split(cfg, "\n")
+	ts := tables(lines)
+	for i := len(ts) - 1; i >= 0; i-- {
+		if t := ts[i]; t.name == serverTable || strings.HasPrefix(t.name, serverTable+".") {
+			lines = slices.Delete(lines, t.start, t.end)
+		}
+	}
+	for len(lines) > 0 && strings.TrimSpace(lines[len(lines)-1]) == "" {
+		lines = lines[:len(lines)-1]
+	}
+	if len(lines) == 0 {
+		return ""
+	}
+	return strings.Join(lines, "\n") + "\n"
+}
+
 type registration struct {
 	Transport struct {
 		Command string            `json:"command"`
@@ -320,11 +339,50 @@ func (h *Harness) InstallSteps(env harness.InstallEnv) []harness.Step {
 	return []harness.Step{pluginStep(env), configStep(env)}
 }
 
-func (h *Harness) UninstallSteps(env harness.InstallEnv) []harness.Step { return nil }
+// UninstallSteps removes the server table with its sub-tables, then the
+// plugin; the marketplace stays.
+func (h *Harness) UninstallSteps(env harness.InstallEnv) []harness.Step {
+	path := configPath(env.Home)
+	return []harness.Step{
+		{
+			Title:  "Codex MCP server",
+			Change: "remove [mcp_servers.crosstalk] and every [mcp_servers.crosstalk.*] table from " + path + " (backup next to it)",
+			Apply: func(ctx context.Context) error {
+				b, err := os.ReadFile(path)
+				if errors.Is(err, os.ErrNotExist) {
+					return nil
+				}
+				if err != nil {
+					return err
+				}
+				ours := func(t table) bool { return t.name == serverTable || strings.HasPrefix(t.name, serverTable+".") }
+				if !slices.ContainsFunc(tables(strings.Split(string(b), "\n")), ours) {
+					return nil
+				}
+				return writeVerified(ctx, env, removeTables(string(b)), nil)
+			},
+		},
+		{
+			Title:  "Codex plugin",
+			Change: "codex plugin remove " + pluginID + " (the marketplace stays)",
+			Apply: func(ctx context.Context) error {
+				if _, err := os.Stat(pluginCache(env.Home)); errors.Is(err, os.ErrNotExist) {
+					return nil
+				}
+				_, err := env.Run(ctx, "codex", "plugin", "remove", pluginID)
+				return err
+			},
+		},
+	}
+}
 
-// pluginManifest is where codex plugin add puts the plugin of a version.
+// pluginCache holds one directory per installed version of the plugin.
+func pluginCache(home string) string {
+	return filepath.Join(codexHome(home), "plugins", "cache", "crosstalk", "crosstalk")
+}
+
 func pluginManifest(home, version string) string {
-	return filepath.Join(codexHome(home), "plugins", "cache", "crosstalk", "crosstalk", version, ".codex-plugin", "plugin.json")
+	return filepath.Join(pluginCache(home), version, ".codex-plugin", "plugin.json")
 }
 
 func (h *Harness) Checks(ctx context.Context, env harness.InstallEnv) []harness.CheckResult {

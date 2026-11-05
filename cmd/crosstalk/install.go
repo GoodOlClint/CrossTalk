@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -167,6 +168,9 @@ func runInstall(mode string, args []string, in io.Reader, tty bool, stdout, stde
 		}
 		groups = append(groups, group{t.name, steps})
 	}
+	if mode == "uninstall" {
+		groups = append(groups, group{"crosstalk", installRemoveSteps(o, all, targets, env, stateDir, stdout)})
+	}
 	if !tty && !o.yes {
 		for _, g := range groups {
 			fmt.Fprintf(stdout, "== %s\n", g.title)
@@ -201,6 +205,63 @@ func runInstall(mode string, args []string, in io.Reader, tty bool, stdout, stde
 		return 1
 	}
 	return 0
+}
+
+// installStillRegistered names the found harnesses outside targets whose
+// registration still runs env.Bin.
+func installStillRegistered(ctx context.Context, all, targets []installTarget, env harness.InstallEnv) []string {
+	var out []string
+	for _, t := range all {
+		if slices.ContainsFunc(targets, func(x installTarget) bool { return x.name == t.name }) || !t.in.Found() {
+			continue
+		}
+		for _, r := range t.in.Checks(ctx, env) {
+			if r.ID == "K5" && r.OK {
+				out = append(out, t.name)
+			}
+		}
+	}
+	return out
+}
+
+// installRemoveSteps delete the binary and, with --purge, the state dir,
+// each only when no other harness still runs the binary.
+func installRemoveSteps(o installOpts, all, targets []installTarget, env harness.InstallEnv, stateDir string, w io.Writer) []harness.Step {
+	steps := []harness.Step{{
+		Title:  "binary",
+		Change: "delete " + env.Bin + " unless another harness still runs it",
+		Apply: func(ctx context.Context) error {
+			if still := installStillRegistered(ctx, all, targets, env); len(still) > 0 {
+				fmt.Fprintf(w, "    kept %s: %s still runs it\n", env.Bin, strings.Join(still, ", "))
+				return nil
+			}
+			if err := os.Remove(env.Bin); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
+			return nil
+		},
+	}}
+	if !o.purge {
+		return steps
+	}
+	return append(steps, harness.Step{
+		Title:  "state",
+		Change: "delete " + stateDir + " (journals, tokens, descriptors) unless another harness is still installed or a shim is running",
+		Apply: func(ctx context.Context) error {
+			if still := installStillRegistered(ctx, all, targets, env); len(still) > 0 {
+				fmt.Fprintf(w, "    kept %s: %s still installed\n", stateDir, strings.Join(still, ", "))
+				return nil
+			}
+			held, err := registry.New(stateDir).HeldAgents()
+			if err != nil {
+				return err
+			}
+			if len(held) > 0 {
+				return fmt.Errorf("running shims hold agents %s in %s; end those Claude and Codex sessions, then run uninstall --purge again", strings.Join(held, ", "), stateDir)
+			}
+			return os.RemoveAll(stateDir)
+		},
+	})
 }
 
 func installConfirm(r *bufio.Reader, w io.Writer) bool {

@@ -395,7 +395,54 @@ func (h *Harness) InstallSteps(env harness.InstallEnv) []harness.Step {
 	return append(steps, mcpStep(env), allowStep(env))
 }
 
-func (h *Harness) UninstallSteps(env harness.InstallEnv) []harness.Step { return nil }
+// UninstallSteps removes the allow rule, the user-scope server and the
+// plugin; ported rules and the marketplace stay.
+func (h *Harness) UninstallSteps(env harness.InstallEnv) []harness.Step {
+	path := userSettingsPath(env.Home)
+	return []harness.Step{
+		{
+			Title:  "Claude allow rule",
+			Change: "remove " + AllowRule + " from permissions.allow in " + path,
+			Apply: func(context.Context) error {
+				m, b, err := readJSONFile(path)
+				if err != nil || b == nil {
+					return err
+				}
+				l := ruleList(m, "allow")
+				i := slices.Index(l, any(AllowRule))
+				if i < 0 {
+					return nil
+				}
+				setRuleList(m, "allow", slices.Delete(l, i, i+1))
+				return writeJSONFile(path, m)
+			},
+		},
+		{
+			Title:  "Claude MCP server",
+			Change: "claude mcp remove --scope user crosstalk",
+			Apply: func(ctx context.Context) error {
+				e, err := userEntry(env.Home)
+				if err != nil || e == nil {
+					return err
+				}
+				_, err = env.Run(ctx, "claude", "mcp", "remove", "--scope", "user", "crosstalk")
+				return err
+			},
+		},
+		{
+			Title:  "Claude plugin",
+			Change: "claude plugin uninstall crosstalk (the marketplace stays)",
+			Apply: func(ctx context.Context) error {
+				p, err := installedPlugin(ctx, env)
+				if err != nil || p == nil {
+					return err
+				}
+				_, err = env.Run(ctx, "claude", "plugin", "uninstall", "crosstalk")
+				return err
+			},
+		},
+	}
+}
 
 func executable(path string) bool {
 	fi, err := os.Stat(path)

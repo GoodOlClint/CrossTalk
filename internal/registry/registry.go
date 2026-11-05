@@ -89,6 +89,34 @@ func tryLock(path string) (*os.File, bool, error) {
 	return f, true, nil
 }
 
+// HeldAgents lists the agent ids whose lock a running shim holds.
+func (r *Registry) HeldAgents() ([]string, error) {
+	ents, err := os.ReadDir(r.agentsDir())
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var held []string
+	for _, e := range ents {
+		id, ok := strings.CutSuffix(e.Name(), ".lock")
+		if !ok {
+			continue
+		}
+		f, got, err := tryLock(r.agentLockPath(id))
+		if err != nil {
+			return nil, err
+		}
+		if got {
+			f.Close()
+		} else {
+			held = append(held, id)
+		}
+	}
+	return held, nil
+}
+
 type Registration struct {
 	reg *Registry
 
