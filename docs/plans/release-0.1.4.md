@@ -193,7 +193,7 @@ Order: D1 (then H5a, which uses its `SetUp`), C1 and E1-E3 first (independent, n
 
 ## 11. Review disposition
 
-Codex adversarial review, `node codex-companion.mjs adversarial-review --wait --base main` on 68e1d1c (`/tmp/crosstalk-0.1.4-codex.log`): verdict needs-attention, 3 findings, all checked against the code and all fixed in the plan (commit in the report; this section lands in the same commit).
+Codex adversarial review, `node codex-companion.mjs adversarial-review --wait --base main` on 68e1d1c, rebased since as 2a1819b (`/tmp/crosstalk-0.1.4-codex.log`): verdict needs-attention, 3 findings, all checked against the code and all fixed in the plan in a3f0f8c.
 
 | # | Severity | Finding | Checked | Disposition |
 |---|---|---|---|---|
