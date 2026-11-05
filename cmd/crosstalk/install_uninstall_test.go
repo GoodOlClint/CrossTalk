@@ -191,3 +191,34 @@ func TestUninstallKeepsWhenOwnershipUncertain(t *testing.T) {
 		t.Errorf("state purged with an unreadable codex config: %v", err)
 	}
 }
+
+func TestUninstallHomebrewKeepsBinary(t *testing.T) {
+	home := installSandbox(t, "claude", "codex")
+	prefix := installBrewKeg(t, "opt/homebrew", true)
+	link := filepath.Join(prefix, "bin", "crosstalk")
+	if code, out := installRunCmd(t, "install", "--yes"); code != 0 {
+		t.Fatalf("install: %d\n%s", code, out)
+	}
+	code, out := installRunCmd(t, "uninstall", "--yes")
+	if code != 0 {
+		t.Fatalf("uninstall: %d\n%s", code, out)
+	}
+	if _, err := os.Lstat(link); err != nil {
+		t.Errorf("Homebrew link removed: %v", err)
+	}
+	if _, err := os.Stat(link); err != nil {
+		t.Errorf("keg binary gone: %v", err)
+	}
+	if !strings.Contains(out, "brew uninstall crosstalk") {
+		t.Errorf("output does not name brew uninstall crosstalk:\n%s", out)
+	}
+	if got := installRead(t, filepath.Join(home, ".claude.json")); strings.Contains(got, link) {
+		t.Errorf("Claude entry still names %s:\n%s", link, got)
+	}
+	if got := installRead(t, filepath.Join(home, ".codex", "config.toml")); strings.Contains(got, "mcp_servers.crosstalk") {
+		t.Errorf("Codex table remains:\n%s", got)
+	}
+	if got := installRead(t, filepath.Join(home, ".claude", "settings.json")); strings.Contains(got, "mcp__crosstalk__") {
+		t.Errorf("allow rule remains:\n%s", got)
+	}
+}
