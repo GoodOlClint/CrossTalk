@@ -150,6 +150,17 @@ func TestCodexConfigEdit(t *testing.T) {
 		}
 	})
 
+	t.Run("brackets inside strings and comments", func(t *testing.T) {
+		env, r := codexEnv(t, "config-quoted.toml")
+		if err := applySteps((&Harness{}).InstallSteps(env)); err != nil {
+			t.Fatal(err)
+		}
+		want := "[mcp_servers.crosstalk]\n" + set + "default_tools_approval_mode = \"prompt\"\n\n[mcp_servers.crosstalk.env]\nCROSSTALK_CODEX_ENDPOINTS = \"unix:///s.sock\"\n"
+		if got := read(r.path); got != want {
+			t.Errorf("got\n%s\nwant\n%s", got, want)
+		}
+	})
+
 	t.Run("failed verification restores the backup", func(t *testing.T) {
 		env, r := codexEnv(t, "config-prompt.toml")
 		r.fail = "codex mcp list"

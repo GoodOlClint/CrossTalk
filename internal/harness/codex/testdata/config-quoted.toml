@@ -1,0 +1,7 @@
+[mcp_servers.crosstalk]
+command = "/usr/bin/env"
+args = ["INSTALL_LABEL=[local", "crosstalk", "mcp"] # a [comment
+default_tools_approval_mode = "prompt"
+
+[mcp_servers.crosstalk.env]
+CROSSTALK_CODEX_ENDPOINTS = "unix:///s.sock"

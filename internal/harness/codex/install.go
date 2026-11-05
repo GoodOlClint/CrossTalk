@@ -125,6 +125,33 @@ func orphanTables(cfg string) bool {
 	return false
 }
 
+// tomlCode returns line without its comment, and the change in array
+// depth from brackets outside strings.
+func tomlCode(line string) (string, int) {
+	depth := 0
+	var quote byte
+	for i := 0; i < len(line); i++ {
+		c := line[i]
+		switch {
+		case quote == '"' && c == '\\':
+			i++
+		case quote != 0:
+			if c == quote {
+				quote = 0
+			}
+		case c == '"' || c == '\'':
+			quote = c
+		case c == '#':
+			return line[:i], depth
+		case c == '[':
+			depth++
+		case c == ']':
+			depth--
+		}
+	}
+	return line, depth
+}
+
 // keySpan finds key in lines[from:to] and returns the lines its value
 // covers; a multi-line array runs to its closing bracket.
 func keySpan(lines []string, from, to int, key string) (int, int, bool) {
@@ -133,10 +160,11 @@ func keySpan(lines []string, from, to int, key string) (int, int, bool) {
 		if m == nil || m[1] != key {
 			continue
 		}
-		depth := strings.Count(m[2], "[") - strings.Count(m[2], "]")
+		_, depth := tomlCode(m[2])
 		j := i + 1
 		for depth > 0 && j < to {
-			depth += strings.Count(lines[j], "[") - strings.Count(lines[j], "]")
+			_, d := tomlCode(lines[j])
+			depth += d
 			j++
 		}
 		return i, j, true
@@ -158,7 +186,8 @@ func readEntry(cfg string) (entry, bool) {
 	}
 	var e entry
 	if i, j, ok := keySpan(lines, t.start+1, t.end, "command"); ok {
-		v := strings.TrimSpace(keyRe.FindStringSubmatch(lines[i])[2])
+		v, _ := tomlCode(keyRe.FindStringSubmatch(lines[i])[2])
+		v = strings.TrimSpace(v)
 		if s, err := strconv.Unquote(v); err == nil {
 			e.command = s
 		} else {
@@ -167,8 +196,12 @@ func readEntry(cfg string) (entry, bool) {
 		e.raw += strings.Join(lines[i:j], "\n") + "\n"
 	}
 	if i, j, ok := keySpan(lines, t.start+1, t.end, "args"); ok {
-		v := keyRe.FindStringSubmatch(lines[i])[2]
-		json.Unmarshal([]byte(strings.Join(append([]string{v}, lines[i+1:j]...), " ")), &e.args)
+		var code []string
+		for _, l := range append([]string{keyRe.FindStringSubmatch(lines[i])[2]}, lines[i+1:j]...) {
+			c, _ := tomlCode(l)
+			code = append(code, c)
+		}
+		json.Unmarshal([]byte(strings.Join(code, " ")), &e.args)
 		e.raw += strings.Join(lines[i:j], "\n") + "\n"
 	}
 	return e, true
