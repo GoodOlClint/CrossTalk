@@ -149,7 +149,7 @@ func runInstall(mode string, args []string, in io.Reader, tty bool, stdout, stde
 	}
 	ctx := context.Background()
 	if o.check {
-		if installChecks(ctx, stdout, targets, env) {
+		if installChecks(ctx, stdout, targets, env, len(o.names) == 0) {
 			return 1
 		}
 		return 0
@@ -217,7 +217,7 @@ func runInstall(mode string, args []string, in io.Reader, tty bool, stdout, stde
 			}
 		}
 	}
-	failed := installChecks(ctx, stdout, targets, env)
+	failed := installChecks(ctx, stdout, targets, env, false)
 	fmt.Fprintln(stdout, "Running Claude and Codex sessions keep their old CrossTalk server. Restart them (in Claude, /mcp and reconnect also works).")
 	if failed {
 		return 1
@@ -451,10 +451,18 @@ func installReport(w io.Writer, who string, rs []harness.CheckResult) (failed bo
 	return failed
 }
 
-func installChecks(ctx context.Context, w io.Writer, targets []installTarget, env harness.InstallEnv) bool {
+// installChecks runs every target's checks; with skip, a target with no
+// CrossTalk setup at all is skipped instead of failing its checks.
+func installChecks(ctx context.Context, w io.Writer, targets []installTarget, env harness.InstallEnv, skip bool) bool {
 	fmt.Fprintln(w, "== checks")
 	failed := false
 	for _, t := range targets {
+		if skip {
+			if ok, err := t.in.SetUp(env); !ok && err == nil {
+				fmt.Fprintf(w, "%s: not set up, skipped\n", t.name)
+				continue
+			}
+		}
 		if installReport(w, t.name, t.in.Checks(ctx, env)) {
 			failed = true
 		}

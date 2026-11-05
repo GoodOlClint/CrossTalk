@@ -174,6 +174,10 @@ type Installer interface {
 	// CrossTalk server runs env.Bin; it works without the harness CLI. An
 	// error means it cannot tell, and uninstall then keeps the binary.
 	Registered(env InstallEnv) (bool, error)
+	// SetUp reports whether the harness has any CrossTalk setup: a crosstalk
+	// server entry naming any command, or the CrossTalk plugin installed.
+	// An error means it cannot tell, and callers treat that as set up.
+	SetUp(env InstallEnv) (bool, error)
 }
 
 type InstallEnv struct {

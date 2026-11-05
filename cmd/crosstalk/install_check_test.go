@@ -109,3 +109,28 @@ func TestInstallChecksPass(t *testing.T) {
 		t.Error("no restart notice")
 	}
 }
+
+func TestCheckSkipsHarnessNotSetUp(t *testing.T) {
+	home := installSandbox(t, "claude", "codex")
+	bin := filepath.Join(home, "bin")
+	if code, out := installRunCmd(t, "install", "--yes", "--bin-dir", bin); code != 0 {
+		t.Fatalf("install: exit %d\n%s", code, out)
+	}
+	if code, out := installRunCmd(t, "uninstall", "codex", "--yes", "--bin-dir", bin); code != 0 {
+		t.Fatalf("uninstall codex: exit %d\n%s", code, out)
+	}
+	code, out := installRunCmd(t, "install", "--check", "--bin-dir", bin)
+	if code != 0 || !strings.Contains(out, "codex: not set up, skipped") {
+		t.Errorf("not set up: exit %d\n%s", code, out)
+	}
+	if code, out := installRunCmd(t, "install", "--check", "codex", "--bin-dir", bin); code != 1 {
+		t.Errorf("named codex: exit %d, want 1\n%s", code, out)
+	}
+	cfg := filepath.Join(home, ".codex", "config.toml")
+	os.MkdirAll(filepath.Dir(cfg), 0o700)
+	os.WriteFile(cfg, []byte("[mcp_servers.crosstalk]\ncommand = \"/other/crosstalk\"\nargs = [\"mcp\"]\n"), 0o600)
+	code, out = installRunCmd(t, "install", "--check", "--bin-dir", bin)
+	if code != 1 || !strings.Contains(installCheckLine(out, "K5", "codex"), "FAIL") {
+		t.Errorf("other binary: exit %d\n%s", code, out)
+	}
+}

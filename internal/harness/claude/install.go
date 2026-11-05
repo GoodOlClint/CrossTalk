@@ -533,6 +533,14 @@ func (h *Harness) Registered(env harness.InstallEnv) (bool, error) {
 	return e != nil && e.Command == env.Bin, err
 }
 
+func (h *Harness) SetUp(env harness.InstallEnv) (bool, error) {
+	if e, err := userEntry(env.Home); e != nil || err != nil {
+		return true, err
+	}
+	p, err := installedPlugin(context.Background(), env)
+	return p != nil, err
+}
+
 func (h *Harness) Checks(ctx context.Context, env harness.InstallEnv) []harness.CheckResult {
 	k1 := harness.CheckResult{ID: "K1"}
 	k2 := harness.CheckResult{ID: "K2"}
