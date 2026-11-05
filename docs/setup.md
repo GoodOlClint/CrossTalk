@@ -5,14 +5,15 @@ CrossTalk lets Claude Code and Codex sessions on this Mac message each other by 
 1. **Install the binary.** The main route is the release download: a universal binary (one file that runs on Apple silicon and Intel Macs) that is signed and notarized, so you do not need Go. Replace `v0.1.2` with the release you want. Run this in a scratch directory:
    ```sh
    TAG=v0.1.2
-   curl -fLO "https://github.com/GoodOlClint/CrossTalk/releases/download/$TAG/crosstalk-$TAG-macos-universal.zip"
-   curl -fLO "https://github.com/GoodOlClint/CrossTalk/releases/download/$TAG/crosstalk-$TAG-macos-universal.zip.sha256"
-   shasum -a 256 -c "crosstalk-$TAG-macos-universal.zip.sha256"
-   unzip "crosstalk-$TAG-macos-universal.zip"
-   mkdir -p "$HOME/.local/bin" && mv crosstalk "$HOME/.local/bin/"
+   curl -fLO "https://github.com/GoodOlClint/CrossTalk/releases/download/$TAG/crosstalk-$TAG-macos-universal.zip" &&
+   curl -fLO "https://github.com/GoodOlClint/CrossTalk/releases/download/$TAG/crosstalk-$TAG-macos-universal.zip.sha256" &&
+   shasum -a 256 -c "crosstalk-$TAG-macos-universal.zip.sha256" &&
+   unzip "crosstalk-$TAG-macos-universal.zip" &&
+   mkdir -p "$HOME/.local/bin" &&
+   mv crosstalk "$HOME/.local/bin/" &&
    "$HOME/.local/bin/crosstalk" version
    ```
-   The checksum check must print `OK`. Then put the directory on the PATH in both `~/.zprofile` and `~/.zshenv` (shell profiles do not reach a harness started outside a shell; see the table below). On an admin account you can move the binary to `/opt/homebrew/bin` instead. A binary older than 0.1.2 has no `version` subcommand, so do not use it to check an existing install; compare the installed plugin version instead.
+   The chain stops at the first failure, so a failed download or checksum installs nothing; the checksum line must print `OK`. Then put the directory on the PATH in both `~/.zprofile` and `~/.zshenv` (shell profiles do not reach a harness started outside a shell; see the table below). On an admin account you can move the binary to `/opt/homebrew/bin` instead. A binary older than 0.1.2 has no `version` subcommand, so do not use it to check an existing install; compare the installed plugin version instead.
 
    Terms: to *notarize* is to upload a signed program to Apple, which scans it and records a ticket that macOS checks online. A *hardened runtime* binary is signed with extra OS-enforced limits on what it can do. *Quarantine* is the flag (`com.apple.quarantine`) that browsers and some other apps put on a downloaded file so macOS runs its Gatekeeper check on first launch. To *staple* is to attach the notarization ticket to the file so it works offline.
 
