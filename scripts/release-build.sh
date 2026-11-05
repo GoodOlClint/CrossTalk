@@ -172,6 +172,37 @@ land-pr)
 		waited=$((waited + poll))
 	done
 	;;
+bump-marketplaces)
+	tag="${2:?usage: release-build.sh bump-marketplaces TAG}"
+	echo "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || {
+		echo "bump-marketplaces needs a final tag vX.Y.Z, got $tag" >&2
+		exit 1
+	}
+	files="${CLAUDE_MARKETPLACE:-.claude-plugin/marketplace.json} ${CODEX_MARKETPLACE:-.agents/plugins/marketplace.json}"
+	todo=
+	for f in $files; do
+		cur="$(sed -n 's/^[[:space:]]*"ref": "\(v[0-9.]*\)",\{0,1\}$/\1/p' "$f")"
+		[ -n "$cur" ] && [ "$(echo "$cur" | wc -l)" -eq 1 ] || {
+			echo "$f: need exactly one release-tag ref, found '$cur'" >&2
+			exit 1
+		}
+		[ "$cur" = "$tag" ] && continue
+		newer="$(awk -v a="${cur#v}" -v b="${tag#v}" 'BEGIN { split(a, x, "."); split(b, y, "."); for (i = 1; i <= 3; i++) if (x[i] + 0 != y[i] + 0) { print (x[i] + 0 > y[i] + 0) ? "cur" : "tag"; exit } }')"
+		[ "$newer" != cur ] || {
+			echo "$f: ref $cur is newer than $tag" >&2
+			exit 1
+		}
+		todo="$todo $f"
+	done
+	[ -n "$todo" ] || {
+		echo unchanged
+		exit 0
+	}
+	for f in $todo; do
+		sed "s|^\([[:space:]]*\"ref\": \"\)v[0-9.]*\(\"\)|\1$tag\2|" "$f" >"$f.tmp" && mv "$f.tmp" "$f"
+		echo "$f: ref -> $tag"
+	done
+	;;
 check-identity)
 	keychain="${2:?usage: release-build.sh check-identity KEYCHAIN}"
 	matches="$(security find-identity -v -p codesigning "$keychain" 2>/dev/null | awk -F '"' 'NF > 2 && $2 == ENVIRON["APPLE_CODESIGN_IDENTITY"] { n++ } END { print n + 0 }')"
@@ -238,7 +269,7 @@ package-linux)
 	done
 	;;
 *)
-	echo "usage: release-build.sh check-tag TAG | is-final TAG | formula TAG DIST DIST_LINUX | land-pr REPO BRANCH TITLE | check-identity KEYCHAIN | build OUTDIR | package OUTDIR TAG | build-linux OUTDIR | package-linux OUTDIR TAG" >&2
+	echo "usage: release-build.sh check-tag TAG | is-final TAG | formula TAG DIST DIST_LINUX | land-pr REPO BRANCH TITLE | bump-marketplaces TAG | check-identity KEYCHAIN | build OUTDIR | package OUTDIR TAG | build-linux OUTDIR | package-linux OUTDIR TAG" >&2
 	exit 2
 	;;
 esac

@@ -382,3 +382,105 @@ func TestLandPR(t *testing.T) {
 		})
 	}
 }
+
+func TestBumpMarketplaces(t *testing.T) {
+	refRE := regexp.MustCompile(`("ref": ")[^"]*(")`)
+	setup := func(t *testing.T, ref string) (env []string, files []string) {
+		t.Helper()
+		dir := t.TempDir()
+		for i, src := range []string{".claude-plugin/marketplace.json", ".agents/plugins/marketplace.json"} {
+			raw, err := os.ReadFile(filepath.Join(releaseRepoRoot(t), src))
+			if err != nil {
+				t.Fatal(err)
+			}
+			dst := filepath.Join(dir, []string{"claude.json", "codex.json"}[i])
+			if err := os.WriteFile(dst, refRE.ReplaceAll(raw, []byte("${1}"+ref+"${2}")), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			files = append(files, dst)
+		}
+		return []string{"CLAUDE_MARKETPLACE=" + files[0], "CODEX_MARKETPLACE=" + files[1]}, files
+	}
+	read := func(t *testing.T, files []string) [2]string {
+		t.Helper()
+		var got [2]string
+		for i, f := range files {
+			b, err := os.ReadFile(f)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got[i] = string(b)
+		}
+		return got
+	}
+
+	t.Run("bumps exactly the two refs", func(t *testing.T) {
+		env, files := setup(t, "v9.9.0")
+		before := read(t, files)
+		if out, err := releaseScript(t, env, "bump-marketplaces", "v9.9.9"); err != nil {
+			t.Fatalf("bump: %v\n%s", err, out)
+		}
+		after := read(t, files)
+		for i := range files {
+			bl, al := strings.Split(before[i], "\n"), strings.Split(after[i], "\n")
+			if len(bl) != len(al) {
+				t.Fatalf("%s: line count changed", files[i])
+			}
+			changed := 0
+			for j := range bl {
+				if bl[j] == al[j] {
+					continue
+				}
+				changed++
+				if !strings.Contains(al[j], `"ref": "v9.9.9"`) {
+					t.Errorf("%s: changed line %q", files[i], al[j])
+				}
+			}
+			if changed != 1 {
+				t.Errorf("%s: %d lines changed, want 1", files[i], changed)
+			}
+		}
+	})
+
+	t.Run("same tag is unchanged", func(t *testing.T) {
+		env, files := setup(t, "v9.9.9")
+		before := read(t, files)
+		out, err := releaseScript(t, env, "bump-marketplaces", "v9.9.9")
+		if err != nil || !strings.Contains(out, "unchanged") {
+			t.Fatalf("err = %v, out %q", err, out)
+		}
+		if read(t, files) != before {
+			t.Error("files changed")
+		}
+	})
+
+	refused := []struct{ name, have, tag string }{
+		{"rc tag", "v9.9.0", "v9.9.9-rc.1"},
+		{"older than main", "v9.9.10", "v9.9.9"},
+		{"not a tag", "v9.9.0", "9.9.9"},
+	}
+	for _, c := range refused {
+		t.Run("refuses "+c.name, func(t *testing.T) {
+			env, files := setup(t, c.have)
+			before := read(t, files)
+			if out, err := releaseScript(t, env, "bump-marketplaces", c.tag); err == nil {
+				t.Errorf("succeeded\n%s", out)
+			}
+			if read(t, files) != before {
+				t.Error("files changed")
+			}
+		})
+	}
+
+	t.Run("version order not string order", func(t *testing.T) {
+		env, files := setup(t, "v9.9.10")
+		if out, err := releaseScript(t, env, "bump-marketplaces", "v9.10.0"); err != nil {
+			t.Fatalf("bump: %v\n%s", err, out)
+		}
+		for _, c := range read(t, files) {
+			if !strings.Contains(c, `"ref": "v9.10.0"`) {
+				t.Errorf("ref not bumped:\n%s", c)
+			}
+		}
+	})
+}
