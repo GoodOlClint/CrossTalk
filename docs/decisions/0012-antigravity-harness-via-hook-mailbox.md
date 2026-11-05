@@ -3,7 +3,7 @@
 - **Status:** Provisional
 - **Date:** 2026-11-04
 - **Deciders:** operator + Claude
-- **Context source:** operator rulings 2026-11-04; [spike 12](../spikes/12-antigravity-cli.md); [change plan](../plans/antigravity-harness.md)
+- **Context source:** operator rulings 2026-11-04; [spike 12](https://github.com/GoodOlClint/CrossTalk/blob/main/docs/spikes/12-antigravity-cli.md); [change plan](https://github.com/GoodOlClint/CrossTalk/blob/main/docs/plans/antigravity-harness.md)
 
 ## Context
 
