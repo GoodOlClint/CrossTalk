@@ -1,0 +1,112 @@
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to build and publish, for example v0.1.2
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  release:
+    runs-on: macos-latest
+    environment: release
+    timeout-minutes: 60
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref_name }}
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Check tag against mcpserver.Version
+        run: scripts/release-build.sh check-tag "$TAG"
+      - name: Build universal binary
+        run: scripts/release-build.sh build "$RUNNER_TEMP/dist"
+      - name: Import signing certificate
+        env:
+          APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
+          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+        run: |
+          set -eu
+          umask 077
+          mkdir "$RUNNER_TEMP/release-secrets"
+          keychain="$RUNNER_TEMP/release-signing.keychain-db"
+          password="$(uuidgen)"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings -lut 3600 "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          printf '%s' "$APPLE_CERT_P12" | base64 --decode > "$RUNNER_TEMP/release-secrets/cert.p12"
+          security import "$RUNNER_TEMP/release-secrets/cert.p12" -k "$keychain" -P "$APPLE_CERT_PASSWORD" -T /usr/bin/codesign
+          chain=("$keychain")
+          while IFS= read -r k; do chain+=("$k"); done < <(security list-keychains -d user | sed 's/^ *"//; s/"$//')
+          security list-keychains -d user -s "${chain[@]}"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$password" "$keychain" > /dev/null
+          rm -f "$RUNNER_TEMP/release-secrets/cert.p12"
+      - name: Sign with hardened runtime
+        env:
+          APPLE_CODESIGN_IDENTITY: ${{ secrets.APPLE_CODESIGN_IDENTITY }}
+        run: |
+          set -eu
+          codesign --force --timestamp --options runtime \
+            --keychain "$RUNNER_TEMP/release-signing.keychain-db" \
+            --sign "$APPLE_CODESIGN_IDENTITY" "$RUNNER_TEMP/dist/crosstalk"
+      - name: Package
+        run: scripts/release-build.sh package "$RUNNER_TEMP/dist" "$TAG"
+      - name: Notarize
+        env:
+          AC_API_KEY_P8: ${{ secrets.AC_API_KEY_P8 }}
+          AC_API_KEY_ID: ${{ secrets.AC_API_KEY_ID }}
+          AC_API_ISSUER: ${{ secrets.AC_API_ISSUER }}
+        run: |
+          set -eu
+          umask 077
+          mkdir -p "$RUNNER_TEMP/release-secrets"
+          printf '%s' "$AC_API_KEY_P8" | base64 --decode > "$RUNNER_TEMP/release-secrets/key.p8"
+          zip="$RUNNER_TEMP/dist/crosstalk-$TAG-macos-universal.zip"
+          result="$RUNNER_TEMP/notary.json"
+          xcrun notarytool submit "$zip" --wait --output-format json \
+            --key "$RUNNER_TEMP/release-secrets/key.p8" --key-id "$AC_API_KEY_ID" --issuer "$AC_API_ISSUER" > "$result" || true
+          cat "$result"
+          status="$(plutil -extract status raw -o - "$result" 2>/dev/null || echo unknown)"
+          if [ "$status" != "Accepted" ]; then
+            id="$(plutil -extract id raw -o - "$result" 2>/dev/null || true)"
+            [ -z "$id" ] || xcrun notarytool log "$id" \
+              --key "$RUNNER_TEMP/release-secrets/key.p8" --key-id "$AC_API_KEY_ID" --issuer "$AC_API_ISSUER" || true
+            echo "notarization status: $status" >&2
+            exit 1
+          fi
+      - name: Verify signed binary
+        run: |
+          set -eu
+          bin="$RUNNER_TEMP/dist/crosstalk"
+          codesign --verify --strict --verbose=2 "$bin"
+          spctl --assess --type execute --verbose=4 "$bin" || echo "spctl exit $? (a bare command-line binary is not an app bundle)"
+          lipo -archs "$bin"
+          "$bin" version
+      - name: Publish release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          files=("$RUNNER_TEMP/dist/crosstalk-$TAG-macos-universal.zip" "$RUNNER_TEMP/dist/crosstalk-$TAG-macos-universal.zip.sha256")
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
+            gh release upload "$TAG" "${files[@]}" --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$TAG" "${files[@]}" --verify-tag --generate-notes --title "$TAG" --repo "$GITHUB_REPOSITORY"
+          fi
+      - name: Remove keychain and key files
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/release-signing.keychain-db" || true
+          rm -rf "$RUNNER_TEMP/release-secrets"
