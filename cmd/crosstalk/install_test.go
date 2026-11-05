@@ -53,17 +53,6 @@ func TestInstallFakeCLI(t *testing.T) {
 	os.Exit(installFake(name, args))
 }
 
-func installFake(name string, args []string) int {
-	home := os.Getenv("HOME")
-	f, err := os.OpenFile(filepath.Join(home, "fake.log"), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
-	if err != nil {
-		return 99
-	}
-	fmt.Fprintln(f, name+" "+strings.Join(args, " "))
-	f.Close()
-	return 0
-}
-
 func installSnapshot(t *testing.T, dir string) map[string]string {
 	t.Helper()
 	snap := map[string]string{}

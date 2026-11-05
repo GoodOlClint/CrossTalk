@@ -8,6 +8,9 @@ import (
 	"context"
 	"errors"
 	"net"
+	"os"
+	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/GoodOlClint/crosstalk/internal/adapter"
@@ -189,4 +192,49 @@ type Step struct {
 type CheckResult struct {
 	ID, Detail   string
 	OK, WarnOnly bool
+}
+
+var backedUp sync.Map
+
+// ReplaceFile writes data to path through a temp file renamed over it. The
+// first call for a path in this process copies the current contents, if
+// any, to path + ".crosstalk-backup", so the backup is the file as it was
+// before this run. The file keeps its mode; a new file gets 0600.
+func ReplaceFile(path string, data []byte) error {
+	mode := os.FileMode(0o600)
+	if old, err := os.ReadFile(path); err == nil {
+		if fi, err := os.Stat(path); err == nil {
+			mode = fi.Mode().Perm()
+		}
+		if _, done := backedUp.LoadOrStore(path, true); !done {
+			if err := os.WriteFile(path+".crosstalk-backup", old, mode); err != nil {
+				backedUp.Delete(path)
+				return err
+			}
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	_, err = tmp.Write(data)
+	if err == nil {
+		err = tmp.Chmod(mode)
+	}
+	if err == nil {
+		err = tmp.Sync()
+	}
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
 }
