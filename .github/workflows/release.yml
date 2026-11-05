@@ -4,36 +4,35 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
-    inputs:
-      tag:
-        description: Release tag to build and publish, for example v0.1.2
-        required: true
-        type: string
 
 permissions: {}
 
 jobs:
   release:
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: macos-latest
     environment: release
     concurrency:
-      group: release-${{ inputs.tag || github.ref_name }}
+      group: release-${{ github.ref_name }}
       cancel-in-progress: false
     timeout-minutes: 60
     permissions:
       contents: write
     env:
-      TAG: ${{ inputs.tag || github.ref_name }}
+      TAG: ${{ github.ref_name }}
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: refs/tags/${{ inputs.tag || github.ref_name }}
+          ref: refs/tags/${{ github.ref_name }}
           persist-credentials: false
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
+          cache: false
       - name: Check tag against mcpserver.Version
         run: scripts/release-build.sh check-tag "$TAG"
+      - name: Test
+        run: go test ./...
       - name: Build universal binary
         run: scripts/release-build.sh build "$RUNNER_TEMP/dist"
       - name: Import signing certificate
@@ -64,6 +63,7 @@ jobs:
           codesign --force --timestamp --options runtime \
             --keychain "$RUNNER_TEMP/release-signing.keychain-db" \
             --sign "$APPLE_CODESIGN_IDENTITY" "$RUNNER_TEMP/dist/crosstalk"
+          security delete-keychain "$RUNNER_TEMP/release-signing.keychain-db"
       - name: Package
         run: scripts/release-build.sh package "$RUNNER_TEMP/dist" "$TAG"
       - name: Notarize
@@ -75,6 +75,7 @@ jobs:
           set -eu
           umask 077
           mkdir -p "$RUNNER_TEMP/release-secrets"
+          trap 'rm -f "$RUNNER_TEMP/release-secrets/key.p8"' EXIT
           printf '%s' "$AC_API_KEY_P8" | base64 --decode > "$RUNNER_TEMP/release-secrets/key.p8"
           zip="$RUNNER_TEMP/dist/crosstalk-$TAG-macos-universal.zip"
           result="$RUNNER_TEMP/notary.json"
@@ -94,6 +95,7 @@ jobs:
           set -eu
           bin="$RUNNER_TEMP/dist/crosstalk"
           codesign --verify --strict --verbose=2 "$bin"
+          codesign --verify --verbose=2 --check-notarization -R=notarized "$bin"
           spctl --assess --type execute --verbose=4 "$bin" || echo "spctl exit $? (a bare command-line binary is not an app bundle)"
           lipo -archs "$bin"
           "$bin" version
@@ -104,6 +106,8 @@ jobs:
           set -eu
           files=("$RUNNER_TEMP/dist/crosstalk-$TAG-macos-universal.zip" "$RUNNER_TEMP/dist/crosstalk-$TAG-macos-universal.zip.sha256")
           repo="$GITHUB_REPOSITORY"
+          pre=()
+          case "$TAG" in *-rc.*) pre=(--prerelease) ;; esac
           if gh release view "$TAG" --repo "$repo" > /dev/null 2>&1; then
             [ "$(gh release view "$TAG" --repo "$repo" --json isDraft --jq .isDraft)" = true ] || {
               echo "release $TAG is already published; not replacing its assets" >&2
@@ -111,7 +115,7 @@ jobs:
             }
             gh release upload "$TAG" "${files[@]}" --clobber --repo "$repo"
           else
-            gh release create "$TAG" "${files[@]}" --draft --verify-tag --generate-notes --title "$TAG" --repo "$repo"
+            gh release create "$TAG" "${files[@]}" --draft "${pre[@]}" --verify-tag --generate-notes --title "$TAG" --repo "$repo"
           fi
           gh release edit "$TAG" --draft=false --repo "$repo"
       - name: Remove keychain and key files

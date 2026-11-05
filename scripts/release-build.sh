@@ -14,11 +14,23 @@ asset() {
 case "${1:-}" in
 check-tag)
 	tag="${2:?usage: release-build.sh check-tag TAG}"
-	want="v$(version)"
-	[ -n "$want" ] && [ "$tag" = "$want" ] || {
-		echo "tag $tag does not match mcpserver.Version (want $want)" >&2
+	ver="$(version)"
+	[ -n "$ver" ] || {
+		echo "cannot read mcpserver.Version" >&2
 		exit 1
 	}
+	case "$tag" in
+	"v$ver") ;;
+	"v$ver"-rc.*[!0-9]* | "v$ver"-rc. | "v$ver"-rc.0[0-9]*)
+		echo "tag $tag is not v$ver or v$ver-rc.N" >&2
+		exit 1
+		;;
+	"v$ver"-rc.*) ;;
+	*)
+		echo "tag $tag is not v$ver or v$ver-rc.N" >&2
+		exit 1
+		;;
+	esac
 	;;
 build)
 	out="${2:?usage: release-build.sh build OUTDIR}"
@@ -45,7 +57,11 @@ package)
 	}
 	zip="$(asset "$tag").zip"
 	rm -f "$out/$zip" "$out/$zip.sha256"
-	ditto -c -k --keepParent "$out/$NAME" "$out/$zip"
+	(cd "$out" && ditto -c -k --norsrc "$NAME" "$zip")
+	[ "$(unzip -Z1 "$out/$zip")" = "$NAME" ] || {
+		echo "zip must contain exactly $NAME" >&2
+		exit 1
+	}
 	(cd "$out" && shasum -a 256 "$zip" >"$zip.sha256" && shasum -a 256 -c "$zip.sha256")
 	;;
 *)

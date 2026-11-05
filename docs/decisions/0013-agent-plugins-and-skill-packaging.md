@@ -21,7 +21,7 @@ A manual MCP install gave models the tools but not the knowledge to use them: th
 
 ## Rejected alternatives
 
-- A plugin command that runs `go install` (hidden code execution), a prebuilt release (signing and notarization pipeline), a Homebrew tap (adds only `brew upgrade`), a `crosstalk install` that edits `settings.json` (writes user config; overlaps the agy installer).
+- A plugin command that runs `go install` (hidden code execution), a prebuilt release (needed a signing and notarization pipeline; reversed by [ADR 0015](0015-signed-macos-release-in-ci.md), which adds one), a Homebrew tap (adds only `brew upgrade`), a `crosstalk install` that edits `settings.json` (writes user config; overlaps the agy installer).
 
 ## Consequences
 

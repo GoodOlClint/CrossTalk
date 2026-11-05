@@ -11,7 +11,7 @@ A stranger installs CrossTalk with `go install`, which needs Go and a build. The
 
 ## Decision
 
-Pushing a `v*` tag runs `.github/workflows/release.yml` on `macos-latest`. It checks that the tag equals `v` plus `mcpserver.Version`, builds arm64 and amd64 separately (`CGO_ENABLED=0`, `-trimpath`), joins them with `lipo` into one universal binary, signs it with a Developer ID Application certificate (`codesign --timestamp --options runtime`), zips it with `ditto`, notarizes the zip with `notarytool submit --wait` using an App Store Connect API key, verifies the signature, and publishes the zip and a SHA-256 file to the release for that tag, as a draft that is then made public (a retry may replace assets only on a draft, never on a published release), with the runner's preinstalled `gh` and the job's `GITHUB_TOKEN` (no third-party action, so there is nothing to pin by sha). The checkout uses `refs/tags/<tag>` so a branch of the same name cannot be built, and runs for one tag are serialized. A `workflow_dispatch` trigger with a required `tag` input retries a failed run without moving the tag. The build, tag check, packaging and checksum steps live in `scripts/release-build.sh`, so the local proof runs the same code the workflow runs.
+Pushing a `v*` tag runs `.github/workflows/release.yml` on `macos-latest`. The job runs only when the ref is a tag starting `v` (`if: startsWith(github.ref, 'refs/tags/v')`), and the tag is always `github.ref_name`: there is no tag input, so what is built is the tagged tree and nothing else. It checks that the tag equals `v` plus `mcpserver.Version`, or that plus `-rc.N` (a release candidate for rehearsing with real secrets; it publishes as a GitHub prerelease, and any other suffix is refused), runs `go test ./...`, builds arm64 and amd64 separately (`CGO_ENABLED=0`, `-trimpath`), joins them with `lipo` into one universal binary, signs it with a Developer ID Application certificate (`codesign --timestamp --options runtime`) and deletes the temporary keychain at once, zips it with `ditto` (the zip holds exactly one entry, `crosstalk`, checked after zipping), notarizes the zip with `notarytool submit --wait` using an App Store Connect API key (the key file is removed when the step exits), verifies the signature and the notarization (`codesign --verify --check-notarization -R=notarized`), and publishes the zip and a SHA-256 file with the runner's preinstalled `gh` and the job's `GITHUB_TOKEN` (no third-party action, so nothing to pin by sha). Publishing goes through a draft release that is then made public; a retry may replace assets only on a draft, never on a published release. The checkout uses `refs/tags/<tag>`, runs for one tag are serialized, and `setup-go` runs with `cache: false`, because `ci.yml` on main writes the same cache key and a signed build must not restore objects built by code on main. A `workflow_dispatch` trigger exists, but the job only runs when it is dispatched from a tag ref, so a retry is `gh workflow run release.yml --ref <tag>` or "Re-run failed jobs", never from `main`. The build, tag check, packaging and checksum steps live in `scripts/release-build.sh`, so the local proof runs the same code the workflow runs.
 
 The operator accepts that the Developer ID signature carries their legal name, visible on the public binary.
 
@@ -19,12 +19,12 @@ A bare Mach-O binary cannot be stapled (the notarization ticket attached to the 
 
 Public-repo secret handling:
 
-- No `pull_request` trigger. Only a tag push by someone with write access, or a manual dispatch, starts the job.
-- The job is attached to the environment `release`. The six secrets are environment secrets there, not repo secrets, so only a job that names the environment can read them.
+- No `pull_request` trigger. Only a tag push by someone with write access, or a dispatch from a tag, starts the job.
+- The job is attached to the environment `release`, and the six secrets are environment secrets there, not repo secrets. The environment's deployment rule is "Selected branches and tags" with one rule of ref type Tag and pattern `v*` and no Branch rule, set before any secret is added (a new environment has no restriction). A required reviewer is standard, so no write collaborator reaches signing unapproved.
 - Top-level `permissions: {}`; the job alone gets `contents: write`.
-- Each secret is in the `env` of the one step that needs it, never job-level. Key material is written under `RUNNER_TEMP` with `umask 077` and removed; the temporary keychain is deleted in a step with `if: always()`.
+- Each secret is in the `env` of the one step that needs it, never job-level. Key material is written under `RUNNER_TEMP` with `umask 077` and removed; the temporary keychain is deleted right after signing and again in a step with `if: always()`.
 - First-party actions are at the current major (`actions/checkout@v7`, `actions/setup-go@v7`, as `ci.yml`). Any third-party action added later is pinned to a full commit sha.
-- The operator sets a tag-protection ruleset for `v*` limited to maintainers, and limits the environment's deployment branches and tags to `v*`.
+- A tag ruleset on `refs/tags/v*`, Active, restricts creation, update and deletion and blocks force pushes, with bypass for Repository admin only.
 
 ## Rejected alternatives
 
@@ -38,23 +38,29 @@ Public-repo secret handling:
 
 - The first run is unproven. Nothing here has run with real credentials: the local proof covers the build, `lipo`, version check, zip, checksum and an ad hoc signature, not the certificate import, the notarization status or `spctl`. Watch on the first run: the certificate import step, the `notarytool` status (must be `Accepted`), the `spctl` line (a bare binary may print "rejected"; the check that counts is `codesign --verify --strict`), `lipo -archs` (both `arm64` and `x86_64`), and the release assets `crosstalk-<tag>-macos-universal.zip` and `.zip.sha256`.
 - A release needs the Mac-only toolchain on the runner (`codesign`, `notarytool`, `lipo`); `macos-latest` provides it.
-- A run that fails before publish leaves no release, or a draft; rerun with `workflow_dispatch` and the same tag. A published release is never overwritten: fix by deleting it by hand and rerunning.
+- A run that fails before publish leaves no release, or a draft; rerun from the tag as above. A published release is never overwritten: delete it by hand and rerun. A tag is public to the Go module proxy at once, so a fix to `release.yml` needs a new tag (a new `-rc.N`, or a bumped version), not a moved one. Rehearse with `v0.1.2-rc.1` before the real `v0.1.2`.
+- The x86_64 slice is built and inspected but has never been executed (the runner is arm64).
 - Linux binaries are not built.
 
 ## Operator setup
 
-Nothing here is set by the repo. Create these as environment secrets in the `release` environment (Settings, Environments):
+Nothing here is set by the repo. In order:
 
-- `APPLE_CERT_P12`: the Developer ID Application certificate and its private key exported from Keychain Access as a `.p12`, then `base64 -i cert.p12`.
-- `APPLE_CERT_PASSWORD`: the password chosen at that export.
-- `APPLE_CODESIGN_IDENTITY`: the identity string from `security find-identity -v -p codesigning`, for example `Developer ID Application: Name (TEAMID)`.
-- `AC_API_KEY_P8`: the App Store Connect API key file (`.p8`), `base64 -i AuthKey_XXXX.p8`.
-- `AC_API_KEY_ID`: that key's id.
-- `AC_API_ISSUER`: the issuer id shown on the App Store Connect keys page.
-
-Environment rules: deployment branches and tags limited to `v*`; optionally a required reviewer. Add a tag protection ruleset for `v*` limited to maintainers. Actions permissions: the repo's workflow token default can stay read-only, since the job asks for `contents: write` itself.
+1. Create the environment `release` (Settings, Environments). Before adding any secret, set Deployment branches and tags to "Selected branches and tags" with one rule of ref type Tag, pattern `v*`, and no Branch rule. Add a required reviewer (yourself).
+2. Add these environment secrets in `release`, not repo secrets. Pipe base64 output to `pbcopy` rather than the terminal.
+   - `APPLE_CERT_P12`: the Developer ID Application certificate and its private key exported from Keychain Access as a `.p12`, then `base64 -i cert.p12 | pbcopy`.
+   - `APPLE_CERT_PASSWORD`: the password chosen at that export.
+   - `APPLE_CODESIGN_IDENTITY`: the identity string from `security find-identity -v -p codesigning`, for example `Developer ID Application: Name (TEAMID)`.
+   - `AC_API_KEY_P8`: the App Store Connect API key file (`.p8`), `base64 -i AuthKey_XXXX.p8 | pbcopy`. Create it as a Team key with the Developer role (unverified: check the role Apple requires).
+   - `AC_API_KEY_ID`: that key's id.
+   - `AC_API_ISSUER`: the issuer id shown on the App Store Connect keys page.
+3. Delete the local `.p12` and `.p8` copies after upload.
+4. Add a tag ruleset: target `refs/tags/v*`, Active, restrict creations, updates and deletions, block force pushes, bypass Repository admin only, no App.
+5. Actions permissions: the repo's workflow token default can stay read-only, since the job asks for `contents: write` itself.
+6. Rehearse: push `v0.1.2-rc.1` (it publishes a prerelease), watch the run, then tag the real `v0.1.2` only after an rc run succeeds.
 
 ## Trial record
 
 - Rests on: ADR 0013 (the binary the plugins start).
-- Local proof (2026-11-05): `scripts/release-build.sh` build, package and tag checks run with signing skipped; ad hoc `codesign` and `--verify --strict` on the universal binary; `actionlint` clean.
+- Local proof (2026-11-05): `scripts/release-build.sh` build, package, zip listing, checksum and tag checks run with signing skipped; ad hoc `codesign` and `--verify --strict` on the universal binary; the `setup.md` download commands run against a local zip in a scratch HOME; `actionlint` and `shellcheck` clean.
+- Verifier and Codex reviews of the first version drove the dispatch, cache, zip-layout and operator-list changes above.
