@@ -16,6 +16,9 @@ jobs:
   release:
     runs-on: macos-latest
     environment: release
+    concurrency:
+      group: release-${{ inputs.tag || github.ref_name }}
+      cancel-in-progress: false
     timeout-minutes: 60
     permissions:
       contents: write
@@ -24,7 +27,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.tag || github.ref_name }}
+          ref: refs/tags/${{ inputs.tag || github.ref_name }}
           persist-credentials: false
       - uses: actions/setup-go@v7
         with:
@@ -100,11 +103,17 @@ jobs:
         run: |
           set -eu
           files=("$RUNNER_TEMP/dist/crosstalk-$TAG-macos-universal.zip" "$RUNNER_TEMP/dist/crosstalk-$TAG-macos-universal.zip.sha256")
-          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1; then
-            gh release upload "$TAG" "${files[@]}" --clobber --repo "$GITHUB_REPOSITORY"
+          repo="$GITHUB_REPOSITORY"
+          if gh release view "$TAG" --repo "$repo" > /dev/null 2>&1; then
+            [ "$(gh release view "$TAG" --repo "$repo" --json isDraft --jq .isDraft)" = true ] || {
+              echo "release $TAG is already published; not replacing its assets" >&2
+              exit 1
+            }
+            gh release upload "$TAG" "${files[@]}" --clobber --repo "$repo"
           else
-            gh release create "$TAG" "${files[@]}" --verify-tag --generate-notes --title "$TAG" --repo "$GITHUB_REPOSITORY"
+            gh release create "$TAG" "${files[@]}" --draft --verify-tag --generate-notes --title "$TAG" --repo "$repo"
           fi
+          gh release edit "$TAG" --draft=false --repo "$repo"
       - name: Remove keychain and key files
         if: always()
         run: |
