@@ -27,3 +27,5 @@ Sender identity comes from transport evidence only: the unix peer pid matched to
 - The same-user credential model is accepted as not being isolation from hostile same-user processes.
 - Every ingress runs the same chain: authenticate, dedupe, hop-chain, policy, inject.
 - Tests 8, 9, 14 and 23 in the design doc gate this ADR; test 23 pins that a `command` gains no approval or setting the receiving session did not already have.
+- `crosstalk send` (wave 2, 2026-11-04) lets a plain script message a registered agent through the uds auth shape: the script holds the same-user key but is no registered agent, so its sender is unverified and its kind is `inform`; ask and command are rejected as for any unverified sender.
+- No message limit (wave 2, ADR 0014): kinds are routing hints, and nothing refuses a send for volume. A per-peer nudge in the send result asks the model to check its own progress. It misses fan-out (one message to many peers, each below the threshold), restarts (the count resets), failed sends (not counted), `crosstalk send` and any client that goes around the shim, native bounces, and Claude's own SendMessage.

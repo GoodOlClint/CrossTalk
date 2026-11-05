@@ -33,3 +33,4 @@ The `uncorrelated` state is replaced by `bounced` (mailbox only). The receiver's
 - A model that answers a bounce natively gets another bounce; each needs a model turn, so this is bounded by the model, not by the shim. The bounce text says not to reply to it natively.
 - Codex is unaffected (no native path; `NativeReplyAddress` is empty). A future harness with a native reply path gets this behaviour for free.
 - Supersedes the native-routing part of design F4/F6; ADR 0004 (trust model) unchanged.
+- Wave 2 (2026-11-04, operator ruling): the MCP send path starts a fresh hop chain for every send, and no message limit exists. Loops, including over native delivery (no chain), get a per-peer nudge in the send result (ADR 0014; design §4). A model answering a native bounce natively is outside it.

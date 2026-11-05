@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/GoodOlClint/crosstalk/internal/adapter"
+	"github.com/GoodOlClint/crosstalk/internal/harness"
 	"github.com/GoodOlClint/crosstalk/internal/journal"
 	"github.com/GoodOlClint/crosstalk/internal/mcpserver"
 	"github.com/GoodOlClint/crosstalk/internal/msg"
@@ -25,9 +26,19 @@ const (
 	ReasonAlreadyReplied = "already_replied"
 )
 
+// NudgeFirst is the send count to one peer at which a result first asks the
+// model to check whether the exchange is progressing; then it doubles. The
+// numbers are guesses, and the nudge refuses nothing.
+const NudgeFirst = 30
+
+const nudgeText = "You have sent this peer %d messages since this server started. This is a count, not a finding. Check whether your last few messages added anything new or moved work forward: if not, you may stop sending and tell your user what is stuck; if work is progressing, carry on. An ask you hold still takes its reply."
+
 const (
 	hintNativeReachable   = "This session has no CrossTalk binding yet, so it takes no ask or command. send_message with the default kind reaches it; if CrossTalk is installed there, its first CrossTalk call binds it, and then ask works."
 	hintNativeUnreachable = "This session has no CrossTalk binding yet and its harness reports it unreachable, so nothing can reach it now. Check list_agents later; if CrossTalk is installed there, its first CrossTalk call binds it, and then ask works."
+	hintNativeOneWay      = "Delivered one way to a session with no CrossTalk binding. An answer may never come, or may wait on that session's user."
+	hintNoRouteUnbound    = "This session has no message with that id: check the message_id against receive_message, or it arrived before this session bound. Use send_message to the sender."
+	hintNoRouteExpired    = "That inform has no open reply route: it was not delivered, it was already answered, or it is over an hour old. Use send_message to the sender."
 	hintAmbiguousName     = "Several sessions carry this name. Find the one you mean in list_agents and address it by agent_id."
 )
 
@@ -126,6 +137,41 @@ func (st *AgentState) newMessage(to string, k msg.Kind, d msg.Delivery, text str
 	}
 }
 
+func nudgeAt(n int) bool {
+	for t := NudgeFirst; t <= n; t *= 2 {
+		if t == n {
+			return true
+		}
+	}
+	return false
+}
+
+// countSend counts a send to peer unless it came back rejected or
+// unreachable, and returns the nudge hint when the count reaches a
+// threshold. Counts are in memory, per agent and per peer; a restart resets
+// them.
+func (st *AgentState) countSend(peer string, state adapter.State) string {
+	if state == adapter.Rejected || state == adapter.Unreachable {
+		return ""
+	}
+	st.mu.Lock()
+	st.sends[peer]++
+	n := st.sends[peer]
+	st.mu.Unlock()
+	if !nudgeAt(n) {
+		return ""
+	}
+	st.agent.Journal().Append(journal.Record{Type: journal.TypeNudge, To: peer, Count: n})
+	return fmt.Sprintf(nudgeText, n)
+}
+
+func joinHint(a, b string) string {
+	if a == "" || b == "" {
+		return a + b
+	}
+	return a + " " + b
+}
+
 func (st *AgentState) outbound(m msg.Message, to string, state adapter.State, reason string, withBody bool) error {
 	return st.outboundTask(m, to, state, reason, withBody, "")
 }
@@ -208,6 +254,7 @@ func (st *AgentState) deliver(ctx context.Context, m msg.Message) mcpserver.Resu
 		state, reason, taskID := st.viaTransport(ctx, d, m)
 		st.outboundTask(m, d.AgentID, state, reason, false, taskID)
 		res.State, res.Reason = state, reason
+		res.Hint = st.countSend(d.AgentID, state)
 		return res
 	}
 	if m.Kind != msg.Inform {
@@ -242,7 +289,12 @@ func (st *AgentState) deliver(ctx context.Context, m msg.Message) mcpserver.Resu
 	if err != nil {
 		reason = err.Error()
 	}
-	return finish(to, state, reason)
+	res = finish(to, state, reason)
+	if reason == "" && (state == adapter.Accepted || state == adapter.Queued) {
+		res.Hint = hintNativeOneWay
+	}
+	res.Hint = joinHint(res.Hint, st.countSend(to, state))
+	return res
 }
 
 func (s *Shim) Send(ctx context.Context, from *mcpserver.Agent, req mcpserver.SendRequest) (mcpserver.Result, error) {
@@ -445,7 +497,7 @@ func (s *Shim) Reply(ctx context.Context, from *mcpserver.Agent, messageID, text
 	defer st.replyMu.Unlock()
 	orig, key, ok := st.inbound(messageID)
 	if !ok {
-		return mcpserver.Result{}, &mcpserver.Error{Code: mcpserver.CodeInvalid, Reason: ReasonNoSuchMessage}
+		return mcpserver.Result{}, &mcpserver.Error{Code: mcpserver.CodeInvalid, Reason: ReasonNoSuchMessage, Hint: hintNoRouteUnbound}
 	}
 	if key == receiver.LabelUnverified {
 		return mcpserver.Result{}, &mcpserver.Error{Code: string(adapter.Unreachable), Reason: ReasonSenderUnverified}
@@ -466,7 +518,7 @@ func (s *Shim) Reply(ctx context.Context, from *mcpserver.Agent, messageID, text
 		return mcpserver.Result{}, askClosed(orig)
 	}
 	if mcpserver.IsAgentID(key) && orig.Kind != msg.Ask && !st.rcv.RouteOpen(orig.MessageID) {
-		return mcpserver.Result{}, &mcpserver.Error{Code: mcpserver.CodeInvalid, Reason: ReasonNoSuchMessage}
+		return mcpserver.Result{}, &mcpserver.Error{Code: mcpserver.CodeInvalid, Reason: ReasonNoSuchMessage, Hint: hintNoRouteExpired}
 	}
 	r := st.newMessage(orig.From, msg.Inform, msg.Immediate, text)
 	irt, ctxID := st.replyTarget(orig)
@@ -474,7 +526,11 @@ func (s *Shim) Reply(ctx context.Context, from *mcpserver.Agent, messageID, text
 	if err := st.agent.Journal().Append(st.obligation(r, key, journal.StatePending, true, taskID)); err != nil {
 		return mcpserver.Result{}, err
 	}
-	return st.completeReply(ctx, orig, r, key, taskID, journal.StatePending)
+	res, err := st.completeReply(ctx, orig, r, key, taskID, journal.StatePending)
+	if err == nil {
+		res.Hint = joinHint(res.Hint, st.countSend(key, res.State))
+	}
+	return res, err
 }
 
 // Obligation stages after pending (journal.StatePending): the ask's task is
@@ -627,6 +683,9 @@ func (s *Shim) Mailbox(ctx context.Context, of *mcpserver.Agent, after string, l
 		me := mcpserver.MailboxEntry{Direction: e.Direction, MessageID: e.MessageID, TaskID: e.TaskID, InReplyTo: e.InReplyTo, From: e.From, To: e.To, Reason: e.Reason, State: adapter.State(e.State), InstanceID: e.InstanceID, SessionRef: e.SessionRef}
 		if e.Message != nil {
 			me.Text = e.Message.Text()
+			if n, ok := st.harness.(harness.Noticer); ok {
+				me.Notice = n.Notice()
+			}
 		}
 		out = append(out, me)
 	}

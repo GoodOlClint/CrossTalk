@@ -1,9 +1,15 @@
 package shim
 
 import (
+	"errors"
 	"os"
 	"strings"
+	"sync"
 	"testing"
+	"time"
+
+	"github.com/GoodOlClint/crosstalk/internal/adapter"
+	"github.com/GoodOlClint/crosstalk/internal/harness/codex"
 )
 
 func TestNativeInformOnlyCarriesHonestHint(t *testing.T) {
@@ -107,5 +113,79 @@ func TestReplyToFirstContactInformHintsSendMessage(t *testing.T) {
 	_, out := nb.call(thread("T-bob"), "reply", map[string]any{"message_id": id, "text": "hi"})
 	if h, _ := out["hint"].(string); out["reason"] != ReasonNoSuchMessage || !strings.Contains(h, "send_message") {
 		t.Fatalf("reply %v", out)
+	}
+}
+
+func TestNoSuchMessageHintsAreTrueOnEveryPath(t *testing.T) {
+	w := newWorld(t)
+	alice := w.claude(4001, "sess-alice", "alice")
+	w.codex.addThread("T-bob", "bob")
+	t0 := time.Date(2026, 11, 3, 13, 0, 0, 0, time.UTC)
+	var mu sync.Mutex
+	now := t0
+	clock := func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+	na := w.node(alice.pid, w.lb, nil)
+	nb := w.node(1, w.lb, func(o *Options) { o.Now = clock })
+	nb.ok(thread("T-bob"), "receive_message", map[string]any{})
+	hint := func(id any) string {
+		_, out := nb.call(thread("T-bob"), "reply", map[string]any{"message_id": id, "text": "x"})
+		if out["reason"] != ReasonNoSuchMessage {
+			t.Fatalf("reply %v: %v", id, out)
+		}
+		h, _ := out["hint"].(string)
+		return h
+	}
+
+	if h := hint("mistyped-id"); strings.Contains(h, "nothing expired") || strings.Contains(h, "arrived before this session bound, so") || !strings.Contains(h, "check the message_id") || !strings.Contains(h, "send_message") {
+		t.Fatalf("unknown id hint %q", h)
+	}
+
+	w.codex.ScriptInject(adapter.Outcome{State: adapter.Unreachable, Err: errors.New("down")})
+	failed := na.ok(nil, "send_message", send("bob", "never injected"))["message_id"]
+	if h := hint(failed); strings.Contains(h, "one hour") || !strings.Contains(h, "no open reply route") || !strings.Contains(h, "send_message") {
+		t.Fatalf("closed route hint %q", h)
+	}
+
+	old := na.ok(nil, "send_message", send("bob", "fyi"))["message_id"]
+	mu.Lock()
+	now = now.Add(61 * time.Minute)
+	mu.Unlock()
+	if h := hint(old); !strings.Contains(h, "no open reply route") || !strings.Contains(h, "send_message") {
+		t.Fatalf("expired hint %q", h)
+	}
+}
+
+func TestAcceptedNativeSendWarnsOneWay(t *testing.T) {
+	w := newWorld(t)
+	alice := w.claude(4001, "sess-alice", "alice")
+	w.claude(4002, "sess-bob", "bob")
+	na := w.node(alice.pid, nil, nil)
+	res := na.ok(nil, "send_message", send("bob", "fyi"))
+	if res["state"] != "accepted" {
+		t.Fatalf("send %v", res)
+	}
+	if h, _ := res["hint"].(string); !strings.Contains(h, "one way") || !strings.Contains(h, "wait on that session's user") {
+		t.Fatalf("hint %q", h)
+	}
+}
+
+func TestPulledMessageCarriesHarnessNotice(t *testing.T) {
+	w := newWorld(t)
+	alice := w.claude(4001, "sess-alice", "alice")
+	w.codex.addThread("T-bob", "bob")
+	na := w.node(alice.pid, w.lb, nil)
+	nb := w.node(1, w.lb, nil)
+	na.ok(nil, "receive_message", map[string]any{})
+	nb.ok(thread("T-bob"), "receive_message", map[string]any{})
+	w.codex.ScriptInject(adapter.Outcome{State: adapter.Unreachable, Err: errors.New("down")})
+	na.ok(nil, "send_message", send("bob", "please read README.md"))
+
+	es := nb.ok(thread("T-bob"), "receive_message", map[string]any{})["messages"].([]any)
+	if len(es) != 1 {
+		t.Fatalf("mailbox %v", es)
+	}
+	e := es[0].(map[string]any)
+	if e["notice"] != codex.Preamble || !strings.Contains(e["text"].(string), "README") {
+		t.Fatalf("entry %v", e)
 	}
 }

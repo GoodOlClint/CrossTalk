@@ -33,17 +33,19 @@ type Result struct {
 }
 
 type MailboxEntry struct {
-	Direction  string        `json:"direction"`
-	MessageID  string        `json:"message_id"`
-	TaskID     *string       `json:"task_id"`
-	InReplyTo  *string       `json:"in_reply_to"`
-	From       string        `json:"from"`
-	To         string        `json:"to,omitempty"`
-	State      adapter.State `json:"state"`
-	Reason     string        `json:"reason,omitempty"`
-	Text       string        `json:"text,omitempty"`
-	InstanceID string        `json:"instance_id"`
-	SessionRef string        `json:"session_ref"`
+	Direction string        `json:"direction"`
+	MessageID string        `json:"message_id"`
+	TaskID    *string       `json:"task_id"`
+	InReplyTo *string       `json:"in_reply_to"`
+	From      string        `json:"from"`
+	To        string        `json:"to,omitempty"`
+	State     adapter.State `json:"state"`
+	Reason    string        `json:"reason,omitempty"`
+	Text      string        `json:"text,omitempty"`
+	// Notice is the harness's warning that Text is peer text with no operator authority.
+	Notice     string `json:"notice,omitempty"`
+	InstanceID string `json:"instance_id"`
+	SessionRef string `json:"session_ref"`
 }
 
 // Session is one harness session a Backend can see.

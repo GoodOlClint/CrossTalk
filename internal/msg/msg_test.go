@@ -154,17 +154,11 @@ func TestHop(t *testing.T) {
 
 func TestHopChainOverflow(t *testing.T) {
 	var chain []string
-	var err error
 	for i := range MaxHops {
-		if chain, err = AppendHop(chain, Hop(string(rune('A'+i)))); err != nil {
-			t.Fatalf("hop %d: %v", i, err)
-		}
+		chain = append(chain, Hop(string(rune('A'+i))))
 	}
 	if err := CheckHopChain(chain); err != nil {
 		t.Fatalf("32 hops rejected: %v", err)
-	}
-	if _, err := AppendHop(chain, Hop("overflow")); !errors.Is(err, ErrHopOverflow) {
-		t.Fatalf("33rd hop: %v", err)
 	}
 	if err := CheckHopChain(append(slices.Clone(chain), Hop("x"))); !errors.Is(err, ErrHopOverflow) {
 		t.Fatalf("33 entries: %v", err)
@@ -174,20 +168,8 @@ func TestHopChainOverflow(t *testing.T) {
 // Test 7 core: A→B→A is rejected at the repeat.
 func TestHopChainLoop(t *testing.T) {
 	a, b := Hop("A"), Hop("B")
-	chain, _ := AppendHop(nil, a)
-	chain, _ = AppendHop(chain, b)
-	if _, err := AppendHop(chain, a); !errors.Is(err, ErrHopRepeat) {
+	if err := CheckHopChain([]string{a, b, a}); !errors.Is(err, ErrHopRepeat) {
 		t.Fatalf("loop not detected: %v", err)
-	}
-}
-
-func TestAppendHopDoesNotAlias(t *testing.T) {
-	base := make([]string, 1, 4)
-	base[0] = Hop("a")
-	x, _ := AppendHop(base, Hop("b"))
-	y, _ := AppendHop(base, Hop("c"))
-	if x[1] == y[1] {
-		t.Fatal("AppendHop aliased the input slice")
 	}
 }
 

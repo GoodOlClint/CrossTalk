@@ -520,3 +520,59 @@ func TestAppendRefusesOverLimitRecord(t *testing.T) {
 		t.Fatalf("journal unusable after refusal: %v", err)
 	}
 }
+
+func TestNudgeRecordReplaysAndIsKept(t *testing.T) {
+	dir := t.TempDir()
+	j, _ := open(t, dir, Options{})
+	if err := j.Append(Record{Type: TypeNudge, To: "peer-1", Count: 30}); err != nil {
+		t.Fatal(err)
+	}
+	if err := j.Append(Record{Type: TypeNudge, To: "peer-1", Count: 60}); err != nil {
+		t.Fatal(err)
+	}
+	j.Close()
+	j2, _ := open(t, dir, Options{})
+	rs, err := j2.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []int
+	for _, r := range rs {
+		if r.Type == TypeNudge && r.To == "peer-1" {
+			got = append(got, r.Count)
+		}
+	}
+	if len(got) != 2 || got[0] != 30 || got[1] != 60 {
+		t.Fatalf("replayed nudges %v", got)
+	}
+}
+
+func TestNudgeRecordsSurviveRetention(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return now }
+	j, _ := open(t, dir, Options{Now: clock})
+	j.Append(Record{Type: TypeNudge, To: "peer-1", Count: 30})
+	j.Append(Record{Type: TypeNudge, To: "peer-1", Count: 60})
+	j.Accept("alice", "old-done", "accepted")
+	j.Close()
+
+	now = now.Add(25 * time.Hour)
+	j2, _ := open(t, dir, Options{Now: clock})
+	if _, ok := j2.Dedupe("alice", "old-done"); ok {
+		t.Fatal("retention did not run")
+	}
+	rs, err := j2.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, r := range rs {
+		if r.Type == TypeNudge {
+			n++
+		}
+	}
+	if n != 2 {
+		t.Fatalf("%d nudge records after 25h, want 2", n)
+	}
+}

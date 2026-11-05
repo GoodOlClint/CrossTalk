@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"time"
 )
@@ -31,6 +32,7 @@ const (
 	TypeClaim      Type = "claim"
 	TypeOutbound   Type = "outbound"
 	TypeReceipt    Type = "receipt"
+	TypeNudge      Type = "nudge"
 )
 
 const (
@@ -74,6 +76,7 @@ func (b Binding) SameConversation(o Binding) bool {
 //	obligation: MessageID (the reply), InReplyTo, To, TaskID, State pending|completed|released|delivered, or closed (the ask closed first); the first carries Message
 //	claim:      Owner (agent_id), Claimed
 //	outbound:   MessageID, To (agent_id, harness:session_ref, or an unresolved name), Kind, State, Reason, TaskID (far side's), ContextID; the first carries Message, whose deadline_seconds and sent_at fix an ask's deadline
+//	nudge:      To (the peer), Count (sends to it when the nudge fired); kept past retention, since it is the record of how often the nudge fires
 //	receipt:    MessageID (an admitted inbound reply), InReplyTo (the outbound ask it answers), Sender (the ask's peer agent_id), ContextID (the ask's)
 type Record struct {
 	Type      Type       `json:"type"`
@@ -93,6 +96,7 @@ type Record struct {
 	ContextID string     `json:"context_id,omitempty"`
 	Delivery  string     `json:"delivery,omitempty"`
 	Reason    string     `json:"reason,omitempty"`
+	Count     int        `json:"count,omitempty"`
 	Text      string     `json:"text,omitempty"`
 	Deadline  *time.Time `json:"deadline,omitempty"`
 	// Message is the normalized message a dedupe record was accepted with,
@@ -119,6 +123,8 @@ func (r Record) key() string {
 		return "s\x00" + r.MessageID
 	case TypeReceipt:
 		return "p\x00" + r.InReplyTo + "\x00" + r.MessageID
+	case TypeNudge:
+		return "n\x00" + r.To + "\x00" + strconv.Itoa(r.Count)
 	}
 	return "?\x00" + string(r.Type)
 }
@@ -147,6 +153,8 @@ func unresolved(latest Record) bool {
 		return latest.State != StateDelivered && latest.State != StateClosed
 	case TypeClaim:
 		return latest.Claimed
+	case TypeNudge:
+		return true
 	}
 	return false
 }

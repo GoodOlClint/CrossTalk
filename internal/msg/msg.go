@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
-	"slices"
 	"strings"
 	"time"
 )
@@ -143,16 +142,4 @@ func CheckHopChain(chain []string) error {
 		seen[h] = struct{}{}
 	}
 	return nil
-}
-
-// AppendHop returns chain with hop appended, without aliasing chain's backing array.
-func AppendHop(chain []string, hop string) ([]string, error) {
-	if slices.Contains(chain, hop) {
-		return nil, ErrHopRepeat
-	}
-	out := append(slices.Clip(chain), hop)
-	if err := CheckHopChain(out); err != nil {
-		return nil, err
-	}
-	return out, nil
 }

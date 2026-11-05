@@ -109,6 +109,11 @@ func (a *Adapter) connect(ctx context.Context, ep string) (*appserver.Client, er
 	return c, nil
 }
 
+// EndpointProbeTimeout bounds the connect, initialize and thread listing of
+// one endpoint during registration, so a server that accepts a connection
+// and never answers cannot stall a session that lives elsewhere.
+var EndpointProbeTimeout = 5 * time.Second
+
 type host struct {
 	endpoint string
 	version  string
@@ -120,14 +125,17 @@ type host struct {
 func (a *Adapter) hosts(ctx context.Context, threadID string) []host {
 	var hs []host
 	for _, ep := range a.KnownEndpoints() {
-		c, err := a.connect(ctx, ep)
+		ectx, cancel := context.WithTimeout(ctx, EndpointProbeTimeout)
+		c, err := a.connect(ectx, ep)
 		if err != nil {
+			cancel()
 			a.logger().Debug("codex: endpoint unavailable", "endpoint", ep, "err", err)
 			continue
 		}
-		ids, err := c.LoadedThreads(ctx)
+		ids, err := c.LoadedThreads(ectx)
 		v := c.ServerVersion()
 		c.Close()
+		cancel()
 		if err != nil {
 			a.logger().Debug("codex: thread/loaded/list failed", "endpoint", ep, "err", err)
 			continue

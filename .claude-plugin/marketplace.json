@@ -9,7 +9,7 @@
       "name": "crosstalk",
       "source": "./plugins/crosstalk",
       "description": "Message other running agent sessions (Claude Code, Codex) on this Mac by name.",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "author": {
         "name": "GoodOlClint"
       },

@@ -96,6 +96,8 @@ func (h *Harness) Discover(ctx context.Context) ([]harness.Session, error) {
 	return out, nil
 }
 
+func (h *Harness) Notice() string { return Preamble }
+
 func (h *Harness) Render(m msg.Message, from harness.Identity) any {
 	return Render(m, from.Verified, from.Harness)
 }

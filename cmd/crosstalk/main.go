@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -27,6 +28,7 @@ const usage = `usage: crosstalk <command>
 
 commands:
   mcp      run the shim as an MCP server over stdio
+  send     send a text to an agent by name, for plain scripts
   capture  record raw Codex app-server frames for fixtures
   version  print the version
 `
@@ -39,6 +41,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	switch args[0] {
 	case "mcp":
 		return runMCP(stderr)
+	case "send":
+		return runSend(args[1:], os.Stdin, stdout, stderr)
 	case "capture":
 		return runCapture(args[1:], stdout, stderr)
 	case "version":
@@ -60,12 +64,25 @@ func harnesses(stateDir string) ([]harness.Harness, error) {
 	if err != nil {
 		return nil, err
 	}
+	ci := appserver.ClientInfo{Name: "crosstalk", Version: mcpserver.Version}
 	cx := codex.NewHarness(codex.HarnessOptions{
+		Adapter:    &codex.Adapter{Logger: slog.Default(), ClientInfo: ci, Endpoints: endpointList(os.Getenv("CROSSTALK_CODEX_ENDPOINTS"))},
 		Logger:     slog.Default(),
-		ClientInfo: appserver.ClientInfo{Name: "crosstalk", Version: mcpserver.Version},
+		ClientInfo: ci,
 		Directory:  registry.New(stateDir),
 	})
 	return []harness.Harness{cx, cl}, nil
+}
+
+// endpointList splits a comma-separated list; ws:// endpoints contain colons.
+func endpointList(v string) []string {
+	var out []string
+	for _, e := range strings.Split(v, ",") {
+		if e = strings.TrimSpace(e); e != "" {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 func runMCP(stderr io.Writer) int {
