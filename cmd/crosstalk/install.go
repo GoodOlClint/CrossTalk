@@ -186,7 +186,7 @@ func runInstall(mode string, args []string, in io.Reader, tty bool, stdout, stde
 		groups = append(groups, group{t.name, steps})
 	}
 	if mode == "uninstall" {
-		groups = append(groups, group{"crosstalk", installRemoveSteps(o, all, targets, env, stateDir, brewBin, stdout)})
+		groups = append(groups, group{"crosstalk", installRemoveSteps(o, all, targets, env, stateDir, stdout)})
 	}
 	if !tty && !o.yes {
 		for _, g := range groups {
@@ -283,7 +283,7 @@ func installKeep(all, targets []installTarget, env harness.InstallEnv, setUp boo
 
 // installRemoveSteps delete the binary and, with --purge, the state dir,
 // each only when no other harness still runs the binary.
-func installRemoveSteps(o installOpts, all, targets []installTarget, env harness.InstallEnv, stateDir, brewBin string, w io.Writer) []harness.Step {
+func installRemoveSteps(o installOpts, all, targets []installTarget, env harness.InstallEnv, stateDir string, w io.Writer) []harness.Step {
 	steps := []harness.Step{{
 		Title:  "binary",
 		Change: "delete " + env.Bin + " and the PATH lines install marked, unless another harness still runs it",
@@ -295,7 +295,7 @@ func installRemoveSteps(o installOpts, all, targets []installTarget, env harness
 			if err := installRemovePath(installPathFiles(runtime.GOOS, env.Home), installPathLine(filepath.Dir(env.Bin))); err != nil {
 				return err
 			}
-			if env.Bin == brewBin {
+			if _, _, brew := installHomebrew(env.Bin); brew {
 				fmt.Fprintf(w, "    Homebrew owns %s; run brew uninstall crosstalk\n", env.Bin)
 				return nil
 			}

@@ -243,3 +243,44 @@ func TestUninstallPurgeKeepsStateForOtherBinary(t *testing.T) {
 		t.Errorf("output does not say why the state stays:\n%s", out)
 	}
 }
+
+func TestUninstallPurgeCodexOnly(t *testing.T) {
+	home := installSandbox(t, "codex")
+	_, _, state := installUserFiles(t, home)
+	bin := filepath.Join(home, "bin")
+	if code, out := installRunCmd(t, "install", "--yes", "--bin-dir", bin); code != 0 {
+		t.Fatalf("install: %d\n%s", code, out)
+	}
+	code, out := installRunCmd(t, "uninstall", "codex", "--purge", "--yes", "--bin-dir", bin)
+	if code != 0 {
+		t.Fatalf("uninstall: %d\n%s", code, out)
+	}
+	if _, err := os.Stat(state); !os.IsNotExist(err) {
+		t.Errorf("state dir kept with no claude on PATH and nothing else set up: %v\n%s", err, out)
+	}
+}
+
+func TestUninstallHomebrewKeepsBinaryWithBinDir(t *testing.T) {
+	for _, dir := range []string{filepath.Join("bin"), filepath.Join("Cellar", "crosstalk", "0.1.4", "bin")} {
+		t.Run(dir, func(t *testing.T) {
+			installSandbox(t, "claude")
+			prefix := installBrewKeg(t, "opt/homebrew", true)
+			bin := filepath.Join(prefix, dir)
+			if code, out := installRunCmd(t, "install", "--yes", "--bin-dir", bin); code != 0 {
+				t.Fatalf("install: %d\n%s", code, out)
+			}
+			code, out := installRunCmd(t, "uninstall", "--yes", "--bin-dir", bin)
+			if code != 0 {
+				t.Fatalf("uninstall: %d\n%s", code, out)
+			}
+			for _, p := range []string{filepath.Join(prefix, "bin", "crosstalk"), filepath.Join(prefix, "Cellar", "crosstalk", "0.1.4", "bin", "crosstalk")} {
+				if _, err := os.Lstat(p); err != nil {
+					t.Errorf("%s removed: %v", p, err)
+				}
+			}
+			if !strings.Contains(out, "brew uninstall crosstalk") {
+				t.Errorf("output does not name brew uninstall crosstalk:\n%s", out)
+			}
+		})
+	}
+}

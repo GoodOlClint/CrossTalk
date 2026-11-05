@@ -537,8 +537,21 @@ func (h *Harness) SetUp(env harness.InstallEnv) (bool, error) {
 	if e, err := userEntry(env.Home); e != nil || err != nil {
 		return true, err
 	}
-	p, err := installedPlugin(context.Background(), env)
-	return p != nil, err
+	b, err := os.ReadFile(filepath.Join(env.Home, ".claude", "plugins", "installed_plugins.json"))
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return true, err
+	}
+	var reg struct {
+		Plugins map[string]json.RawMessage `json:"plugins"`
+	}
+	if err := json.Unmarshal(b, &reg); err != nil {
+		return true, err
+	}
+	_, ok := reg.Plugins[pluginID]
+	return ok, nil
 }
 
 func (h *Harness) Checks(ctx context.Context, env harness.InstallEnv) []harness.CheckResult {
