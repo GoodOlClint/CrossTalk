@@ -21,7 +21,9 @@ Terms: shim = the `crosstalk mcp` process a harness starts. Allow rule = an entr
 - Adding the bin dir to the PATH is optional and only serves a person typing `crosstalk send`; the harnesses no longer need it.
 - Each step is shown and confirmed on a terminal; `--yes` runs every required step without asking (the PATH step needs `--path` too); without a terminal and without `--yes`, install changes nothing and exits non-zero. Every changed config file is written atomically after a backup copy next to it.
 - Install ends with checks, each reported pass or fail: the plugin is installed at the binary's version and ships no server; exactly one `crosstalk` MCP server is registered per harness; `codex mcp list` succeeds (Codex's own parser) and no `[mcp_servers.crosstalk.tools.*]` table is left without its parent; the allow rule is present and no deny rule names the prefix; the registered command is the installed path and is executable; a live MCP handshake with the registered command lists the seven tools and reports the binary's version. Install prints that running sessions keep their old server until restarted.
-- Uninstall reverses each step, including deleting the binary (the earlier "uninstall leaves the binary" default is void) once no harness registration still names it. It leaves `~/.local/state/crosstalk` (journals) in place.
+- Uninstall reverses each step, including deleting the binary (the earlier "uninstall leaves the binary" default is void) once no harness registration still names it. It keeps the plugin marketplaces and leaves `~/.local/state/crosstalk` (journals, tokens) in place; `--purge` deletes the state dir on a full uninstall (operator ruling Q5).
+- Both marketplace files pin the plugin to a release tag (`git-subdir` source on this repo, `path` `plugins/crosstalk`, `ref` `vX.Y.Z`), so a plugin install or update gets the tagged plugin, not `main` (operator ruling Q11; both CLIs confirmed live). The `ref` moves in its own commit after the release tag exists, never to an rc tag.
+- Reinstall re-applies every step with no uninstall first (Q3). Claude registration is user scope by default (Q9).
 - Harness-specific install code lives in the harness package behind an optional `harness.Installer` interface (as `NativeIngress` and `Supersession` are optional), per ADR 0008; the binary copy, PATH step, prompts and check runner live in `cmd/crosstalk`.
 
 ## Rejected alternatives
@@ -29,7 +31,7 @@ Terms: shim = the `crosstalk mcp` process a harness starts. Allow rule = an entr
 - **Keep the plugin-supplied server with a bare command (ADR 0013).** The PATH failure stays, and setup stays eight manual steps.
 - **`${HOME}/.local/bin/crosstalk` in the static plugin manifests.** Claude expands environment variables in plugin MCP config; Codex support is unknown, and any bin dir other than the default breaks.
 - **Ship the binary in the plugin repo.** About 16 MB per version in git history.
-- **README-first: the plugin README says "install this plugin, then run `crosstalk install`", and install does only settings and MCP.** Leaves the plugin and the MCP registration in two steps the user can do out of order (plugin 0.1.2 still carries a server, so a 0.1.2 plugin plus an install-registered server gives two shims). Kept as the fallback text in the plugin README and as open question Q1 of the plan.
+- **README-first: the plugin README says "install this plugin, then run `crosstalk install`", and install does only settings and MCP.** Leaves the plugin and the MCP registration in two steps the user can do out of order (plugin 0.1.2 still carries a server, so a 0.1.2 plugin plus an install-registered server gives two shims). Kept as the fallback text in the plugin README; the operator ruled for install running the plugin commands (plan Q1).
 - **A TOML library for the Codex config.** Round-tripping drops comments and reorders a file Codex itself rewrites; a bounded line edit plus `codex mcp list` as the parser check is enough.
 
 ## Consequences
@@ -38,7 +40,7 @@ Terms: shim = the `crosstalk mcp` process a harness starts. Allow rule = an entr
 - Claude tool names change prefix from `mcp__plugin_crosstalk_crosstalk__` to `mcp__crosstalk__`. Allow rules, eval graders under `plugins/crosstalk/evals/` and any other repo or settings file naming the old prefix need the new one.
 - Moving the binary needs `crosstalk reinstall`.
 - `docs/setup.md` shrinks to: download, verify, `./crosstalk install`.
-- The marketplaces serve the plugin from `main` unpinned, so the server removal, the installer and the version bump reach `main` in one merge at the release boundary. A 0.1.2 user who updates the plugin afterwards has no server until they run the 0.1.3 binary's `crosstalk install` (release notes say so; plan Q11 asks about pinning). An old plugin next to an install-registered server gives two shims; the install's "exactly one server" check catches it.
+- With the plugin pinned to a tag, plugin changes on `main` reach no user until the `ref` moves. The server removal, the installer and the version bump still merge in one PR. A 0.1.2 user who updates the plugin after the `ref` moves to `v0.1.3` has no server until they run the 0.1.3 binary's `crosstalk install` (release notes and plugin README say so). An old plugin next to an install-registered server gives two shims; the install's "exactly one server" check catches it.
 
 ## Trial record
 
