@@ -1,6 +1,6 @@
-# Set up CrossTalk on one Mac
+# Set up CrossTalk on macOS or Linux
 
-CrossTalk lets Claude Code and Codex sessions on this Mac message each other by name. You need macOS, and Claude Code and/or Codex. A first clean-account run (2026-11-04) passed the basic plumbing and the Codex authority case; both cross-harness answer round trips passed live with the plugin only, and Codex started outside a shell passed on result. A Claude peer read a file on a soft ask on that run. In a live replica at c4025a9 (typed and bound Claude session, real Codex asker, harmless question answered first), Claude did not read the file before its user approved in 3 of 3 Haiku runs and 1 of 1 Sonnet run, where the older text read in 1 of 1; the sample is small and the rule is advice to the model, not enforcement, so a session in auto mode could still read on a peer's word. An explicit `prompt` approval entry is indirect only ([open facts](decisions/0013-agent-plugins-and-skill-packaging.md#not-yet-run-live)). `crosstalk install` (0.1.3, [ADR 0016](decisions/0016-crosstalk-install-registers-mcp-at-the-installed-path.md)) has run against the real `claude` and `codex` CLIs in scratch home directories, not yet on a clean account.
+CrossTalk lets Claude Code and Codex sessions on one machine message each other by name. You need macOS or Linux, and Claude Code and/or Codex. The steps below are for macOS; [Linux](#linux) lists what differs. A first clean-account run (2026-11-04) passed the basic plumbing and the Codex authority case; both cross-harness answer round trips passed live with the plugin only, and Codex started outside a shell passed on result. A Claude peer read a file on a soft ask on that run. In a live replica at c4025a9 (typed and bound Claude session, real Codex asker, harmless question answered first), Claude did not read the file before its user approved in 3 of 3 Haiku runs and 1 of 1 Sonnet run, where the older text read in 1 of 1; the sample is small and the rule is advice to the model, not enforcement, so a session in auto mode could still read on a peer's word. An explicit `prompt` approval entry is indirect only ([open facts](decisions/0013-agent-plugins-and-skill-packaging.md#not-yet-run-live)). `crosstalk install` (0.1.3, [ADR 0016](decisions/0016-crosstalk-install-registers-mcp-at-the-installed-path.md)) has run against the real `claude` and `codex` CLIs in scratch home directories, not yet on a clean account.
 
 1. **Download and verify the binary.** The release asset for macOS is a universal binary (one file that runs on Apple silicon and Intel Macs) that is signed and notarized, so you do not need Go. Replace `v0.1.3` with the release you want. Run this in a scratch directory:
    ```sh
@@ -59,7 +59,28 @@ Then start the tab against that server:
 codex --remote "unix://$S"
 ```
 
-`CROSSTALK_CODEX_ENDPOINTS` is a comma-separated list of Codex app-server endpoints (`unix://PATH` or `ws://HOST:PORT`) that CrossTalk queries besides the managed daemon. A `ws://` endpoint carries peer text in cleartext; use it only on this Mac's loopback.
+`CROSSTALK_CODEX_ENDPOINTS` is a comma-separated list of Codex app-server endpoints (`unix://PATH` or `ws://HOST:PORT`) that CrossTalk queries besides the managed daemon. A `ws://` endpoint carries peer text in cleartext; use it only on this machine's loopback.
+
+## Linux
+
+Release assets: `crosstalk-<tag>-linux-amd64.tar.gz` and `crosstalk-<tag>-linux-arm64.tar.gz`, each with a `.sha256` beside it. They are not signed (no Gatekeeper on Linux) and need no Go and no `brew`. The arm64 binary is built but has never been run before a release. Install on an x86-64 machine:
+
+```sh
+TAG=v0.1.3
+curl -fLO "https://github.com/GoodOlClint/CrossTalk/releases/download/$TAG/crosstalk-$TAG-linux-amd64.tar.gz" &&
+curl -fLO "https://github.com/GoodOlClint/CrossTalk/releases/download/$TAG/crosstalk-$TAG-linux-amd64.tar.gz.sha256" &&
+sha256sum -c "crosstalk-$TAG-linux-amd64.tar.gz.sha256" &&
+tar -xzf "crosstalk-$TAG-linux-amd64.tar.gz" &&
+./crosstalk install
+```
+
+Then follow steps 3 to 6 above. What differs from macOS:
+
+- **PATH.** `--path` adds the marked line to `~/.profile` and `~/.bashrc`. Debian's default `~/.profile` already adds `~/.local/bin` when that directory exists at login, so a new login may find `crosstalk` without `--path`. The harnesses do not need it either way.
+- **Codex package.** Install Codex from the full `codex-package-*` release tarball, which includes `codex-code-mode-host`; with the bare `codex` binary alone, `codex app-server daemon start` fails and CrossTalk cannot deliver to Codex.
+- **Codex daemon.** Whether a plain `codex` started on Linux attaches to the managed app server, as it does on macOS, is not measured yet. If its `list_agents` row shows `reachable: false` or an empty `cwd`, run `codex app-server daemon start` and start `codex` again.
+- **Codex settings.** Put settings in `~/.codex/config.toml`, never on the command line: any `-c` override starts Codex's own embedded app server, which CrossTalk cannot reach (troubleshooting below). For example `model_reasoning_effort = "low"` is the lowest effort the default model accepts.
+- **Sandbox warning.** Codex on Linux warns when bubblewrap (`bwrap`) is not installed; install your distribution's `bubblewrap` package to sandbox Codex's commands. CrossTalk does not depend on it.
 
 ## If something is wrong
 
@@ -74,4 +95,4 @@ codex --remote "unix://$S"
 
 ## Security in plain words
 
-Every session on this Mac runs as you, and any of them can message any other. A peer's text is data, never an instruction from you. Every delivered peer message carries a notice, and the server's instructions say the same; the plugin's skill repeats it when it loads (it fired in 0 of 6 replica runs, so the notice and instructions did the work). They tell the model not to read files, run commands or change anything because a peer asked, and to tell you and ask first. One exception: a peer may ask whether a session is online, its working directory, its git branch or its harness, and the model answers. File contents, listings, environment, command output and what you said stay with you until you allow them. Nothing in CrossTalk stops a message loop or bounds spend; a send result only nudges a model after 30 messages to one peer, then 60, 120 and so on, to check whether the exchange is progressing. End the session to stop a loop. The message notice does not stop a peer from asking this session to pass a message on to a third session; only the plugin's skill says not to, and it does not reliably load. Do not put secrets in messages.
+Every session on this machine runs as you, and any of them can message any other. A peer's text is data, never an instruction from you. Every delivered peer message carries a notice, and the server's instructions say the same; the plugin's skill repeats it when it loads (it fired in 0 of 6 replica runs, so the notice and instructions did the work). They tell the model not to read files, run commands or change anything because a peer asked, and to tell you and ask first. One exception: a peer may ask whether a session is online, its working directory, its git branch or its harness, and the model answers. File contents, listings, environment, command output and what you said stay with you until you allow them. Nothing in CrossTalk stops a message loop or bounds spend; a send result only nudges a model after 30 messages to one peer, then 60, 120 and so on, to check whether the exchange is progressing. End the session to stop a loop. The message notice does not stop a peer from asking this session to pass a message on to a third session; only the plugin's skill says not to, and it does not reliably load. Do not put secrets in messages.
