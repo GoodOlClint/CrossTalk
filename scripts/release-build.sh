@@ -64,8 +64,33 @@ package)
 	}
 	(cd "$out" && shasum -a 256 "$zip" >"$zip.sha256" && shasum -a 256 -c "$zip.sha256")
 	;;
+build-linux)
+	out="${2:?usage: release-build.sh build-linux OUTDIR}"
+	mkdir -p "$out"
+	for arch in amd64 arm64; do
+		CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath -o "$out/$NAME-linux-$arch" ./cmd/crosstalk
+	done
+	;;
+package-linux)
+	out="${2:?usage: release-build.sh package-linux OUTDIR TAG}"
+	tag="${3:?usage: release-build.sh package-linux OUTDIR TAG}"
+	for arch in amd64 arm64; do
+		tarball="$NAME-$tag-linux-$arch.tar.gz"
+		stage="$(mktemp -d)"
+		cp "$out/$NAME-linux-$arch" "$stage/$NAME"
+		chmod 755 "$stage/$NAME"
+		rm -f "$out/$tarball" "$out/$tarball.sha256"
+		COPYFILE_DISABLE=1 tar -C "$stage" -czf "$out/$tarball" "$NAME"
+		rm -rf "$stage"
+		[ "$(tar -tzf "$out/$tarball")" = "$NAME" ] || {
+			echo "tarball must contain exactly $NAME" >&2
+			exit 1
+		}
+		(cd "$out" && shasum -a 256 "$tarball" >"$tarball.sha256" && shasum -a 256 -c "$tarball.sha256")
+	done
+	;;
 *)
-	echo "usage: release-build.sh check-tag TAG | build OUTDIR | package OUTDIR TAG" >&2
+	echo "usage: release-build.sh check-tag TAG | build OUTDIR | package OUTDIR TAG | build-linux OUTDIR | package-linux OUTDIR TAG" >&2
 	exit 2
 	;;
 esac
