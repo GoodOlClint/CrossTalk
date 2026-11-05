@@ -3,7 +3,9 @@ package main
 import (
 	"archive/tar"
 	"compress/gzip"
+	"crypto/sha256"
 	"debug/elf"
+	"encoding/hex"
 	"io"
 	"os"
 	"os/exec"
@@ -196,4 +198,86 @@ func TestIsFinal(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestFormulaRender(t *testing.T) {
+	ver := mcpserver.Version
+	tag := "v" + ver
+	assets := []string{
+		"crosstalk-" + tag + "-macos-universal.zip",
+		"crosstalk-" + tag + "-linux-amd64.tar.gz",
+		"crosstalk-" + tag + "-linux-arm64.tar.gz",
+	}
+	write := func(dir string, skip string) map[string]string {
+		sums := map[string]string{}
+		for _, a := range assets {
+			body := []byte("fake " + a)
+			if err := os.WriteFile(filepath.Join(dir, a), body, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			h := sha256.Sum256(body)
+			sums[a] = hex.EncodeToString(h[:])
+			if a == skip {
+				continue
+			}
+			if err := os.WriteFile(filepath.Join(dir, a+".sha256"), []byte(sums[a]+"  "+a+"\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return sums
+	}
+
+	t.Run("render", func(t *testing.T) {
+		mac, linux := t.TempDir(), t.TempDir()
+		sums := map[string]string{}
+		for _, d := range []string{mac, linux} {
+			for k, v := range write(d, "") {
+				sums[k] = v
+			}
+		}
+		out, err := releaseScript(t, nil, "formula", tag, mac, linux)
+		if err != nil {
+			t.Fatalf("formula: %v\n%s", err, out)
+		}
+		want := []string{
+			`homepage "https://getcrosstalk.dev"`,
+			`bin.install "crosstalk"`,
+		}
+		for _, a := range assets {
+			want = append(want,
+				`url "https://github.com/GoodOlClint/CrossTalk/releases/download/`+tag+`/`+a+`"`,
+				`sha256 "`+sums[a]+`"`)
+		}
+		for _, w := range want {
+			if !strings.Contains(out, w) {
+				t.Errorf("formula lacks %s\n%s", w, out)
+			}
+		}
+		if strings.Contains(out, "version \"") {
+			t.Errorf("formula sets version explicitly; brew audit scans it from the URL\n%s", out)
+		}
+		if _, err := exec.LookPath("ruby"); err == nil {
+			cmd := exec.Command("ruby", "-c")
+			cmd.Stdin = strings.NewReader(out)
+			if o, err := cmd.CombinedOutput(); err != nil {
+				t.Errorf("ruby -c: %v\n%s", err, o)
+			}
+		}
+	})
+
+	t.Run("missing sha256", func(t *testing.T) {
+		mac, linux := t.TempDir(), t.TempDir()
+		write(mac, "")
+		write(linux, assets[2])
+		cmd := exec.Command(filepath.Join("scripts", "release-build.sh"), "formula", tag, mac, linux)
+		cmd.Dir = releaseRepoRoot(t)
+		var stdout strings.Builder
+		cmd.Stdout = &stdout
+		if err := cmd.Run(); err == nil {
+			t.Error("formula succeeded with a missing .sha256")
+		}
+		if stdout.Len() != 0 {
+			t.Errorf("stdout not empty on failure: %q", stdout.String())
+		}
+	})
 }

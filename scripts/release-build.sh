@@ -32,6 +32,18 @@ check_tag() {
 	esac
 }
 
+sha_of() {
+	h="$(awk 'NR == 1 { print $1 }' "$1")" || exit 1
+	case "$h" in
+	*[!0-9a-f]* | "") h="" ;;
+	esac
+	[ "${#h}" = 64 ] || {
+		echo "no sha256 in $1" >&2
+		exit 1
+	}
+	echo "$h"
+}
+
 case "${1:-}" in
 check-tag)
 	check_tag "${2:?usage: release-build.sh check-tag TAG}"
@@ -40,6 +52,79 @@ is-final)
 	tag="${2:?usage: release-build.sh is-final TAG}"
 	check_tag "$tag"
 	if [ "$tag" = "v$(version)" ]; then echo true; else echo false; fi
+	;;
+formula)
+	usage="usage: release-build.sh formula TAG DIST DIST_LINUX"
+	tag="${2:?$usage}"
+	dist="${3:?$usage}"
+	distlinux="${4:?$usage}"
+	case "$tag" in
+	v*[!0-9.]* | v*..* | v*. | v.* | v) bad=1 ;;
+	v*.*.*) bad= ;;
+	*) bad=1 ;;
+	esac
+	[ -z "$bad" ] || {
+		echo "formula needs a final tag vX.Y.Z, got $tag" >&2
+		exit 1
+	}
+	mac="$NAME-$tag-macos-universal.zip"
+	amd="$NAME-$tag-linux-amd64.tar.gz"
+	arm="$NAME-$tag-linux-arm64.tar.gz"
+	mac_sha="$(sha_of "$dist/$mac.sha256")"
+	amd_sha="$(sha_of "$distlinux/$amd.sha256")"
+	arm_sha="$(sha_of "$distlinux/$arm.sha256")"
+	base="https://github.com/GoodOlClint/CrossTalk/releases/download/$tag"
+	sed -e "s|@BASE@|$base|g" \
+		-e "s|@MAC@|$mac|" -e "s|@MAC_SHA@|$mac_sha|" \
+		-e "s|@AMD@|$amd|" -e "s|@AMD_SHA@|$amd_sha|" \
+		-e "s|@ARM@|$arm|" -e "s|@ARM_SHA@|$arm_sha|" <<'EOF'
+class Crosstalk < Formula
+  desc "Message other running agent sessions (Claude Code, Codex) by name"
+  homepage "https://getcrosstalk.dev"
+  license "MIT"
+
+  on_macos do
+    on_arm do
+      url "@BASE@/@MAC@"
+      sha256 "@MAC_SHA@"
+    end
+    on_intel do
+      url "@BASE@/@MAC@"
+      sha256 "@MAC_SHA@"
+    end
+  end
+
+  on_linux do
+    on_intel do
+      url "@BASE@/@AMD@"
+      sha256 "@AMD_SHA@"
+    end
+    on_arm do
+      url "@BASE@/@ARM@"
+      sha256 "@ARM_SHA@"
+    end
+  end
+
+  def install
+    bin.install "crosstalk"
+  end
+
+  def caveats
+    <<~EOS
+      Register CrossTalk with Claude Code and Codex:
+        crosstalk install
+      Run it again after `brew upgrade crosstalk` so the plugin matches the binary.
+      Before `brew uninstall crosstalk`, run:
+        crosstalk uninstall
+      Restart running Claude and Codex sessions after either.
+    EOS
+  end
+
+  test do
+    assert_equal version.to_s, shell_output("#{bin}/crosstalk version").strip
+  end
+end
+EOF
 	;;
 check-identity)
 	keychain="${2:?usage: release-build.sh check-identity KEYCHAIN}"
@@ -107,7 +192,7 @@ package-linux)
 	done
 	;;
 *)
-	echo "usage: release-build.sh check-tag TAG | is-final TAG | check-identity KEYCHAIN | build OUTDIR | package OUTDIR TAG | build-linux OUTDIR | package-linux OUTDIR TAG" >&2
+	echo "usage: release-build.sh check-tag TAG | is-final TAG | formula TAG DIST DIST_LINUX | check-identity KEYCHAIN | build OUTDIR | package OUTDIR TAG | build-linux OUTDIR | package-linux OUTDIR TAG" >&2
 	exit 2
 	;;
 esac
