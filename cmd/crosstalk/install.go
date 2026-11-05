@@ -239,17 +239,23 @@ func runInstall(mode string, args []string, in io.Reader, tty bool, stdout, stde
 	return 0
 }
 
-// installStillRegistered names the harnesses outside targets whose config
-// still runs env.Bin, whether or not their CLI is on PATH. An error means a
-// config could not be read, so the binary and state must stay.
-func installStillRegistered(all, targets []installTarget, env harness.InstallEnv) ([]string, error) {
+// installStillRegistered names the harnesses outside targets that still need
+// what uninstall would delete: with setUp, any CrossTalk setup whatever binary
+// it names, otherwise only a config that runs env.Bin. It looks at config
+// files whether or not the harness CLI is on PATH. An error means a config
+// could not be read, so the binary and state must stay.
+func installStillRegistered(all, targets []installTarget, env harness.InstallEnv, setUp bool) ([]string, error) {
 	var out []string
 	var errs []error
 	for _, t := range all {
 		if slices.ContainsFunc(targets, func(x installTarget) bool { return x.name == t.name }) {
 			continue
 		}
-		ok, err := t.in.Registered(env)
+		check := t.in.Registered
+		if setUp {
+			check = t.in.SetUp
+		}
+		ok, err := check(env)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", t.name, err))
 		}
@@ -260,13 +266,15 @@ func installStillRegistered(all, targets []installTarget, env harness.InstallEnv
 	return out, errors.Join(errs...)
 }
 
-// installKeep reports why the binary and state stay, or "" when nothing
-// else runs the binary.
-func installKeep(all, targets []installTarget, env harness.InstallEnv) string {
-	still, err := installStillRegistered(all, targets, env)
+// installKeep reports why the binary (setUp false) or the state (setUp true)
+// stays, or "" when nothing else needs it.
+func installKeep(all, targets []installTarget, env harness.InstallEnv, setUp bool) string {
+	still, err := installStillRegistered(all, targets, env, setUp)
 	switch {
 	case err != nil:
-		return "cannot tell whether another harness still runs it: " + err.Error()
+		return "cannot tell whether another harness still needs it: " + err.Error()
+	case len(still) > 0 && setUp:
+		return strings.Join(still, ", ") + " is still set up"
 	case len(still) > 0:
 		return strings.Join(still, ", ") + " still runs it"
 	}
@@ -280,7 +288,7 @@ func installRemoveSteps(o installOpts, all, targets []installTarget, env harness
 		Title:  "binary",
 		Change: "delete " + env.Bin + " and the PATH lines install marked, unless another harness still runs it",
 		Apply: func(ctx context.Context) error {
-			if why := installKeep(all, targets, env); why != "" {
+			if why := installKeep(all, targets, env, false); why != "" {
 				fmt.Fprintf(w, "    kept %s: %s\n", env.Bin, why)
 				return nil
 			}
@@ -304,7 +312,7 @@ func installRemoveSteps(o installOpts, all, targets []installTarget, env harness
 		Title:  "state",
 		Change: "delete " + stateDir + " (journals, tokens, descriptors) unless another harness is still installed or a shim is running",
 		Apply: func(ctx context.Context) error {
-			if why := installKeep(all, targets, env); why != "" {
+			if why := installKeep(all, targets, env, true); why != "" {
 				fmt.Fprintf(w, "    kept %s: %s\n", stateDir, why)
 				return nil
 			}
