@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/GoodOlClint/crosstalk/internal/mcpserver"
 )
 
 func releaseRepoRoot(t *testing.T) string {
@@ -160,6 +162,37 @@ func TestCheckIdentity(t *testing.T) {
 			out, err := releaseScript(t, []string{"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"), "APPLE_CODESIGN_IDENTITY=" + want}, "check-identity", "unused.keychain-db")
 			if (err == nil) != c.ok {
 				t.Errorf("err = %v, want ok=%v\n%s", err, c.ok, out)
+			}
+		})
+	}
+}
+
+func TestIsFinal(t *testing.T) {
+	ver := "v" + mcpserver.Version
+	cases := []struct {
+		tag  string
+		want string
+		ok   bool
+	}{
+		{ver, "true", true},
+		{ver + "-rc.1", "false", true},
+		{ver + "-rc.10", "false", true},
+		{ver + "-rc.01", "", false},
+		{ver + "-rc.", "", false},
+		{ver + "-rc.x", "", false},
+		{"v0.0.1", "", false},
+	}
+	for _, c := range cases {
+		t.Run(c.tag, func(t *testing.T) {
+			out, err := releaseScript(t, nil, "is-final", c.tag)
+			if (err == nil) != c.ok {
+				t.Fatalf("err = %v, want ok=%v\n%s", err, c.ok, out)
+			}
+			if c.ok && strings.TrimSpace(out) != c.want {
+				t.Errorf("stdout %q, want %q", out, c.want)
+			}
+			if !c.ok && strings.Contains(out, "true") {
+				t.Errorf("rejected tag printed a verdict: %q", out)
 			}
 		})
 	}

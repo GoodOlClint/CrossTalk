@@ -11,9 +11,8 @@ asset() {
 	echo "$NAME-$1-macos-universal"
 }
 
-case "${1:-}" in
-check-tag)
-	tag="${2:?usage: release-build.sh check-tag TAG}"
+check_tag() {
+	tag="$1"
 	ver="$(version)"
 	[ -n "$ver" ] || {
 		echo "cannot read mcpserver.Version" >&2
@@ -31,6 +30,16 @@ check-tag)
 		exit 1
 		;;
 	esac
+}
+
+case "${1:-}" in
+check-tag)
+	check_tag "${2:?usage: release-build.sh check-tag TAG}"
+	;;
+is-final)
+	tag="${2:?usage: release-build.sh is-final TAG}"
+	check_tag "$tag"
+	if [ "$tag" = "v$(version)" ]; then echo true; else echo false; fi
 	;;
 check-identity)
 	keychain="${2:?usage: release-build.sh check-identity KEYCHAIN}"
@@ -98,7 +107,7 @@ package-linux)
 	done
 	;;
 *)
-	echo "usage: release-build.sh check-tag TAG | check-identity KEYCHAIN | build OUTDIR | package OUTDIR TAG | build-linux OUTDIR | package-linux OUTDIR TAG" >&2
+	echo "usage: release-build.sh check-tag TAG | is-final TAG | check-identity KEYCHAIN | build OUTDIR | package OUTDIR TAG | build-linux OUTDIR | package-linux OUTDIR TAG" >&2
 	exit 2
 	;;
 esac
