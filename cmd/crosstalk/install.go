@@ -144,6 +144,9 @@ func runInstall(mode string, args []string, in io.Reader, tty bool, stdout, stde
 		steps []harness.Step
 	}
 	var groups []group
+	if mode != "uninstall" {
+		groups = append(groups, group{"crosstalk", []harness.Step{installBinaryStep(env.Bin)}})
+	}
 	for _, t := range targets {
 		var steps []harness.Step
 		if mode == "uninstall" {
@@ -194,4 +197,68 @@ func installIndent(s string) string {
 		return ""
 	}
 	return "    " + strings.ReplaceAll(strings.TrimRight(s, "\n"), "\n", "\n    ")
+}
+
+var installExecutable = os.Executable
+
+// installBinary copies src to dst through a temp file renamed over dst, so a
+// process running the old dst keeps its inode: writing a running binary in
+// place fails with ETXTBSY on Linux and gets a signed binary killed on macOS.
+func installBinary(src, dst string) (skipped bool, err error) {
+	src, err = filepath.EvalSymlinks(src)
+	if err != nil {
+		return false, err
+	}
+	si, err := os.Stat(src)
+	if err != nil {
+		return false, err
+	}
+	if di, err := os.Stat(dst); err == nil && os.SameFile(si, di) {
+		return true, nil
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return false, err
+	}
+	in, err := os.Open(src)
+	if err != nil {
+		return false, err
+	}
+	defer in.Close()
+	tmp, err := os.CreateTemp(filepath.Dir(dst), ".crosstalk-*")
+	if err != nil {
+		return false, err
+	}
+	defer os.Remove(tmp.Name())
+	_, err = io.Copy(tmp, in)
+	if err == nil {
+		err = tmp.Chmod(0o755)
+	}
+	if err == nil {
+		err = tmp.Sync()
+	}
+	if cerr := tmp.Close(); err == nil {
+		err = cerr
+	}
+	if err == nil {
+		err = os.Rename(tmp.Name(), dst)
+	}
+	return false, err
+}
+
+func installBinaryStep(bin string) harness.Step {
+	src, err := installExecutable()
+	if err == nil {
+		src, err = filepath.EvalSymlinks(src)
+	}
+	return harness.Step{
+		Title:  "binary",
+		Change: fmt.Sprintf("copy %s to %s (mode 0755); the source is left in place", src, bin),
+		Apply: func(context.Context) error {
+			if err != nil {
+				return err
+			}
+			_, err := installBinary(src, bin)
+			return err
+		},
+	}
 }

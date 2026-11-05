@@ -6,9 +6,11 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // installSandbox gives the test a temp HOME, CODEX_HOME and a PATH holding
@@ -141,5 +143,86 @@ func TestInstallRefusesWithoutTerminal(t *testing.T) {
 	after := installSnapshot(t, home)
 	if fmt.Sprint(before) != fmt.Sprint(after) {
 		t.Errorf("HOME changed:\nbefore %v\nafter  %v", before, after)
+	}
+}
+
+// TestInstallHelperSleep is a long-running process for the binary tests; it
+// does nothing unless INSTALL_HELPER_SLEEP is set.
+func TestInstallHelperSleep(t *testing.T) {
+	if os.Getenv("INSTALL_HELPER_SLEEP") == "" {
+		t.Skip("helper process only")
+	}
+	time.Sleep(time.Minute)
+	os.Exit(0)
+}
+
+func installCopyFile(t *testing.T, src, dst string) {
+	t.Helper()
+	b, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(dst, b, 0o755); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestInstallBinaryReplacesRunningFile(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	dst := filepath.Join(dir, "crosstalk")
+	installCopyFile(t, exe, dst)
+	cmd := exec.Command(dst, "-test.run=^TestInstallHelperSleep$")
+	cmd.Env = append(os.Environ(), "INSTALL_HELPER_SLEEP=1")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	defer cmd.Process.Kill()
+	time.Sleep(300 * time.Millisecond)
+
+	src := filepath.Join(t.TempDir(), "new")
+	want := []byte("#!/bin/sh\necho new\n")
+	if err := os.WriteFile(src, want, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	skipped, err := installBinary(src, dst)
+	if err != nil || skipped {
+		t.Fatalf("installBinary: skipped %v err %v", skipped, err)
+	}
+	time.Sleep(300 * time.Millisecond)
+	select {
+	case err := <-done:
+		t.Fatalf("running process ended after the copy: %v", err)
+	default:
+	}
+	got, _ := os.ReadFile(dst)
+	if !bytes.Equal(got, want) {
+		t.Errorf("target bytes %q", got)
+	}
+	if fi, _ := os.Stat(dst); fi.Mode().Perm() != 0o755 {
+		t.Errorf("mode %v", fi.Mode())
+	}
+	if ents, _ := os.ReadDir(dir); len(ents) != 1 {
+		t.Errorf("left files behind: %v", ents)
+	}
+}
+
+func TestInstallBinarySameFileSkips(t *testing.T) {
+	dir := t.TempDir()
+	dst := filepath.Join(dir, "crosstalk")
+	os.WriteFile(dst, []byte("x"), 0o755)
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(dst, link); err != nil {
+		t.Fatal(err)
+	}
+	for _, src := range []string{dst, link} {
+		if skipped, err := installBinary(src, dst); err != nil || !skipped {
+			t.Errorf("installBinary(%s): skipped %v err %v", src, skipped, err)
+		}
 	}
 }
