@@ -220,10 +220,10 @@ Asked in this terminal, one batch of four plus one follow-up for (a)-(e); for (f
 | Q1 | Credential for the tap push | GitHub App (recommended), minted per run with `actions/create-github-app-token` | Section 3.2; checklist 1-3; ADR 0018 |
 | Q2 | Where the tap push runs relative to the `release` gate | Own job, own environment holding only the App secrets, no reviewer; `needs: release` (recommended) | Section 3.2; ADR 0018 |
 | Q3 | How the marketplace refs move | First answer: "homebrew-tap is brand new and should likely be audited as well. I am thinking we do a pr with auto-merge after tests for our release pipeline?" Then: "why do we need an app on the crosstalk repo? My thought was the tap should auto-merge PRs if they come from a release workflow". Follow-up asked; final answer: PR + auto-merge on CrossTalk too (against the recommendation of a direct `GITHUB_TOKEN` commit) | Section 4; tap audit is slice E6; App on both repos; rulesets on both mains become prerequisites (the kickoff listed branch protection as optional; this answer makes it required); ADR 0019 |
+| Q4 | Finding 2 fix shape | Skip a found harness with no CrossTalk setup when no harness is named; K5 still fails a wrong entry (recommended) | Section 6 |
 | Q5 | (f) Which docs the site publishes | Home page, setup, design, ADRs; not plans or spikes (recommended) | Section 7b; ADR 0020 |
 | Q6 | (f) Generator | `actions/jekyll-build-pages`, no toolchain (recommended) | Section 7b; ADR 0020 |
 | Q7 | (f) Main hostname | Operator asked first whether this limits other Pages sites (it does not: one site per repository, each with its own domain); then: apex, `www` redirects (recommended) | Section 7b; ADR 0020 |
-| Q4 | Finding 2 fix shape | Skip a found harness with no CrossTalk setup when no harness is named; K5 still fails a wrong entry (recommended) | Section 6 |
 
 ## 9. Operator creates (checklist)
 
