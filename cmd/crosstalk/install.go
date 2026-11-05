@@ -452,6 +452,8 @@ func installPathFiles(goos, home string) []string {
 	switch goos {
 	case "darwin":
 		return []string{filepath.Join(home, ".zprofile"), filepath.Join(home, ".zshenv")}
+	case "linux":
+		return []string{filepath.Join(home, ".profile"), filepath.Join(home, ".bashrc")}
 	}
 	return nil
 }

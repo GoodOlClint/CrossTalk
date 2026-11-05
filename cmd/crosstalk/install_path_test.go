@@ -7,7 +7,7 @@ import (
 )
 
 func TestPathStepMarkedAndIdempotent(t *testing.T) {
-	for goos, want := range map[string][]string{"darwin": {".zprofile", ".zshenv"}} {
+	for goos, want := range map[string][]string{"darwin": {".zprofile", ".zshenv"}, "linux": {".profile", ".bashrc"}} {
 		home := t.TempDir()
 		files := installPathFiles(goos, home)
 		if len(files) != len(want) {
