@@ -328,6 +328,35 @@ func userEntry(home string) (*mcpEntry, error) {
 	return cj.MCPServers["crosstalk"], nil
 }
 
+// recoveryPath keeps the user entry install replaces until its successor
+// is added, so a failed or interrupted replace can restore it.
+func recoveryPath(home string) string {
+	return filepath.Join(home, ".claude", "crosstalk-mcp-entry.crosstalk-backup.json")
+}
+
+func readRecovery(home string) (*mcpEntry, error) {
+	b, err := os.ReadFile(recoveryPath(home))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var e mcpEntry
+	if err := json.Unmarshal(b, &e); err != nil {
+		return nil, fmt.Errorf("%s: %w", recoveryPath(home), err)
+	}
+	return &e, nil
+}
+
+func addArgs(command string, args []string, env map[string]string) []string {
+	out := []string{"mcp", "add", "--scope", "user", "crosstalk"}
+	for _, k := range sortedKeys(env) {
+		out = append(out, "-e", k+"="+env[k])
+	}
+	return append(append(out, "--", command), args...)
+}
+
 func mcpStep(env harness.InstallEnv) harness.Step {
 	change := "claude mcp add --scope user crosstalk -- " + env.Bin + " mcp"
 	if e, _ := userEntry(env.Home); e != nil {
@@ -341,17 +370,39 @@ func mcpStep(env harness.InstallEnv) harness.Step {
 			if err != nil {
 				return err
 			}
-			args := []string{"mcp", "add", "--scope", "user", "crosstalk"}
-			if e != nil {
+			old := e
+			if e == nil {
+				if old, err = readRecovery(env.Home); err != nil {
+					return err
+				}
+			} else {
+				b, err := json.Marshal(e)
+				if err != nil {
+					return err
+				}
+				if err := harness.ReplaceFile(recoveryPath(env.Home), b); err != nil {
+					return err
+				}
 				if _, err := env.Run(ctx, "claude", "mcp", "remove", "--scope", "user", "crosstalk"); err != nil {
 					return err
 				}
-				for _, k := range sortedKeys(e.Env) {
-					args = append(args, "-e", k+"="+e.Env[k])
-				}
 			}
-			_, err = env.Run(ctx, "claude", append(args, "--", env.Bin, "mcp")...)
-			return err
+			var keep map[string]string
+			if old != nil {
+				keep = old.Env
+			}
+			if _, err := env.Run(ctx, "claude", addArgs(env.Bin, []string{"mcp"}, keep)...); err != nil {
+				if old != nil {
+					if _, rerr := env.Run(ctx, "claude", addArgs(old.Command, old.Args, old.Env)...); rerr != nil {
+						return fmt.Errorf("%w; restoring the old entry failed too (%v), it is saved in %s", err, rerr, recoveryPath(env.Home))
+					}
+				}
+				return err
+			}
+			if err := os.Remove(recoveryPath(env.Home)); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
+			return nil
 		},
 	}
 }

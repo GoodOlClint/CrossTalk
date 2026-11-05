@@ -3,6 +3,7 @@ package claude
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -15,10 +16,14 @@ import (
 type recorder struct {
 	calls   []string
 	plugins string
+	fail    string
 }
 
 func (r *recorder) run(_ context.Context, name string, args ...string) ([]byte, error) {
 	r.calls = append(r.calls, name+" "+strings.Join(args, " "))
+	if r.fail == r.calls[len(r.calls)-1] {
+		return nil, errors.New("forced failure")
+	}
 	if strings.Join(args, " ") == "plugin list --json" {
 		if r.plugins == "" {
 			return []byte("[]"), nil
@@ -167,5 +172,32 @@ func TestClaudeRulePortStopsOnProjectDeny(t *testing.T) {
 	}
 	if r.index("claude mcp add") < 0 {
 		t.Error("--skip-rule-port did not register the server")
+	}
+}
+
+func TestClaudeMCPReplaceRestoresOnFailure(t *testing.T) {
+	r := &recorder{fail: "claude mcp add --scope user crosstalk -e A=1 -- /opt/x/crosstalk mcp"}
+	env := installEnv(t, r)
+	writeFile(t, filepath.Join(env.Home, ".claude.json"), `{"mcpServers": {"crosstalk": {"command": "crosstalk", "args": ["mcp"], "env": {"A": "1"}}}}`)
+	if err := mcpStep(env).Apply(context.Background()); err == nil {
+		t.Fatal("want the add failure")
+	}
+	restore := "claude mcp add --scope user crosstalk -e A=1 -- crosstalk mcp"
+	if i, j := r.index(r.fail), r.index(restore); i < 0 || j < i {
+		t.Errorf("old entry not restored after the failed add:\n%s", strings.Join(r.calls, "\n"))
+	}
+
+	r2 := &recorder{}
+	env.Run = r2.run
+	writeFile(t, filepath.Join(env.Home, ".claude.json"), `{}`)
+	writeFile(t, recoveryPath(env.Home), `{"command": "crosstalk", "args": ["mcp"], "env": {"B": "2"}}`)
+	if err := mcpStep(env).Apply(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if r2.index("claude mcp add --scope user crosstalk -e B=2 -- /opt/x/crosstalk mcp") < 0 {
+		t.Errorf("env from the interrupted run not carried:\n%s", strings.Join(r2.calls, "\n"))
+	}
+	if _, err := os.Stat(recoveryPath(env.Home)); !os.IsNotExist(err) {
+		t.Errorf("recovery copy left after a successful add: %v", err)
 	}
 }
