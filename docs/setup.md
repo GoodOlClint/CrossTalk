@@ -2,7 +2,7 @@
 
 CrossTalk lets Claude Code and Codex sessions on this Mac message each other by name. You need macOS, Homebrew, and Claude Code and/or Codex. A first clean-account run (2026-11-04) passed the basic plumbing and the Codex authority case; both cross-harness answer round trips passed live with the plugin only, and Codex started outside a shell passed on result. A Claude peer read a file on a soft ask on that run. In a live replica at c4025a9 (typed and bound Claude session, real Codex asker, harmless question answered first), Claude did not read the file before its user approved in 3 of 3 Haiku runs and 1 of 1 Sonnet run, where the older text read in 1 of 1; the sample is small and the rule is advice to the model, not enforcement, so a session in auto mode could still read on a peer's word. An explicit `prompt` approval entry is indirect only ([open facts](decisions/0013-agent-plugins-and-skill-packaging.md#not-yet-run-live)).
 
-1. **Install the binary.** The repo is public, so `go` needs no `GOPRIVATE`, no `gh auth` and no GitHub login. The repo has no tags, so `@latest` resolves to a pseudo-version of the newest commit on main (checked 2026-11-04 through the public proxy: `v0.0.0-20261105023416-bb3d521b8a6c`); `crosstalk version` prints the version the code carries (`0.1.2`). Admin account:
+1. **Install the binary.** The repo is public, so `go` needs no `GOPRIVATE`, no `gh auth` and no GitHub login. `@latest` resolves to the newest release tag; `crosstalk version` prints the version the code carries. Admin account:
    ```sh
    brew install go
    GOBIN="$(brew --prefix)/bin" go install github.com/GoodOlClint/crosstalk/cmd/crosstalk@latest
