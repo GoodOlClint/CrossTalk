@@ -20,7 +20,7 @@ A bare Mach-O binary cannot be stapled (the notarization ticket attached to the 
 Public-repo secret handling:
 
 - No `pull_request` trigger. Only a tag push by someone with write access, or a dispatch from a tag, starts the job.
-- The job is attached to the environment `release`, and the six secrets are environment secrets there, not repo secrets. The environment's deployment rule is "Selected branches and tags" with one rule of ref type Tag and pattern `v*` and no Branch rule, set before any secret is added (a new environment has no restriction). A required reviewer is standard, so no write collaborator reaches signing unapproved.
+- The job is attached to the environment `release`, and the six secrets are environment secrets there, not repo secrets. The environment's deployment rule is "Selected branches and tags" with one rule of ref type Tag and pattern `v*` and no Branch rule, set before any secret is added (a new environment has no restriction). The operator is the required reviewer, so signing never runs unapproved.
 - Top-level `permissions: {}`; the job alone gets `contents: write`.
 - Each secret is in the `env` of the one step that needs it, never job-level. Key material is written under `RUNNER_TEMP` with `umask 077` and removed; the temporary keychain is deleted right after signing and again in a step with `if: always()`.
 - First-party actions are at the current major (`actions/checkout@v7`, `actions/setup-go@v7`, as `ci.yml`). Any third-party action added later is pinned to a full commit sha.
@@ -59,8 +59,7 @@ Nothing here is set by the repo. In order:
 4. Add a tag ruleset: target `refs/tags/v*`, Active, restrict creations, updates and deletions, block force pushes, bypass Repository admin only, no App. Afterwards check that the ruleset's `conditions.ref_name.include` is exactly `refs/tags/v*` (`GET /repos/GoodOlClint/CrossTalk/rulesets/<id>`); GitHub's docs do not say whether the field takes `v*` or the full ref.
 5. Actions permissions: the repo's workflow token default can stay read-only, since the job asks for `contents: write` itself.
 6. Recommended: enable immutable releases, so published assets and tags are locked (draft then publish is the pattern GitHub recommends for it). Recommended: protect `main`, or read `git diff <last-tag>..<new-tag> -- .github scripts` before approving a run.
-7. Negative check, as a write collaborator: pushing a `v*` tag must be refused, and a dispatch from `main` must skip the job.
-8. Rehearse: push `v0.1.2-rc.1` (it publishes a prerelease), watch the run, then tag the real `v0.1.2` only after an rc run succeeds.
+7. Rehearse: push `v0.1.2-rc.1` (it publishes a prerelease), watch the run, then tag the real `v0.1.2` only after an rc run succeeds.
 
 ## Trial record
 
