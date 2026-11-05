@@ -144,3 +144,29 @@ func TestWorkflowHygiene(t *testing.T) {
 		}
 	}
 }
+
+func TestPagesWorkflow(t *testing.T) {
+	src := repoFile(t, ".github/workflows/pages.yml")
+	if !strings.Contains(src, "\npermissions: {}\n") {
+		t.Error("pages.yml: top-level permissions is not {}")
+	}
+	jobs := workflowJobs(src)
+	build, deploy := jobs["build"], jobs["deploy"]
+	if build == "" || deploy == "" {
+		t.Fatalf("pages.yml needs build and deploy jobs, got %d jobs", len(jobs))
+	}
+	if !strings.Contains(deploy, "if: github.event_name != 'pull_request'") {
+		t.Error("deploy does not skip pull requests")
+	}
+	for _, perm := range []string{"pages: write", "id-token: write"} {
+		if !strings.Contains(deploy, perm) {
+			t.Errorf("deploy lacks %s", perm)
+		}
+		if strings.Contains(build, perm) {
+			t.Errorf("build has %s", perm)
+		}
+	}
+	if !strings.Contains(build, "contents: read") || strings.Count(build, ": write") != 0 {
+		t.Error("build permissions are not contents: read only")
+	}
+}
