@@ -1,5 +1,5 @@
 ---
 type: tool_used
-tool: mcp__plugin_crosstalk_crosstalk__ask
+tool: mcp__crosstalk__ask
 arm: both
 ---

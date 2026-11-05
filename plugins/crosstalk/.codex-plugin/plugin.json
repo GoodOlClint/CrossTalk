@@ -10,7 +10,6 @@
   "repository": "https://github.com/GoodOlClint/CrossTalk",
   "license": "MIT",
   "skills": "./skills/",
-  "mcpServers": "./codex.mcp.json",
   "interface": {
     "displayName": "CrossTalk",
     "shortDescription": "Message other agent sessions on this Mac.",

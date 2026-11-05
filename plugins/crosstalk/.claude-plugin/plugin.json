@@ -9,6 +9,5 @@
   "homepage": "https://github.com/GoodOlClint/CrossTalk",
   "repository": "https://github.com/GoodOlClint/CrossTalk",
   "license": "MIT",
-  "skills": "./skills/",
-  "mcpServers": "./claude.mcp.json"
+  "skills": "./skills/"
 }

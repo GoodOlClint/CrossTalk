@@ -77,23 +77,40 @@ func TestManifestsMatchBinary(t *testing.T) {
 	}
 }
 
-func TestServerKeysAndCommands(t *testing.T) {
-	for f, approve := range map[string]bool{"claude.mcp.json": false, "codex.mcp.json": true} {
-		srv := readJSON(t, filepath.Join(pluginDir, f))["mcpServers"].(map[string]any)
-		if len(srv) != 1 {
-			t.Fatalf("%s servers %v", f, srv)
+func TestPluginShipsNoServer(t *testing.T) {
+	for _, f := range []string{".claude-plugin/plugin.json", ".codex-plugin/plugin.json"} {
+		if m := readJSON(t, filepath.Join(pluginDir, f)); m["mcpServers"] != nil {
+			t.Errorf("%s declares mcpServers %v", f, m["mcpServers"])
 		}
-		s, ok := srv["crosstalk"].(map[string]any)
-		if !ok {
-			t.Fatalf("%s: server key is not exactly crosstalk: %v", f, srv)
+	}
+	graders := 0
+	err := filepath.WalkDir(pluginDir, func(p string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
 		}
-		args, _ := s["args"].([]any)
-		if s["command"] != "crosstalk" || len(args) != 1 || args[0] != "mcp" {
-			t.Errorf("%s command %v %v", f, s["command"], s["args"])
+		if strings.HasSuffix(p, ".mcp.json") {
+			t.Errorf("plugin ships a server file: %s", p)
 		}
-		if got := s["default_tools_approval_mode"] == "approve"; got != approve {
-			t.Errorf("%s approval mode %v", f, s["default_tools_approval_mode"])
+		if filepath.Base(filepath.Dir(p)) != "graders" {
+			return nil
 		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		if strings.Contains(string(b), "mcp__plugin_crosstalk") {
+			t.Errorf("%s names the old tool prefix", p)
+		}
+		if strings.Contains(string(b), "mcp__crosstalk__") {
+			graders++
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if graders < 8 {
+		t.Errorf("%d graders name mcp__crosstalk__, want at least 8", graders)
 	}
 }
 
