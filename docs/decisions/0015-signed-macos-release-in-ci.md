@@ -11,7 +11,7 @@ A stranger installs CrossTalk with `go install`, which needs Go and a build. The
 
 ## Decision
 
-Pushing a `v*` tag runs `.github/workflows/release.yml` on `macos-latest`. It checks that the tag equals `v` plus `mcpserver.Version`, builds arm64 and amd64 separately (`CGO_ENABLED=0`, `-trimpath`), joins them with `lipo` into one universal binary, signs it with a Developer ID Application certificate (`codesign --timestamp --options runtime`), zips it with `ditto`, notarizes the zip with `notarytool submit --wait` using an App Store Connect API key, verifies the signature, and publishes the zip and a SHA-256 file to the release for that tag with the runner's preinstalled `gh` and the job's `GITHUB_TOKEN` (no third-party action, so there is nothing to pin by sha). A `workflow_dispatch` trigger with a required `tag` input retries a failed run without moving the tag. The build, tag check, packaging and checksum steps live in `scripts/release-build.sh`, so the local proof runs the same code the workflow runs.
+Pushing a `v*` tag runs `.github/workflows/release.yml` on `macos-latest`. It checks that the tag equals `v` plus `mcpserver.Version`, builds arm64 and amd64 separately (`CGO_ENABLED=0`, `-trimpath`), joins them with `lipo` into one universal binary, signs it with a Developer ID Application certificate (`codesign --timestamp --options runtime`), zips it with `ditto`, notarizes the zip with `notarytool submit --wait` using an App Store Connect API key, verifies the signature, and publishes the zip and a SHA-256 file to the release for that tag, as a draft that is then made public (a retry may replace assets only on a draft, never on a published release), with the runner's preinstalled `gh` and the job's `GITHUB_TOKEN` (no third-party action, so there is nothing to pin by sha). The checkout uses `refs/tags/<tag>` so a branch of the same name cannot be built, and runs for one tag are serialized. A `workflow_dispatch` trigger with a required `tag` input retries a failed run without moving the tag. The build, tag check, packaging and checksum steps live in `scripts/release-build.sh`, so the local proof runs the same code the workflow runs.
 
 The operator accepts that the Developer ID signature carries their legal name, visible on the public binary.
 
@@ -38,7 +38,7 @@ Public-repo secret handling:
 
 - The first run is unproven. Nothing here has run with real credentials: the local proof covers the build, `lipo`, version check, zip, checksum and an ad hoc signature, not the certificate import, the notarization status or `spctl`. Watch on the first run: the certificate import step, the `notarytool` status (must be `Accepted`), the `spctl` line (a bare binary may print "rejected"; the check that counts is `codesign --verify --strict`), `lipo -archs` (both `arm64` and `x86_64`), and the release assets `crosstalk-<tag>-macos-universal.zip` and `.zip.sha256`.
 - A release needs the Mac-only toolchain on the runner (`codesign`, `notarytool`, `lipo`); `macos-latest` provides it.
-- A failed run leaves no release if it fails before publish; rerun with `workflow_dispatch` and the same tag.
+- A run that fails before publish leaves no release, or a draft; rerun with `workflow_dispatch` and the same tag. A published release is never overwritten: fix by deleting it by hand and rerunning.
 - Linux binaries are not built.
 
 ## Operator setup
