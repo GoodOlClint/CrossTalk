@@ -17,6 +17,10 @@ import (
 // only fake harness CLIs, each of which runs TestInstallFakeCLI.
 func installSandbox(t *testing.T, clis ...string) string {
 	t.Helper()
+	real := installBuild(t, ".")
+	old := installExecutable
+	installExecutable = func() (string, error) { return real, nil }
+	t.Cleanup(func() { installExecutable = old })
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))

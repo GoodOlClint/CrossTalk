@@ -12,6 +12,9 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/GoodOlClint/crosstalk/internal/harness"
 	"github.com/GoodOlClint/crosstalk/internal/mcpserver"
@@ -137,7 +140,15 @@ func runInstall(mode string, args []string, in io.Reader, tty bool, stdout, stde
 		Version:      mcpserver.Version,
 		Home:         home,
 		Run:          installRun,
+		Handshake:    installHandshake,
 		SkipRulePort: o.noPort,
+	}
+	ctx := context.Background()
+	if o.check {
+		if installChecks(ctx, stdout, targets, env) {
+			return 1
+		}
+		return 0
 	}
 	type group struct {
 		title string
@@ -166,7 +177,6 @@ func runInstall(mode string, args []string, in io.Reader, tty bool, stdout, stde
 		fmt.Fprintf(stderr, "crosstalk %s: no terminal to confirm on; nothing changed. Run it in a terminal or pass --yes.\n", mode)
 		return 2
 	}
-	ctx := context.Background()
 	answers := bufio.NewReader(in)
 	for _, g := range groups {
 		fmt.Fprintf(stdout, "== %s\n", g.title)
@@ -181,6 +191,14 @@ func runInstall(mode string, args []string, in io.Reader, tty bool, stdout, stde
 				return 1
 			}
 		}
+	}
+	if mode == "uninstall" {
+		return 0
+	}
+	failed := installChecks(ctx, stdout, targets, env)
+	fmt.Fprintln(stdout, "Running Claude and Codex sessions keep their old CrossTalk server. Restart them (in Claude, /mcp and reconnect also works).")
+	if failed {
+		return 1
 	}
 	return 0
 }
@@ -261,4 +279,89 @@ func installBinaryStep(bin string) harness.Step {
 			return err
 		},
 	}
+}
+
+var installTools = []string{"list_agents", "send_message", "reply", "ask", "receive_message", "claim", "release"}
+
+// installHandshake starts command with args, the caller's environment plus
+// env, runs initialize and tools/list, and closes stdin. No tools/call is
+// sent, so no agent registers.
+func installHandshake(ctx context.Context, command string, args, env []string) error {
+	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, command, args...)
+	cmd.Env = append(os.Environ(), env...)
+	c := mcp.NewClient(&mcp.Implementation{Name: "crosstalk-install", Version: mcpserver.Version}, nil)
+	s, err := c.Connect(ctx, &mcp.CommandTransport{Command: cmd}, nil)
+	if err != nil {
+		return fmt.Errorf("%s %s: %w", command, strings.Join(args, " "), err)
+	}
+	defer s.Close()
+	if v := s.InitializeResult().ServerInfo.Version; v != mcpserver.Version {
+		return fmt.Errorf("server version %s, want %s", v, mcpserver.Version)
+	}
+	lt, err := s.ListTools(ctx, nil)
+	if err != nil {
+		return err
+	}
+	var names []string
+	for _, t := range lt.Tools {
+		names = append(names, t.Name)
+	}
+	for _, n := range installTools {
+		if !slices.Contains(names, n) {
+			return fmt.Errorf("tools %v lack %s", names, n)
+		}
+	}
+	return nil
+}
+
+func installPathCheck(bin string) harness.CheckResult {
+	r := harness.CheckResult{ID: "K7", WarnOnly: true}
+	sh := os.Getenv("SHELL")
+	if sh == "" {
+		sh = "/bin/sh"
+	}
+	out, _ := exec.Command(sh, "-lc", "command -v crosstalk").Output()
+	got := strings.TrimSpace(string(out))
+	switch {
+	case got == bin:
+		r.OK, r.Detail = true, "a login shell finds "+bin
+	case got == "":
+		r.Detail = "a login shell does not find crosstalk; only needed for typing crosstalk send (install --path adds it)"
+	default:
+		r.Detail = "a login shell finds " + got + ", not " + bin
+	}
+	return r
+}
+
+// installReport prints one line per check and reports whether any check
+// that is not a warning failed.
+func installReport(w io.Writer, who string, rs []harness.CheckResult) (failed bool) {
+	for _, r := range rs {
+		st := "PASS"
+		switch {
+		case r.OK:
+		case r.WarnOnly:
+			st = "WARN"
+		default:
+			st, failed = "FAIL", true
+		}
+		fmt.Fprintf(w, "%s %s %s %s\n", r.ID, who, st, r.Detail)
+	}
+	return failed
+}
+
+func installChecks(ctx context.Context, w io.Writer, targets []installTarget, env harness.InstallEnv) bool {
+	fmt.Fprintln(w, "== checks")
+	failed := false
+	for _, t := range targets {
+		if installReport(w, t.name, t.in.Checks(ctx, env)) {
+			failed = true
+		}
+	}
+	if installReport(w, "crosstalk", []harness.CheckResult{installPathCheck(env.Bin)}) {
+		failed = true
+	}
+	return failed
 }

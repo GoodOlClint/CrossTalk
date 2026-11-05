@@ -397,6 +397,103 @@ func (h *Harness) InstallSteps(env harness.InstallEnv) []harness.Step {
 
 func (h *Harness) UninstallSteps(env harness.InstallEnv) []harness.Step { return nil }
 
+func executable(path string) bool {
+	fi, err := os.Stat(path)
+	return err == nil && fi.Mode().IsRegular() && fi.Mode().Perm()&0o111 != 0
+}
+
+func envList(m map[string]string) []string {
+	var out []string
+	for _, k := range sortedKeys(m) {
+		out = append(out, k+"="+m[k])
+	}
+	return out
+}
+
+// shadowing lists projects in ~/.claude.json with a local-scope crosstalk
+// server, which wins over the user-scope one there.
+func shadowing(home string) []string {
+	var cj struct {
+		Projects map[string]struct {
+			MCPServers map[string]any `json:"mcpServers"`
+		} `json:"projects"`
+	}
+	b, _ := os.ReadFile(claudeJSONPath(home))
+	json.Unmarshal(b, &cj)
+	var out []string
+	for d, p := range cj.Projects {
+		if p.MCPServers["crosstalk"] != nil {
+			out = append(out, d)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 func (h *Harness) Checks(ctx context.Context, env harness.InstallEnv) []harness.CheckResult {
-	return nil
+	k1 := harness.CheckResult{ID: "K1"}
+	k2 := harness.CheckResult{ID: "K2"}
+	p, err := installedPlugin(ctx, env)
+	switch {
+	case err != nil:
+		k1.Detail, k2.Detail = err.Error(), err.Error()
+	case p == nil:
+		k1.Detail = "plugin " + pluginID + " is not installed"
+	default:
+		k1.OK = p.Version == env.Version
+		k1.Detail = "plugin " + pluginID + " " + p.Version + ", binary " + env.Version
+	}
+	e, eerr := userEntry(env.Home)
+	if err == nil {
+		sh := shadowing(env.Home)
+		switch {
+		case p != nil && len(p.MCPServers) > 0:
+			k2.Detail = "the installed plugin starts its own server too (plugin:crosstalk:crosstalk); update the plugin"
+		case e == nil:
+			k2.Detail = "no user-scope crosstalk server"
+		case len(sh) > 0:
+			k2.Detail = fmt.Sprintf("a local-scope crosstalk server shadows the user one in %v", sh)
+		default:
+			k2.OK, k2.Detail = true, "one user-scope crosstalk server, none from the plugin"
+		}
+	}
+
+	k4 := harness.CheckResult{ID: "K4"}
+	m, _, serr := readJSONFile(userSettingsPath(env.Home))
+	rs, rerr := oldRules(env.Home)
+	switch {
+	case serr != nil || rerr != nil:
+		k4.Detail = errors.Join(serr, rerr).Error()
+	case !slices.Contains(ruleList(m, "allow"), any(AllowRule)):
+		k4.Detail = AllowRule + " is not in permissions.allow of " + userSettingsPath(env.Home)
+	case len(rs) > 0:
+		k4.Detail = "rules still name " + oldPrefix + ":\n" + describe(rs)
+		k4.WarnOnly = env.SkipRulePort || len(blocking(rs)) == 0 && !slices.ContainsFunc(rs, func(r oldRule) bool { return r.editable })
+	default:
+		k4.OK, k4.Detail = true, "allow rule present, no rule names the old prefix"
+	}
+
+	k5 := harness.CheckResult{ID: "K5"}
+	k6 := harness.CheckResult{ID: "K6"}
+	switch {
+	case eerr != nil:
+		k5.Detail = eerr.Error()
+	case e == nil:
+		k5.Detail = "no user-scope crosstalk server"
+	default:
+		_, gerr := env.Run(ctx, "claude", "mcp", "get", "crosstalk")
+		k5.OK = gerr == nil && e.Command == env.Bin && executable(e.Command) && slices.Equal(e.Args, []string{"mcp"})
+		k5.Detail = fmt.Sprintf("registered %q %q, want %q [mcp], executable", e.Command, e.Args, env.Bin)
+		if gerr != nil {
+			k5.Detail += "; " + gerr.Error()
+		}
+	}
+	if e == nil {
+		k6.Detail = "no registered server to start"
+	} else if err := env.Handshake(ctx, e.Command, e.Args, envList(e.Env)); err != nil {
+		k6.Detail = err.Error()
+	} else {
+		k6.OK, k6.Detail = true, "registered server lists the CrossTalk tools at "+env.Version
+	}
+	return []harness.CheckResult{k1, k2, k4, k5, k6}
 }

@@ -322,6 +322,63 @@ func (h *Harness) InstallSteps(env harness.InstallEnv) []harness.Step {
 
 func (h *Harness) UninstallSteps(env harness.InstallEnv) []harness.Step { return nil }
 
+// pluginManifest is where codex plugin add puts the plugin of a version.
+func pluginManifest(home, version string) string {
+	return filepath.Join(codexHome(home), "plugins", "cache", "crosstalk", "crosstalk", version, ".codex-plugin", "plugin.json")
+}
+
 func (h *Harness) Checks(ctx context.Context, env harness.InstallEnv) []harness.CheckResult {
-	return nil
+	k1 := harness.CheckResult{ID: "K1"}
+	k2 := harness.CheckResult{ID: "K2"}
+	var man struct {
+		Version    string `json:"version"`
+		MCPServers any    `json:"mcpServers"`
+	}
+	mp := pluginManifest(env.Home, env.Version)
+	b, err := os.ReadFile(mp)
+	if err == nil {
+		err = json.Unmarshal(b, &man)
+	}
+	if err != nil {
+		k1.Detail, k2.Detail = "plugin "+pluginID+" "+env.Version+" is not installed: "+err.Error(), "plugin manifest unreadable"
+	} else {
+		k1.OK, k1.Detail = man.Version == env.Version, mp+" has version "+man.Version
+		k2.OK, k2.Detail = man.MCPServers == nil, "the installed plugin declares no server"
+		if !k2.OK {
+			k2.Detail = "the installed plugin starts its own server too; update the plugin"
+		}
+	}
+
+	k3 := harness.CheckResult{ID: "K3"}
+	cfg, _ := os.ReadFile(configPath(env.Home))
+	if _, err := env.Run(ctx, "codex", "mcp", "list"); err != nil {
+		k3.Detail = "codex rejects " + configPath(env.Home) + ": " + err.Error()
+	} else if orphanTables(string(cfg)) {
+		k3.Detail = "a [mcp_servers.crosstalk.*] table has no [mcp_servers.crosstalk]"
+	} else {
+		k3.OK, k3.Detail = true, "codex mcp list accepts the config"
+	}
+
+	k5 := harness.CheckResult{ID: "K5"}
+	k6 := harness.CheckResult{ID: "K6"}
+	r, err := registered(ctx, env)
+	if err != nil {
+		k5.Detail, k6.Detail = err.Error(), "no registered server to start"
+		return []harness.CheckResult{k1, k2, k3, k5, k6}
+	}
+	t := r.Transport
+	fi, serr := os.Stat(t.Command)
+	k5.OK = t.Command == env.Bin && serr == nil && fi.Mode().Perm()&0o111 != 0 && slices.Equal(t.Args, []string{"mcp"})
+	k5.Detail = fmt.Sprintf("registered %q %q, want %q [mcp], executable", t.Command, t.Args, env.Bin)
+	var envs []string
+	for k, v := range t.Env {
+		envs = append(envs, k+"="+v)
+	}
+	slices.Sort(envs)
+	if err := env.Handshake(ctx, t.Command, t.Args, envs); err != nil {
+		k6.Detail = err.Error()
+	} else {
+		k6.OK, k6.Detail = true, "registered server lists the CrossTalk tools at "+env.Version
+	}
+	return []harness.CheckResult{k1, k2, k3, k5, k6}
 }
