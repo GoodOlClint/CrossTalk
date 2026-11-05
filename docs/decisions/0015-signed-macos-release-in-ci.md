@@ -41,7 +41,7 @@ Public-repo secret handling:
 - A run that fails before publish leaves no release, or a draft; rerun from the tag as above. A published release is never overwritten, and once immutable releases are on, deleting it and rerunning under the same tag fails: a bad published release needs a new tag. A tag is public to the Go module proxy at once, so a fix to `release.yml` needs a new tag (a new `-rc.N`, or a bumped version), not a moved one. Rehearse with `v0.1.2-rc.1` before the real `v0.1.2`.
 - A rc run rehearses everything except the plain-tag path through the publish step; that path is first exercised by `v0.1.2` itself.
 - The x86_64 slice is built and inspected but has never been executed (the runner is arm64).
-- Linux binaries are not built. [ADR 0017](0017-linux-release-assets-outside-the-signing-path.md) plans them for 0.1.3, outside the signing path.
+- Linux binaries are built and packaged in the same job, outside the signing path, as built by [ADR 0017](0017-linux-release-assets-outside-the-signing-path.md).
 
 ## Operator setup
 

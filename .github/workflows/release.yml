@@ -35,6 +35,10 @@ jobs:
         run: go test ./...
       - name: Build universal binary
         run: scripts/release-build.sh build "$RUNNER_TEMP/dist"
+      - name: Build Linux binaries
+        run: scripts/release-build.sh build-linux "$RUNNER_TEMP/dist-linux"
+      - name: Package Linux binaries
+        run: scripts/release-build.sh package-linux "$RUNNER_TEMP/dist-linux" "$TAG"
       - name: Import signing certificate
         env:
           APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
@@ -104,7 +108,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
-          files=("$RUNNER_TEMP/dist/crosstalk-$TAG-macos-universal.zip" "$RUNNER_TEMP/dist/crosstalk-$TAG-macos-universal.zip.sha256")
+          files=(
+            "$RUNNER_TEMP/dist/crosstalk-$TAG-macos-universal.zip"
+            "$RUNNER_TEMP/dist/crosstalk-$TAG-macos-universal.zip.sha256"
+            "$RUNNER_TEMP/dist-linux/crosstalk-$TAG-linux-amd64.tar.gz"
+            "$RUNNER_TEMP/dist-linux/crosstalk-$TAG-linux-amd64.tar.gz.sha256"
+            "$RUNNER_TEMP/dist-linux/crosstalk-$TAG-linux-arm64.tar.gz"
+            "$RUNNER_TEMP/dist-linux/crosstalk-$TAG-linux-arm64.tar.gz.sha256"
+          )
           repo="$GITHUB_REPOSITORY"
           pre=()
           case "$TAG" in *-rc.*) pre=(--prerelease) ;; esac

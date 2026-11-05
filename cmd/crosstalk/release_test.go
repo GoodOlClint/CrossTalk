@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -94,6 +95,40 @@ func TestReleaseBuildLinux(t *testing.T) {
 		sum.Dir = dir
 		if out, err := sum.CombinedOutput(); err != nil || !strings.Contains(string(out), "OK") {
 			t.Errorf("%s: checksum: %v\n%s", arch, err, out)
+		}
+	}
+}
+
+func TestReleaseWorkflowLinuxOutsideSigning(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join(releaseRepoRoot(t), ".github", "workflows", "release.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	steps := strings.Split(string(raw), "\n      - ")[1:]
+	signing := regexp.MustCompile(`\b(codesign|notarytool|security|lipo)\b`)
+	var publish string
+	linux := 0
+	for _, s := range steps {
+		if !strings.Contains(s, "dist-linux") {
+			continue
+		}
+		linux++
+		if m := signing.FindString(s); m != "" {
+			t.Errorf("step names dist-linux and runs %q:\n%s", m, s)
+		}
+		if strings.Contains(s, "gh release") {
+			publish = s
+		}
+	}
+	if linux < 3 {
+		t.Errorf("%d steps name dist-linux, want build, package and publish", linux)
+	}
+	for _, arch := range []string{"amd64", "arm64"} {
+		for _, suffix := range []string{".tar.gz", ".tar.gz.sha256"} {
+			want := `dist-linux/crosstalk-$TAG-linux-` + arch + suffix + `"`
+			if !strings.Contains(publish, want) {
+				t.Errorf("publish files=(...) lacks %s", want)
+			}
 		}
 	}
 }
