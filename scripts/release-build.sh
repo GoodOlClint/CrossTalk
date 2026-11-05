@@ -126,6 +126,52 @@ class Crosstalk < Formula
 end
 EOF
 	;;
+land-pr)
+	usage="usage: release-build.sh land-pr REPO BRANCH TITLE"
+	repo="${2:?$usage}"
+	branch="${3:?$usage}"
+	title="${4:?$usage}"
+	timeout="${LAND_PR_TIMEOUT:-2400}"
+	poll="${LAND_PR_POLL:-30}"
+	find_pr() {
+		gh pr list --repo "$repo" --head "$branch" --state "$1" --json url --jq '.[0].url // empty'
+	}
+	merged="$(find_pr merged)"
+	[ -z "$merged" ] || {
+		echo "already merged: $merged"
+		exit 0
+	}
+	pr="$(find_pr open)"
+	if [ -n "$pr" ]; then
+		echo "reusing $pr"
+	else
+		git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1 || git push origin "HEAD:refs/heads/$branch"
+		pr="$(gh pr create --repo "$repo" --head "$branch" --title "$title" --body "Opened by release-build.sh land-pr.")"
+		echo "opened $pr"
+	fi
+	gh pr merge --auto --squash --repo "$repo" "$pr" || echo "auto-merge not enabled; polling anyway" >&2
+	waited=0
+	while :; do
+		status="$(gh pr view "$pr" --repo "$repo" --json state,mergeStateStatus --jq '.state + " " + .mergeStateStatus')"
+		state="${status%% *}"
+		case "$state" in
+		MERGED)
+			echo "merged: $pr"
+			exit 0
+			;;
+		CLOSED)
+			echo "closed without merging: $pr" >&2
+			exit 1
+			;;
+		esac
+		if [ "$waited" -ge "$timeout" ]; then
+			echo "not merged after ${timeout}s: $pr (state $state, mergeStateStatus ${status#* })" >&2
+			exit 1
+		fi
+		sleep "$poll"
+		waited=$((waited + poll))
+	done
+	;;
 check-identity)
 	keychain="${2:?usage: release-build.sh check-identity KEYCHAIN}"
 	matches="$(security find-identity -v -p codesigning "$keychain" 2>/dev/null | awk -F '"' 'NF > 2 && $2 == ENVIRON["APPLE_CODESIGN_IDENTITY"] { n++ } END { print n + 0 }')"
@@ -192,7 +238,7 @@ package-linux)
 	done
 	;;
 *)
-	echo "usage: release-build.sh check-tag TAG | is-final TAG | formula TAG DIST DIST_LINUX | check-identity KEYCHAIN | build OUTDIR | package OUTDIR TAG | build-linux OUTDIR | package-linux OUTDIR TAG" >&2
+	echo "usage: release-build.sh check-tag TAG | is-final TAG | formula TAG DIST DIST_LINUX | land-pr REPO BRANCH TITLE | check-identity KEYCHAIN | build OUTDIR | package OUTDIR TAG | build-linux OUTDIR | package-linux OUTDIR TAG" >&2
 	exit 2
 	;;
 esac

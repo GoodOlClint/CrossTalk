@@ -281,3 +281,104 @@ func TestFormulaRender(t *testing.T) {
 		}
 	})
 }
+
+const fakeGH = `#!/bin/sh
+echo "gh $*" >> "$FAKE_DIR/log"
+case "$1 $2" in
+"pr list")
+	case "$*" in
+	*"--state merged"*) cat "$FAKE_DIR/merged" 2>/dev/null ;;
+	*"--state open"*) cat "$FAKE_DIR/open" 2>/dev/null ;;
+	esac
+	exit 0
+	;;
+"pr create") echo "https://example.test/pr/1" ;;
+"pr view")
+	n=$(cat "$FAKE_DIR/n" 2>/dev/null || echo 0)
+	n=$((n + 1))
+	echo "$n" > "$FAKE_DIR/n"
+	line=$(sed -n "${n}p" "$FAKE_DIR/polls")
+	[ -n "$line" ] || line=$(tail -n 1 "$FAKE_DIR/polls")
+	echo "$line"
+	;;
+esac
+exit 0
+`
+
+const fakeGit = `#!/bin/sh
+echo "git $*" >> "$FAKE_DIR/log"
+case "$1" in
+ls-remote) [ -e "$FAKE_DIR/remote" ] || exit 2 ;;
+esac
+exit 0
+`
+
+func TestLandPR(t *testing.T) {
+	const url = "https://example.test/pr/1"
+	cases := []struct {
+		name    string
+		files   map[string]string
+		timeout string
+		ok      bool
+		out     []string
+		has     []string
+		lacks   []string
+	}{
+		{"a never merges", map[string]string{"polls": "OPEN BLOCKED\n"}, "3", false,
+			[]string{url, "BLOCKED"}, []string{"git push", "pr create", "pr merge --auto --squash"}, nil},
+		{"b merges on second poll", map[string]string{"polls": "OPEN BLOCKED\nMERGED CLEAN\n"}, "30", true,
+			nil, []string{"pr create", "pr merge --auto --squash"}, nil},
+		{"c closed", map[string]string{"polls": "CLOSED UNKNOWN\n"}, "30", false,
+			[]string{url}, nil, nil},
+		{"d open PR reused", map[string]string{"open": url + "\n", "polls": "OPEN BLOCKED\nMERGED CLEAN\n"}, "30", true,
+			[]string{url}, []string{"pr merge --auto --squash"}, []string{"pr create", "git push"}},
+		{"e already merged", map[string]string{"merged": url + "\n"}, "30", true,
+			nil, nil, []string{"pr create", "git push", "pr merge"}},
+		{"f remote branch no PR", map[string]string{"remote": "", "polls": "MERGED CLEAN\n"}, "30", true,
+			nil, []string{"pr create"}, []string{"git push"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			fake := t.TempDir()
+			bin := t.TempDir()
+			for name, body := range map[string]string{"gh": fakeGH, "git": fakeGit} {
+				if err := os.WriteFile(filepath.Join(bin, name), []byte(body), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for name, body := range c.files {
+				if err := os.WriteFile(filepath.Join(fake, name), []byte(body), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			env := []string{
+				"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"),
+				"FAKE_DIR=" + fake, "LAND_PR_POLL=1", "LAND_PR_TIMEOUT=" + c.timeout,
+			}
+			out, err := releaseScript(t, env, "land-pr", "Owner/Repo", "branch-x", "the title")
+			if (err == nil) != c.ok {
+				t.Fatalf("err = %v, want ok=%v\n%s", err, c.ok, out)
+			}
+			for _, w := range c.out {
+				if !strings.Contains(out, w) {
+					t.Errorf("output lacks %q\n%s", w, out)
+				}
+			}
+			logb, _ := os.ReadFile(filepath.Join(fake, "log"))
+			log := string(logb)
+			for _, w := range c.has {
+				if !strings.Contains(log, w) {
+					t.Errorf("log lacks %q\n%s", w, log)
+				}
+			}
+			for _, w := range c.lacks {
+				if strings.Contains(log, w) {
+					t.Errorf("log has %q\n%s", w, log)
+				}
+			}
+			if n := strings.Count(log, "pr create"); n > 1 {
+				t.Errorf("pr create ran %d times", n)
+			}
+		})
+	}
+}
