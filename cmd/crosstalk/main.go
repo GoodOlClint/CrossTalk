@@ -45,9 +45,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "mcp":
 		return runMCP(stderr)
 	case "install", "uninstall", "reinstall":
-		fi, err := os.Stdin.Stat()
-		tty := err == nil && fi.Mode()&os.ModeCharDevice != 0
-		return runInstall(args[0], args[1:], os.Stdin, tty, stdout, stderr)
+		return runInstall(args[0], args[1:], os.Stdin, isTerminal(os.Stdin), stdout, stderr)
 	case "send":
 		return runSend(args[1:], os.Stdin, stdout, stderr)
 	case "capture":
@@ -62,6 +60,15 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "crosstalk: unknown command %q\n%s", args[0], usage)
 		return 2
 	}
+}
+
+func isTerminal(f *os.File) bool {
+	fi, err := f.Stat()
+	if err != nil || fi.Mode()&os.ModeCharDevice == 0 {
+		return false
+	}
+	null, err := os.Stat(os.DevNull)
+	return err != nil || !os.SameFile(fi, null)
 }
 
 // harnesses is every supported harness in trust order: an explicit

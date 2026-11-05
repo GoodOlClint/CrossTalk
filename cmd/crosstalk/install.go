@@ -515,7 +515,14 @@ func installRemovePath(files []string, line string) error {
 		if len(kept) == len(lines) {
 			continue
 		}
-		if err := harness.ReplaceFile(f, []byte(strings.Join(kept, "\n"))); err != nil {
+		rest := strings.Join(kept, "\n")
+		if strings.TrimSpace(rest) == "" {
+			if err := os.Remove(f); err != nil {
+				return err
+			}
+			continue
+		}
+		if err := harness.ReplaceFile(f, []byte(rest)); err != nil {
 			return err
 		}
 	}
