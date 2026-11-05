@@ -157,3 +157,36 @@ func Identify(ctx context.Context, hs []Harness, req RequestContext) (Session, b
 	}
 	return Session{}, false, nil
 }
+
+// Installer is implemented by a harness that `crosstalk install` can set up
+// (ADR 0016). InstallSteps and UninstallSteps only read: every change happens
+// in a Step's Apply, after the user saw its Change.
+type Installer interface {
+	// Found reports that the harness CLI is on the PATH.
+	Found() bool
+	InstallSteps(env InstallEnv) []Step
+	UninstallSteps(env InstallEnv) []Step
+	Checks(ctx context.Context, env InstallEnv) []CheckResult
+}
+
+type InstallEnv struct {
+	// Bin is the absolute path of the installed crosstalk binary.
+	Bin, Version, Home string
+	Run                func(ctx context.Context, name string, args ...string) ([]byte, error)
+	// Handshake starts command with args and env exactly as given and checks
+	// that it serves the CrossTalk tools at Version.
+	Handshake func(ctx context.Context, command string, args, env []string) error
+	// SkipRulePort lets install continue past old-prefix rules it cannot
+	// edit; the checks then warn about each.
+	SkipRulePort bool
+}
+
+type Step struct {
+	Title, Change string
+	Apply         func(ctx context.Context) error
+}
+
+type CheckResult struct {
+	ID, Detail   string
+	OK, WarnOnly bool
+}
