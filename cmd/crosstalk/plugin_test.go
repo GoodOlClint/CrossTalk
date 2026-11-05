@@ -181,3 +181,19 @@ func TestMarketplacesPinToReleaseTag(t *testing.T) {
 		}
 	}
 }
+
+func TestVersionIs013AndManifestsMatch(t *testing.T) {
+	if mcpserver.Version != "0.1.3" {
+		t.Errorf("binary version %s, want 0.1.3", mcpserver.Version)
+	}
+	for _, f := range []string{filepath.Join(pluginDir, ".claude-plugin/plugin.json"), filepath.Join(pluginDir, ".codex-plugin/plugin.json")} {
+		if v := readJSON(t, f)["version"]; v != mcpserver.Version {
+			t.Errorf("%s version %v, binary %s", f, v, mcpserver.Version)
+		}
+	}
+	for _, p := range readJSON(t, "../../.claude-plugin/marketplace.json")["plugins"].([]any) {
+		if v := p.(map[string]any)["version"]; v != mcpserver.Version {
+			t.Errorf("claude marketplace version %v, binary %s", v, mcpserver.Version)
+		}
+	}
+}
