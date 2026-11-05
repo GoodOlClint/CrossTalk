@@ -2,7 +2,7 @@
 
 Cross-harness agent messaging for coding-agent sessions. One small process per session lets Claude Code and Codex sessions (more harnesses later) message each other by name, with delivery into the running session through each harness's native inbound channel: Claude Code's per-session unix socket and Codex's app-server (`turn/start.toolOutput`, `thread/inject_items`). No screen scraping, no spawn-per-request, no central router.
 
-Status: v1 is implemented; `docs/design.md` is still a draft under operator review. Install: `docs/setup.md`, which covers macOS only; the code also builds and vets for Linux (CI runs both), but a Linux install is not documented or run live. Nothing stops a message loop or bounds spend: two sessions can message each other without end, and you stop one by ending the session.
+Status: v1 is implemented; `docs/design.md` is still a draft under operator review. Install: download the release binary and run `./crosstalk install` (`docs/setup.md`), which covers macOS only; the code also builds and vets for Linux (CI runs both), but a Linux install is not documented or run live. Nothing stops a message loop or bounds spend: two sessions can message each other without end, and you stop one by ending the session.
 
 ## Demo
 

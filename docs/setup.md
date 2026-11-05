@@ -1,43 +1,38 @@
 # Set up CrossTalk on one Mac
 
-CrossTalk lets Claude Code and Codex sessions on this Mac message each other by name. You need macOS, and Claude Code and/or Codex. A first clean-account run (2026-11-04) passed the basic plumbing and the Codex authority case; both cross-harness answer round trips passed live with the plugin only, and Codex started outside a shell passed on result. A Claude peer read a file on a soft ask on that run. In a live replica at c4025a9 (typed and bound Claude session, real Codex asker, harmless question answered first), Claude did not read the file before its user approved in 3 of 3 Haiku runs and 1 of 1 Sonnet run, where the older text read in 1 of 1; the sample is small and the rule is advice to the model, not enforcement, so a session in auto mode could still read on a peer's word. An explicit `prompt` approval entry is indirect only ([open facts](decisions/0013-agent-plugins-and-skill-packaging.md#not-yet-run-live)).
+CrossTalk lets Claude Code and Codex sessions on this Mac message each other by name. You need macOS, and Claude Code and/or Codex. A first clean-account run (2026-11-04) passed the basic plumbing and the Codex authority case; both cross-harness answer round trips passed live with the plugin only, and Codex started outside a shell passed on result. A Claude peer read a file on a soft ask on that run. In a live replica at c4025a9 (typed and bound Claude session, real Codex asker, harmless question answered first), Claude did not read the file before its user approved in 3 of 3 Haiku runs and 1 of 1 Sonnet run, where the older text read in 1 of 1; the sample is small and the rule is advice to the model, not enforcement, so a session in auto mode could still read on a peer's word. An explicit `prompt` approval entry is indirect only ([open facts](decisions/0013-agent-plugins-and-skill-packaging.md#not-yet-run-live)). `crosstalk install` (0.1.3, [ADR 0016](decisions/0016-crosstalk-install-registers-mcp-at-the-installed-path.md)) has run against the real `claude` and `codex` CLIs in scratch home directories, not yet on a clean account.
 
-1. **Install the binary.** The main route is the release download: a universal binary (one file that runs on Apple silicon and Intel Macs) that is signed and notarized, so you do not need Go. Replace `v0.1.2` with the release you want. Run this in a scratch directory:
+1. **Download and verify the binary.** The release asset for macOS is a universal binary (one file that runs on Apple silicon and Intel Macs) that is signed and notarized, so you do not need Go. Replace `v0.1.3` with the release you want. Run this in a scratch directory:
    ```sh
-   TAG=v0.1.2
+   TAG=v0.1.3
    curl -fLO "https://github.com/GoodOlClint/CrossTalk/releases/download/$TAG/crosstalk-$TAG-macos-universal.zip" &&
    curl -fLO "https://github.com/GoodOlClint/CrossTalk/releases/download/$TAG/crosstalk-$TAG-macos-universal.zip.sha256" &&
    shasum -a 256 -c "crosstalk-$TAG-macos-universal.zip.sha256" &&
    unzip "crosstalk-$TAG-macos-universal.zip" &&
-   mkdir -p "$HOME/.local/bin" &&
-   mv crosstalk "$HOME/.local/bin/" &&
-   "$HOME/.local/bin/crosstalk" version
+   ./crosstalk version
    ```
-   The chain stops at the first failure, so a failed download or checksum installs nothing; the checksum line must print `OK`. Then put the directory on the PATH in both `~/.zprofile` and `~/.zshenv` (shell profiles do not reach a harness started outside a shell; see the table below). On an admin account you can move the binary to `/opt/homebrew/bin` instead. A binary older than 0.1.2 has no `version` subcommand, so do not use it to check an existing install; compare the installed plugin version instead.
+   The chain stops at the first failure, so a failed download or checksum leaves nothing to run; the checksum line must print `OK`.
 
    Terms: to *notarize* is to upload a signed program to Apple, which scans it and records a ticket that macOS checks online. A *hardened runtime* binary is signed with extra OS-enforced limits on what it can do. *Quarantine* is the flag (`com.apple.quarantine`) that browsers and some other apps put on a downloaded file so macOS runs its Gatekeeper check on first launch. To *staple* is to attach the notarization ticket to the file so it works offline.
 
-   First run on macOS: the binary is signed with a Developer ID certificate and its zip is notarized, but a bare command-line binary cannot be stapled, so macOS finds the ticket online. `curl` does not set the quarantine flag, so the download above skips the Gatekeeper prompt (this is how macOS behaves for curl downloads; not re-checked on a release build before the first release). If you download the zip with a browser instead, the extracted file may carry the quarantine flag; whether Gatekeeper then opens it silently or shows a prompt for a notarized bare binary is unverified. If it blocks, `xattr -d com.apple.quarantine ~/.local/bin/crosstalk` clears the flag. `spctl --assess` on a bare binary reports "rejected" even when it is signed, because it judges apps; do not use it as the check, use `codesign --verify --strict --verbose=2 ~/.local/bin/crosstalk`. None of this has been run against a real release build yet: the first release run is unproven.
+   First run on macOS: the binary is signed with a Developer ID certificate and its zip is notarized, but a bare command-line binary cannot be stapled, so macOS finds the ticket online. `curl` does not set the quarantine flag, so the download above skips the Gatekeeper prompt (this is how macOS behaves for curl downloads; not re-checked on a release build). If you download the zip with a browser instead, the extracted file may carry the quarantine flag; whether Gatekeeper then opens it silently or shows a prompt for a notarized bare binary is unverified. If it blocks, `xattr -d com.apple.quarantine crosstalk` clears the flag. `spctl --assess` on a bare binary reports "rejected" even when it is signed, because it judges apps; do not use it as the check, use `codesign --verify --strict --verbose=2 crosstalk`.
 
-   Alternative, build from source with Go. The repo is public, so `go` needs no `GOPRIVATE`, no `gh auth` and no GitHub login. `@latest` resolves to the newest release tag, or to the latest commit on `main` while no release tag exists. Admin account:
-   ```sh
-   brew install go
-   GOBIN="$(brew --prefix)/bin" go install github.com/GoodOlClint/crosstalk/cmd/crosstalk@latest
-   crosstalk version
-   ```
-   Non-admin account (`/opt/homebrew/bin` is not writable): use `GOBIN="$HOME/.local/bin"` and put that directory on the PATH as above.
-2. **Claude only: remove a manual entry.** If you ever ran `claude mcp add ... crosstalk`, run `claude mcp remove --scope user crosstalk`, and rewrite any allow, ask or deny rule that names `mcp__crosstalk__*` as `mcp__plugin_crosstalk_crosstalk__*`. **Codex:** an existing `[mcp_servers.crosstalk]` entry takes priority over the plugin and does not inherit its `approve` default: with no `default_tools_approval_mode`, every CrossTalk tool prompts and `codex exec` blocks them. Set `"prompt"` to keep prompts, `"approve"` to run tools without asking (the plugin's default), or delete the entry knowingly. `codex plugin add` rewrites `~/.codex/config.toml`, so remove a manual entry by its content (the `[mcp_servers.crosstalk]` table), not by line number, and remove it together with every `[mcp_servers.crosstalk.tools.*]` sub-table: a tools table left without its server makes Codex refuse the whole config (`invalid transport`).
-3. **Install the plugin.**
-   ```sh
-   claude plugin install crosstalk --marketplace GoodOlClint/CrossTalk
-   codex plugin marketplace add GoodOlClint/CrossTalk && codex plugin add crosstalk@crosstalk
-   ```
-   The Claude plugin install tries SSH (`git@github.com`) first and falls back to HTTPS on its own, so no SSH key or GitHub credential is needed (checked 2026-11-04 in a scratch HOME with no key: "SSH clone failed, retrying with HTTPS"). Codex clones over HTTPS directly. If you want to skip the failed SSH attempt, add the marketplace by URL first: `claude plugin marketplace add https://github.com/GoodOlClint/CrossTalk.git`, then `claude plugin install crosstalk@crosstalk` (the URL form was not run).
-4. **Claude only: allow the tools.** A Claude plugin cannot pre-allow its tools. Add `"mcp__plugin_crosstalk_crosstalk__*"` to `permissions.allow` in `~/.claude/settings.json`.
-5. **Restart** every running Claude and Codex session. A running session keeps the old server.
-6. **Try it.** Open one Claude and one Codex session (or two of either). In one, say: "List the other agents, then ask the session named `<its name>` what directory it is in." Name a target from the list. The answer arrives as a new message. `ask` needs the target to have made its first CrossTalk call; before that, use `send_message`. A Claude session nobody has typed into yet cannot answer: type one line in it first. An `ask` has one reply: if the peer refuses, that spends it, and after its user approves, a second `reply` is rejected and the answer goes by `send_message`. A new directory shows a folder-trust dialog; accept it. If a peer asks you before answering anything else, that is the notice working: allow it or answer for it.
-7. **Upgrade.** Repeat step 1 with the new tag (or re-run the `go install` line), then `claude plugin marketplace update crosstalk && claude plugin update crosstalk@crosstalk` and `codex plugin marketplace upgrade`, then restart sessions. Each release bumps the plugin version, which `plugin update` compares; a plugin installed before the bump needs `claude plugin uninstall` and a reinstall.
-8. **Uninstall.** `claude plugin uninstall crosstalk`, `codex plugin remove crosstalk@crosstalk`, then remove the marketplace (`claude plugin marketplace remove crosstalk`, `codex plugin marketplace remove crosstalk`), the `mcp__plugin_crosstalk_crosstalk__*` allow rule and any cached plugin copy, stop running `crosstalk mcp` shims, and delete the binary.
+   Alternative, build from source with Go. The repo is public, so `go` needs no `GOPRIVATE`, no `gh auth` and no GitHub login: `GOBIN="$PWD" go install github.com/GoodOlClint/crosstalk/cmd/crosstalk@latest`. `@latest` resolves to the newest release tag.
+2. **Install.** Run `./crosstalk install`. It finds `claude` and `codex` on the PATH and sets up each one it finds (`./crosstalk install claude` or `./crosstalk install codex` picks one). Each step prints what it will change and asks `[y/N]`; `--yes` answers yes to every required step. The steps:
+   - copy the binary to `~/.local/bin/crosstalk` (`--bin-dir DIR` picks another directory); a running CrossTalk server keeps its old file;
+   - install or update the plugin, which carries the skill: `claude plugin install crosstalk@crosstalk`, `codex plugin add crosstalk@crosstalk`, each from the `GoodOlClint/CrossTalk` marketplace, which pins the plugin to the last release tag;
+   - Claude: port every allow, ask or deny rule that names a 0.1.2 tool name (the plugin-server prefix, ending in `crosstalk_crosstalk__`) to the new prefix `mcp__crosstalk__` in `~/.claude/settings.json` and in each project's `.claude/settings.local.json`; a deny or ask on the old prefix in a checked-in `.claude/settings.json` or in managed settings stops the install, naming the file and rule, until you port it by hand (or pass `--skip-rule-port` after reading the list);
+   - register the MCP server at the installed path: Claude `claude mcp add --scope user crosstalk -- ~/.local/bin/crosstalk mcp` (an existing user entry is replaced and keeps its `env`); Codex a `[mcp_servers.crosstalk]` table in `~/.codex/config.toml` with that `command`, `args = ["mcp"]` and `default_tools_approval_mode = "approve"` (an existing table keeps its approval mode, `env` and `tools` sub-tables; an entry that wraps the command, such as `/usr/bin/env crosstalk mcp`, is shown before its args are replaced);
+   - Claude: add `mcp__crosstalk__*` to `permissions.allow` in `~/.claude/settings.json`;
+   - optional, `--path` or a `y` answer: add `~/.local/bin` to the PATH in `~/.zprofile` and `~/.zshenv`, only needed to type `crosstalk send`. The harnesses use the absolute path, so a harness started outside a shell finds the server.
+
+   Every changed file is backed up next to itself as `<file>.crosstalk-backup` first (Claude's `settings.json` is rewritten with sorted keys; the backup keeps the original). Without a terminal and without `--yes`, install prints the steps, changes nothing and exits 2. Install ends with checks K1 to K7: plugin at the binary's version (K1), exactly one CrossTalk server per harness and none from the plugin (K2), Codex accepts its config (K3), allow rule present and no rule left on the old prefix (K4), the registered command is the installed binary (K5), a live MCP handshake with it (K6), `crosstalk` on a login shell's PATH (K7, warning only). `crosstalk install --check` runs the checks alone. Exit 0 means every check passed.
+
+   Projects that `~/.claude.json` does not list are out of install's reach: if you keep Claude settings in other directories, run `grep -rn crosstalk_crosstalk__ --include='settings*.json' ~/src` (your source root) and port what it finds to `mcp__crosstalk__`.
+3. **Restart** every running Claude and Codex session. A running session keeps the old server (in Claude, `/mcp` and reconnect also works).
+4. **Try it.** Open one Claude and one Codex session (or two of either). In one, say: "List the other agents, then ask the session named `<its name>` what directory it is in." Name a target from the list. The answer arrives as a new message. `ask` needs the target to have made its first CrossTalk call; before that, use `send_message`. A Claude session nobody has typed into yet cannot answer: type one line in it first. An `ask` has one reply: if the peer refuses, that spends it, and after its user approves, a second `reply` is rejected and the answer goes by `send_message`. A new directory shows a folder-trust dialog; accept it. If a peer asks you before answering anything else, that is the notice working: allow it or answer for it.
+5. **Upgrade.** Download the new release as in step 1 and run its `./crosstalk install` (or `./crosstalk reinstall`, which re-applies every step), then restart sessions. From 0.1.2: plugin 0.1.2 started the server itself; once the plugin updates it has none, so run the new binary's `crosstalk install`, which also ports the old-prefix rules. Moving the binary to another directory needs `crosstalk reinstall --bin-dir DIR`.
+6. **Uninstall.** `crosstalk uninstall` reverses install: it removes the allow rule (rules you wrote stay, under the new prefix), the MCP entries (the Codex table with all its sub-tables), both plugins (the marketplaces stay), the PATH lines it added, and last the binary, which it keeps while another harness still runs it (`crosstalk uninstall claude` with Codex still set up keeps it). The state directory `~/.local/state/crosstalk` (journals, tokens) stays unless you pass `--purge` on a full uninstall; `--purge` refuses while a running session's CrossTalk server holds an agent there.
 
 `codex --no-daemon` tabs can send and pull with `receive_message` but cannot receive delivered messages: the sender gets `unreachable`. To receive in such a tab, give the tab its own app server and tell CrossTalk where it is (not run live):
 
@@ -46,17 +41,17 @@ S="$HOME/.codex/crosstalk-tab.sock"
 codex app-server --listen "unix://$S" &
 ```
 
-A plugin install has no entry in `~/.codex/config.toml` to extend, and an entry holding only `env` makes `codex mcp list` fail with "invalid transport". Write a full entry (it takes priority over the plugin, as step 2 says, so keep the approval mode):
+Add the endpoint to the `[mcp_servers.crosstalk]` table that `crosstalk install` wrote; an entry holding only `env` makes `codex mcp list` fail with "invalid transport", and a later `crosstalk install` keeps the `env`:
 
 ```toml
 [mcp_servers.crosstalk]
-command = "crosstalk"
+command = "/Users/you/.local/bin/crosstalk"
 args = ["mcp"]
 default_tools_approval_mode = "approve"
 env = { CROSSTALK_CODEX_ENDPOINTS = "unix:///Users/you/.codex/crosstalk-tab.sock" }
 ```
 
-Checked in a scratch `CODEX_HOME`: `codex mcp list` accepts this entry. Not checked: running it next to the plugin in a live session.
+Checked in a scratch `CODEX_HOME`: `codex mcp list` accepts this entry. Not checked in a live session.
 
 Then start the tab against that server:
 
@@ -70,8 +65,8 @@ codex --remote "unix://$S"
 
 | You see | Cause and fix |
 |---|---|
-| Server failed to start (`ENOENT executable not found in $PATH`), or the model says a CrossTalk tool "isn't available" with no error | `crosstalk` is not on the PATH the harness sees (`codex exec` shows no error). Run `command -v crosstalk`; if empty, repeat step 1. Start the harness from a shell that has the PATH, or put the absolute path in a hand-written MCP entry; on Claude that entry and the plugin both start a shim, so uninstall the plugin first (you lose the skill). Claude Code caches a failed server for up to 15 minutes while `claude mcp list` says Connected: after fixing the PATH, run `/mcp` and reconnect in the same session; a restarted session stayed failed. |
-| `agent_held` | A second CrossTalk server serves the session, usually the manual entry from step 2. The notice names the fix: remove it and restart. |
+| Server failed to start (`ENOENT`), or the model says a CrossTalk tool "isn't available" with no error | The registered binary is gone or moved. Run `crosstalk install --check`; K5 names the registered path. Run `crosstalk reinstall` from the binary you want, then restart the session. Claude Code caches a failed server for up to 15 minutes while `claude mcp list` says Connected: run `/mcp` and reconnect in the same session. |
+| `agent_held` | A second CrossTalk server serves the session: a plugin from 0.1.2 that still starts its own server next to the installed one, or a project or local `crosstalk` entry. `crosstalk install --check` (K2) names it; update the plugin with `crosstalk install`, remove the extra entry, and restart. |
 | A `codex exec` row with empty `cwd` and `status` and `reachable: false` | An exec session has no app server CrossTalk can reach: it can send, never receive, and its row can linger. Pick the interactive row instead. A `claude -p` or `codex --no-daemon` asker cannot receive the answer. |
 | A Codex row with empty `cwd`, `reachable: false` after starting `codex -c ...` | Any `-c` override makes Codex run its own embedded app server instead of the managed daemon, on every platform, so CrossTalk cannot deliver to it. Put the setting in `~/.codex/config.toml` and start `codex` without `-c`. |
 | `crosstalk: false` | No CrossTalk call yet. It gets `send_message` but not `ask`. A prompt like "who are you?" can trigger Claude's native agent list and leave the session unbound; ask it to call CrossTalk's `list_agents` instead. |
