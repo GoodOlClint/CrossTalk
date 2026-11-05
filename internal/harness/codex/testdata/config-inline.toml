@@ -1,0 +1,9 @@
+[marketplaces.crosstalk]
+source_type = "local"
+source = "/home/user/mkt"
+
+[plugins."crosstalk@crosstalk"]
+enabled = true
+
+[mcp_servers]
+crosstalk = { command = "crosstalk", args = ["mcp"] }
