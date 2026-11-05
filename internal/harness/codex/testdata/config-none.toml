@@ -1,0 +1,6 @@
+[marketplaces.crosstalk]
+source_type = "local"
+source = "/home/user/mkt"
+
+[plugins."crosstalk@crosstalk"]
+enabled = true

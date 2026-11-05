@@ -3,6 +3,7 @@
 - **Status:** Provisional
 - **Date:** 2026-11-03
 - **Deciders:** operator + Claude
+- **Note (2026-11-05):** [ADR 0016](0016-crosstalk-install-registers-mcp-at-the-installed-path.md) adds the optional `harness.Installer` interface (0.1.3): each harness package supplies its own install, uninstall and check steps.
 - **Context source:** operator instruction during the first live run: adding a harness such as Gemini must not require rewriting the Claude or Codex support. ADR 0007 is reserved for Codex toolOutput delivery (Codex-authored).
 
 ## Context
@@ -11,7 +12,7 @@ Design §2 already says "adding a harness = one adapter: register(), inject(mess
 
 ## Decision
 
-"Pluggable" here means an in-process Go interface with a compile-time list, not a runtime plugin: every release ships all supported harnesses in the one binary (operator, 2026-11-03). The bar is that adding a harness is one new package plus one line in `cmd/crosstalk`, with no change to the existing harness packages and no harness-specific code in the shim. That holds only within the extension points the interface has today: the core selects one `NativeIngress` implementation (the first harness in the list that has one) for every agent; a second native ingress protocol, a deferred-delivery (mailbox) capability and installation hooks are outside the interface; and `Render` is on the interface but no shared code calls it, since each injector builds its own payload. Revisit when a second native protocol is chosen. Everything a harness contributes lives behind one interface in `internal/harness`, and the shim, mcpserver and A2A code never name a concrete harness.
+"Pluggable" here means an in-process Go interface with a compile-time list, not a runtime plugin: every release ships all supported harnesses in the one binary (operator, 2026-11-03). The bar is that adding a harness is one new package plus one line in `cmd/crosstalk`, with no change to the existing harness packages and no harness-specific code in the shim. That holds only within the extension points the interface has today: the core selects one `NativeIngress` implementation (the first harness in the list that has one) for every agent; a second native ingress protocol and a deferred-delivery (mailbox) capability are outside the interface, while installation is the optional `harness.Installer` (ADR 0016); and `Render` is on the interface but no shared code calls it, since each injector builds its own payload. Revisit when a second native protocol is chosen. Everything a harness contributes lives behind one interface in `internal/harness`, and the shim, mcpserver and A2A code never name a concrete harness.
 
 Final interface (`internal/harness`, implemented 2026-11-03):
 

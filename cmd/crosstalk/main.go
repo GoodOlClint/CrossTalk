@@ -27,10 +27,13 @@ import (
 const usage = `usage: crosstalk <command>
 
 commands:
-  mcp      run the shim as an MCP server over stdio
-  send     send a text to an agent by name, for plain scripts
-  capture  record raw Codex app-server frames for fixtures
-  version  print the version
+  install    install the binary and set up Claude Code and Codex
+  uninstall  undo install
+  reinstall  re-apply every install step
+  mcp        run the shim as an MCP server over stdio
+  send       send a text to an agent by name, for plain scripts
+  capture    record raw Codex app-server frames for fixtures
+  version    print the version
 `
 
 func run(args []string, stdout, stderr io.Writer) int {
@@ -41,6 +44,10 @@ func run(args []string, stdout, stderr io.Writer) int {
 	switch args[0] {
 	case "mcp":
 		return runMCP(stderr)
+	case "install", "uninstall", "reinstall":
+		fi, err := os.Stdin.Stat()
+		tty := err == nil && fi.Mode()&os.ModeCharDevice != 0
+		return runInstall(args[0], args[1:], os.Stdin, tty, stdout, stderr)
 	case "send":
 		return runSend(args[1:], os.Stdin, stdout, stderr)
 	case "capture":

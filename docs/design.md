@@ -167,9 +167,9 @@ States (V16): `accepted` = injected immediately with harness evidence (Claude so
 
 ## 9. Lifecycle
 
-Install (ADR 0006, ADR 0013), once per harness, no wrapper and no per-session configuration. The plugins in `plugins/crosstalk/` do the same and add the skill (`docs/setup.md`); the manual forms are:
-- Claude: `claude mcp add --scope user crosstalk -- crosstalk mcp`
-- Codex: in `~/.codex/config.toml`, `[mcp_servers.crosstalk]` with `command = "crosstalk"`, `args = ["mcp"]` and `default_tools_approval_mode = "approve"` (stops Codex prompting on every CrossTalk tool call)
+Install (ADR 0006, ADR 0013, ADR 0016), once per harness, no wrapper and no per-session configuration: `crosstalk install` copies the binary to `~/.local/bin`, installs the plugin from `plugins/crosstalk/` (the skill only) and registers the server at the binary's absolute path (`docs/setup.md`); the manual forms are:
+- Claude: `claude mcp add --scope user crosstalk -- <abs path>/crosstalk mcp`
+- Codex: in `~/.codex/config.toml`, `[mcp_servers.crosstalk]` with `command = "<abs path>/crosstalk"`, `args = ["mcp"]` and `default_tools_approval_mode = "approve"` (stops Codex prompting on every CrossTalk tool call)
 
 Start: the harness connects the MCP server; that `crosstalk mcp` process is the shim. Protocol initialization creates no agent. Per-agent state (descriptor, agent_id-stable uds `~/.local/state/crosstalk/sock/<agent_id>.sock`, journal, A2A listener on its own loopback port) is created lazily on the first bound call for that agent, in the §3 order. `not_ready` applies only between a tool call and completion of its agent's binding, which should be immediate. A call whose name lock is held by a live owner is not served under that name.
 

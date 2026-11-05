@@ -1,0 +1,13 @@
+[marketplaces.crosstalk]
+source_type = "local"
+source = "/home/user/mkt"
+
+[plugins."crosstalk@crosstalk"]
+enabled = true
+
+[mcp_servers.crosstalk]
+command = "/usr/bin/env"
+args = ["crosstalk", "mcp"]
+
+[mcp_servers.crosstalk.env]
+CROSSTALK_CODEX_ENDPOINTS = "unix:///s.sock"

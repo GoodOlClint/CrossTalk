@@ -2,7 +2,7 @@
 
 Cross-harness agent messaging for coding-agent sessions. One small process per session lets Claude Code and Codex sessions (more harnesses later) message each other by name, with delivery into the running session through each harness's native inbound channel: Claude Code's per-session unix socket and Codex's app-server (`turn/start.toolOutput`, `thread/inject_items`). No screen scraping, no spawn-per-request, no central router.
 
-Status: v1 is implemented; `docs/design.md` is still a draft under operator review. Install: `docs/setup.md`, which covers macOS only; the code also builds and vets for Linux (CI runs both), but a Linux install is not documented or run live. Nothing stops a message loop or bounds spend: two sessions can message each other without end, and you stop one by ending the session.
+Status: v1 is implemented; `docs/design.md` is still a draft under operator review. Install: download the release binary and run `./crosstalk install` (`docs/setup.md`, macOS and Linux). CI builds and tests on both; a Linux install from the release asset has not been run live yet. Nothing stops a message loop or bounds spend: two sessions can message each other without end, and you stop one by ending the session.
 
 ## Demo
 
@@ -20,7 +20,7 @@ Every existing bridge either spawns a fresh `claude -p` / `codex exec` per reque
 
 - `docs/design.md`: the design document (components, registry, message schema, ingress contracts, injector per harness, trust model, tool surface, gating tests).
 - `docs/decisions/`: architecture decision records.
-- `docs/setup.md`: install on one Mac.
+- `docs/setup.md`: install on macOS or Linux.
 - `plugins/crosstalk/`: the Claude Code and Codex plugin and its skill.
 
 ## License

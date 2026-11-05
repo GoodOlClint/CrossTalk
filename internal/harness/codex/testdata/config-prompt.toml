@@ -1,0 +1,14 @@
+[marketplaces.crosstalk]
+source_type = "local"
+source = "/home/user/mkt"
+
+[plugins."crosstalk@crosstalk"]
+enabled = true
+
+[mcp_servers.crosstalk]
+command = "crosstalk"
+args = ["mcp"]
+default_tools_approval_mode = "prompt"
+
+[mcp_servers.crosstalk.tools.list_agents]
+approval_mode = "approve"

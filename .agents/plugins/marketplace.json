@@ -7,8 +7,10 @@
     {
       "name": "crosstalk",
       "source": {
-        "source": "local",
-        "path": "./plugins/crosstalk"
+        "source": "git-subdir",
+        "url": "https://github.com/GoodOlClint/CrossTalk.git",
+        "path": "plugins/crosstalk",
+        "ref": "v0.1.2"
       },
       "policy": {
         "installation": "AVAILABLE",
