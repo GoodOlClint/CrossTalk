@@ -35,12 +35,16 @@ jobs:
         run: go test ./...
       - name: Build universal binary
         run: scripts/release-build.sh build "$RUNNER_TEMP/dist"
+      - name: Build Linux binaries
+        run: scripts/release-build.sh build-linux "$RUNNER_TEMP/dist-linux"
+      - name: Package Linux binaries
+        run: scripts/release-build.sh package-linux "$RUNNER_TEMP/dist-linux" "$TAG"
       - name: Import signing certificate
         env:
           APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
           APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
         run: |
-          set -eu
+          set -euo pipefail
           umask 077
           mkdir "$RUNNER_TEMP/release-secrets"
           keychain="$RUNNER_TEMP/release-signing.keychain-db"
@@ -59,7 +63,8 @@ jobs:
         env:
           APPLE_CODESIGN_IDENTITY: ${{ secrets.APPLE_CODESIGN_IDENTITY }}
         run: |
-          set -eu
+          set -euo pipefail
+          scripts/release-build.sh check-identity "$RUNNER_TEMP/release-signing.keychain-db"
           codesign --force --timestamp --options runtime \
             --keychain "$RUNNER_TEMP/release-signing.keychain-db" \
             --sign "$APPLE_CODESIGN_IDENTITY" "$RUNNER_TEMP/dist/crosstalk"
@@ -104,7 +109,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
-          files=("$RUNNER_TEMP/dist/crosstalk-$TAG-macos-universal.zip" "$RUNNER_TEMP/dist/crosstalk-$TAG-macos-universal.zip.sha256")
+          files=(
+            "$RUNNER_TEMP/dist/crosstalk-$TAG-macos-universal.zip"
+            "$RUNNER_TEMP/dist/crosstalk-$TAG-macos-universal.zip.sha256"
+            "$RUNNER_TEMP/dist-linux/crosstalk-$TAG-linux-amd64.tar.gz"
+            "$RUNNER_TEMP/dist-linux/crosstalk-$TAG-linux-amd64.tar.gz.sha256"
+            "$RUNNER_TEMP/dist-linux/crosstalk-$TAG-linux-arm64.tar.gz"
+            "$RUNNER_TEMP/dist-linux/crosstalk-$TAG-linux-arm64.tar.gz.sha256"
+          )
           repo="$GITHUB_REPOSITORY"
           pre=()
           case "$TAG" in *-rc.*) pre=(--prerelease) ;; esac
