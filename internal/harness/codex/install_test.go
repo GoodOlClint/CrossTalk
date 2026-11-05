@@ -161,3 +161,19 @@ func TestCodexConfigEdit(t *testing.T) {
 		}
 	})
 }
+
+func TestCodexLocalMarketplaceSkipsUpgrade(t *testing.T) {
+	env, r := codexEnv(t, "config-none.toml")
+	env.Marketplace = "/scratch/mkt"
+	if err := applySteps((&Harness{}).InstallSteps(env)); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(r.calls, "codex plugin marketplace add /scratch/mkt") {
+		t.Errorf("marketplace not added: %v", r.calls)
+	}
+	for _, c := range r.calls {
+		if strings.HasPrefix(c, "codex plugin marketplace upgrade") {
+			t.Errorf("upgrade run for a local marketplace, which codex refuses: %v", r.calls)
+		}
+	}
+}

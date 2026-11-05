@@ -282,11 +282,12 @@ func pluginStep(env harness.InstallEnv) harness.Step {
 		Title:  "Codex plugin",
 		Change: "codex plugin marketplace add " + env.Marketplace + ", codex plugin marketplace upgrade crosstalk, codex plugin add " + pluginID,
 		Apply: func(ctx context.Context) error {
-			for _, args := range [][]string{
-				{"plugin", "marketplace", "add", env.Marketplace},
-				{"plugin", "marketplace", "upgrade", "crosstalk"},
-				{"plugin", "add", pluginID},
-			} {
+			cmds := [][]string{{"plugin", "marketplace", "add", env.Marketplace}}
+			// codex refuses upgrade on a local marketplace, which add already reads live.
+			if !filepath.IsAbs(env.Marketplace) && !strings.HasPrefix(env.Marketplace, ".") {
+				cmds = append(cmds, []string{"plugin", "marketplace", "upgrade", "crosstalk"})
+			}
+			for _, args := range append(cmds, []string{"plugin", "add", pluginID}) {
 				if _, err := env.Run(ctx, "codex", args...); err != nil {
 					return err
 				}
