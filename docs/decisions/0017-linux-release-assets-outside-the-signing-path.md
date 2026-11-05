@@ -33,5 +33,7 @@ The code builds and tests on Linux (CI runs `ubuntu-latest`), and a Linux test V
 ## Trial record
 
 - Rests on: ADR 0015.
-- Commits: none yet (plan only). Implementing commits carry `Provisional-ADR: 0017`.
+- Commits: 6a90282 (build-linux and package-linux), b25d37c (release job builds, packages and publishes the Linux assets). Implementing commits carry `Provisional-ADR: 0017`.
+- Pinning test: `TestReleaseWorkflowLinuxOutsideSigning` (no step that runs `codesign`, `notarytool`, `security` or `lipo` names `dist-linux`; the publish step lists the four Linux files).
+- Not yet run live: the next rc tag run publishing 2 macOS and 4 Linux files, and the amd64 tarball checked on a Linux host.
 - Pinning test: `TestReleaseBuildLinux` (plan section (b), slice B1).
