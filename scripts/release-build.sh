@@ -149,7 +149,11 @@ land-pr)
 		pr="$(gh pr create --repo "$repo" --head "$branch" --title "$title" --body "Opened by release-build.sh land-pr.")"
 		echo "opened $pr"
 	fi
-	gh pr merge --auto --squash --repo "$repo" "$pr" || echo "auto-merge not enabled; polling anyway" >&2
+	direct=
+	gh pr merge --auto --squash --repo "$repo" "$pr" || {
+		direct=1
+		echo "auto-merge refused: enable \"Allow auto-merge\" in $repo Settings > General > Pull Requests; merging directly once required checks pass" >&2
+	}
 	waited=0
 	while :; do
 		status="$(gh pr view "$pr" --repo "$repo" --json state,mergeStateStatus --jq '.state + " " + .mergeStateStatus')"
@@ -164,8 +168,23 @@ land-pr)
 			exit 1
 			;;
 		esac
+		if [ -n "$direct" ]; then
+			if [ "${status#* }" = CLEAN ]; then
+				gh pr merge --squash --repo "$repo" "$pr" || {
+					echo "direct merge failed: $pr" >&2
+					exit 1
+				}
+				echo "merged: $pr"
+				exit 0
+			fi
+			failed="$(gh pr checks --required --repo "$repo" "$pr" --json bucket --jq '[.[] | select(.bucket == "fail")] | length' 2>/dev/null || true)"
+			if [ "${failed:-0}" -gt 0 ] 2>/dev/null; then
+				echo "required checks failed: $pr (auto-merge was refused; enable \"Allow auto-merge\" in $repo)" >&2
+				exit 1
+			fi
+		fi
 		if [ "$waited" -ge "$timeout" ]; then
-			echo "not merged after ${timeout}s: $pr (state $state, mergeStateStatus ${status#* })" >&2
+			echo "not merged after ${timeout}s: $pr (state $state, mergeStateStatus ${status#* })${direct:+; auto-merge was refused, enable \"Allow auto-merge\" in $repo}" >&2
 			exit 1
 		fi
 		sleep "$poll"

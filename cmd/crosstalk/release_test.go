@@ -293,6 +293,20 @@ case "$1 $2" in
 	exit 0
 	;;
 "pr create") echo "https://example.test/pr/1" ;;
+"pr merge")
+	case "$*" in
+	*"--auto"*)
+		if [ -e "$FAKE_DIR/autofail" ]; then
+			echo "GraphQL: Auto merge is not allowed for this repository (enablePullRequestAutoMerge)" >&2
+			exit 1
+		fi
+		;;
+	esac
+	;;
+"pr checks")
+	cat "$FAKE_DIR/checks_out" 2>/dev/null
+	exit "$(cat "$FAKE_DIR/checks_rc" 2>/dev/null || echo 8)"
+	;;
 "pr view")
 	n=$(cat "$FAKE_DIR/n" 2>/dev/null || echo 0)
 	n=$((n + 1))
@@ -334,6 +348,14 @@ func TestLandPR(t *testing.T) {
 			[]string{url}, []string{"pr merge --auto --squash"}, []string{"pr create", "git push"}},
 		{"e already merged", map[string]string{"merged": url + "\n"}, "30", true,
 			nil, nil, []string{"pr create", "git push", "pr merge"}},
+		{"g auto refused, direct merge", map[string]string{"autofail": "", "polls": "OPEN BLOCKED\nOPEN CLEAN\n"}, "30", true,
+			[]string{"Auto merge is not allowed"}, []string{"pr merge --auto --squash", "pr merge --squash"}, nil},
+		{"h auto refused, checks fail", map[string]string{"autofail": "", "checks_rc": "1", "checks_out": "1\n", "polls": "OPEN BLOCKED\n"}, "30", false,
+			[]string{"Allow auto-merge", "checks failed"}, []string{"pr checks"}, []string{"pr merge --squash"}},
+		{"j auto refused, no checks registered yet", map[string]string{"autofail": "", "checks_rc": "1", "polls": "OPEN BLOCKED\nOPEN CLEAN\n"}, "30", true,
+			nil, []string{"pr merge --squash"}, nil},
+		{"i auto refused, never clean", map[string]string{"autofail": "", "polls": "OPEN BLOCKED\n"}, "3", false,
+			[]string{"Allow auto-merge", "BLOCKED"}, nil, []string{"pr merge --squash"}},
 		{"f remote branch no PR", map[string]string{"remote": "", "polls": "MERGED CLEAN\n"}, "30", true,
 			nil, []string{"pr create"}, []string{"git push"}},
 	}
