@@ -1,6 +1,6 @@
 # Why CrossTalk
 
-A coding agent works inside one session. It can read your files, run commands and edit code. It cannot see the other agent sessions open on the same machine. If you want two of them to cooperate, you do the carrying.
+A coding agent works inside one session. It can read your files, run commands and edit code. It can message other sessions of its own harness, but not sessions of a different one: Claude Code cannot reach Codex, and Codex cannot reach Claude Code. If you want the two to cooperate, you do the carrying, or the agents pass state through files.
 
 That is fine for one hand-off. It gets old when you run several sessions at once, or when you want an agent to get a second opinion without you stopping to relay it.
 
@@ -15,8 +15,8 @@ With CrossTalk, Claude asks Codex directly. The question lands in the Codex sess
 ## What it changes
 
 - Sessions can reach each other by name. `list_agents` shows every running session on the machine, its name, which harness it runs (a harness is the agent program, such as Claude Code or Codex) and its working directory. A message goes to a name.
-- Claude Code and Codex work with each other. The two programs have no common messaging system. CrossTalk is the layer between them.
-- Messages arrive inside the running session. The receiving agent sees them between its own steps. Nothing types into the terminal and nothing starts a fresh `claude -p` or `codex exec` process per message.
+- Claude Code and Codex message each other natively. Each already messages its own kind, but the two programs have no common messaging system. CrossTalk adds the path across, so state moves as messages instead of hand-off files.
+- Messages arrive inside the running session, through that harness's own inbound path: the same way a message from its own kind arrives. The receiving agent sees them in its context between its own steps. Nothing types into the terminal and nothing starts a fresh `claude -p` or `codex exec` process per message.
 - The sender is real. CrossTalk takes the sender's identity from the connection, not from what the message says. A message cannot claim to be from your other session by writing so.
 - CrossTalk adds no daemon and no central router. Each session starts its own small CrossTalk process, and that process ends with the session.
 
