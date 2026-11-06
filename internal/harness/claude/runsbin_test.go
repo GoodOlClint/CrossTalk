@@ -41,6 +41,18 @@ func TestEntryRunsBinary(t *testing.T) {
 		"local unclean": {"local", func(t *testing.T, bin string) string {
 			return filepath.Dir(bin) + "/sub/../crosstalk"
 		}, true},
+		"local symlink then dotdot": {"local", func(t *testing.T, bin string) string {
+			// link -> <realdir>/sub, so link/../crosstalk is <realdir>/crosstalk, not <linkdir>/crosstalk
+			sub := filepath.Join(filepath.Dir(bin), "sub")
+			if err := os.Mkdir(sub, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			l := filepath.Join(t.TempDir(), "link")
+			if err := os.Symlink(sub, l); err != nil {
+				t.Fatal(err)
+			}
+			return l + "/../crosstalk"
+		}, true},
 		"local other binary": {"local", func(t *testing.T, bin string) string {
 			o := filepath.Join(t.TempDir(), "crosstalk")
 			writeFile(t, o, "y")

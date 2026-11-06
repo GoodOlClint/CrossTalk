@@ -591,7 +591,7 @@ func (h *Harness) Registered(env harness.InstallEnv) (bool, error) {
 }
 
 // runsBin reports whether an entry command starts bin: a bare name is
-// looked up on PATH, then both sides are cleaned and symlink-resolved. If
+// looked up on PATH, then both sides are symlink-resolved. If
 // either side cannot be resolved the exact strings are compared.
 func runsBin(cmd, bin string) bool {
 	if cmd == bin {
@@ -604,9 +604,20 @@ func runsBin(cmd, bin string) bool {
 		}
 		cmd = p
 	}
-	a, errA := filepath.EvalSymlinks(filepath.Clean(cmd))
-	b, errB := filepath.EvalSymlinks(filepath.Clean(bin))
+	a, errA := resolvePath(cmd)
+	b, errB := resolvePath(bin)
 	return errA == nil && errB == nil && a == b
+}
+
+// resolvePath resolves symlinks and dot components in filesystem order; a
+// lexical Clean is the fallback for a path whose ".." passes through a
+// directory that does not exist.
+func resolvePath(p string) (string, error) {
+	r, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		return filepath.EvalSymlinks(filepath.Clean(p))
+	}
+	return r, nil
 }
 
 // scopedEntry is a crosstalk server entry with where Claude found it.
