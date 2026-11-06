@@ -13,6 +13,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"syscall"
 
 	"github.com/GoodOlClint/crosstalk/internal/harness"
 )
@@ -528,13 +529,73 @@ func shadowing(home string) []string {
 	return out
 }
 
+// entriesAnyScope lists every crosstalk server entry Claude would start: the
+// user-scope entry, each project's local-scope entry in ~/.claude.json, and the
+// crosstalk entry in the .mcp.json of each project recorded there. A project
+// that ~/.claude.json does not list is not found.
+func entriesAnyScope(home string) (user *mcpEntry, other []*mcpEntry, err error) {
+	var out []*mcpEntry
+	b, err := os.ReadFile(claudeJSONPath(home))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil, nil
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	var cj struct {
+		MCPServers map[string]*mcpEntry `json:"mcpServers"`
+		Projects   map[string]struct {
+			MCPServers map[string]*mcpEntry `json:"mcpServers"`
+		} `json:"projects"`
+	}
+	if err := json.Unmarshal(b, &cj); err != nil {
+		return nil, nil, fmt.Errorf("%s: %w", claudeJSONPath(home), err)
+	}
+	user = cj.MCPServers["crosstalk"]
+	var errs []error
+	for dir, p := range cj.Projects {
+		if e := p.MCPServers["crosstalk"]; e != nil {
+			out = append(out, e)
+		}
+		path := filepath.Join(dir, ".mcp.json")
+		mb, err := os.ReadFile(path)
+		if errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
+			continue
+		}
+		var mj struct {
+			MCPServers map[string]*mcpEntry `json:"mcpServers"`
+		}
+		if err == nil {
+			err = json.Unmarshal(mb, &mj)
+		}
+		if err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", path, err))
+			continue
+		}
+		if e := mj.MCPServers["crosstalk"]; e != nil {
+			out = append(out, e)
+		}
+	}
+	return user, out, errors.Join(errs...)
+}
+
 func (h *Harness) Registered(env harness.InstallEnv) (bool, error) {
-	e, err := userEntry(env.Home)
-	return e != nil && e.Command == env.Bin, err
+	u, es, err := entriesAnyScope(env.Home)
+	if u != nil {
+		es = append(es, u)
+	}
+	return slices.ContainsFunc(es, func(e *mcpEntry) bool { return e.Command == env.Bin }), err
+}
+
+// Leftover reports local- or project-scope entries, which uninstall leaves in
+// place; an error means they could not be read.
+func (h *Harness) Leftover(env harness.InstallEnv) (bool, error) {
+	_, es, err := entriesAnyScope(env.Home)
+	return len(es) > 0, err
 }
 
 func (h *Harness) SetUp(env harness.InstallEnv) (bool, error) {
-	if e, err := userEntry(env.Home); e != nil || err != nil {
+	if u, es, err := entriesAnyScope(env.Home); u != nil || len(es) > 0 || err != nil {
 		return true, err
 	}
 	b, err := os.ReadFile(filepath.Join(env.Home, ".claude", "plugins", "installed_plugins.json"))

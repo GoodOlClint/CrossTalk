@@ -182,6 +182,13 @@ type Installer interface {
 	SetUp(env InstallEnv) (bool, error)
 }
 
+// Leftover is implemented by a harness whose uninstall leaves CrossTalk
+// config in place (Claude's local- and project-scope entries). Uninstall keeps
+// the binary and state while it reports true or an error.
+type Leftover interface {
+	Leftover(env InstallEnv) (bool, error)
+}
+
 type InstallEnv struct {
 	// Bin is the absolute path of the installed crosstalk binary.
 	Bin, Version, Home string
