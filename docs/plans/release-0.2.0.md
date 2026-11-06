@@ -249,7 +249,7 @@ Throwaway code allowed, kept under `docs/spikes/` with a report each; each has a
 |---|---|---|---|---|
 | S1 SDK seam | S (0.5 day) | A gateway terminating pinned mTLS in front of an a2a-go v2.7.0 loopback server delivers a message whose `Sender` carries the host fingerprint from the connection, whatever host header the remote side sends; malformed agent fields are refused before the receiver chain; and well-formed agent and role fields, which the sending host attests and the gateway cannot check, stay inside that host's key namespace and gain no `command` authority (a remote `role: primary` still cannot command) | Rework section 3.2 (identity by header on loopback) before R4 | R4, R5 |
 | S2 Real machines | S (0.5 day) | The signed binary on the operator's Mac and the homelab VM, over LAN and tailnet (100.x): `remote serve` (foreground and login unit) accepts, and a shim launched by Claude and by Codex dials out, both directions, with no System Settings change, or the exact macOS Local Network prompt or firewall setting is recorded; sleep and wake recorded (no address-change test: static IPs, operator ruling) | setup.md documents the prompt; if it cannot be passed at all on macOS, stop and ask the operator | R5 (live), R12 |
-| S3 Pairing and revocation | S (0.5 day) | Wrong or expired token, a second redemption of one token, and two concurrent redemptions all fail with nothing written; after `unpair`, a request on an already-open connection and on a resumed connection is refused | Fix section 7 before R3 | R3 |
+| S3 Pairing and revocation | S (0.5 day) | Wrong or expired token and a second redemption of one token fail with nothing written; of two concurrent redemptions of one token exactly one enrolls and the other fails with nothing written; after `unpair`, a request on an already-open connection and on a resumed connection is refused | Fix section 7 before R3 | R3 |
 | S4 Ask and reply across a disconnect | S (0.5 day) | Two state dirs, two gateways on 127.0.0.1 with different ports: kill the target gateway after injection and before the response; the asker shows `unknown`; the retry injects once (target journal dedupe); the reply reaches the original asker and never a new session that reuses the name | Fix section 8 before R8 | R8 |
 | S5 Latency and settle | S (0.25 day) | Send plus the 2 s settle poll (`wire.go:316-339`) ends `accepted` on Wi-Fi and on a relayed tailnet path in 9 of 10 runs, or the settle bound remote targets need is measured | R7 sets a remote settle bound from the measurement | R7 |
 | S6 CI two-host job | S (0.5 day, alongside R1-R5) | Two Docker containers on the Ubuntu runner pair through the real CLI and pass one ask and reply in under 3 minutes | The two-gateway 127.0.0.1 test stays the only automated cross-host test; R10 is dropped and said so in the PR | R10 |
@@ -321,6 +321,12 @@ Round 2, on 33162e1 (5 findings, all checked and fixed; the reviewer confirmed t
 | 3 | medium | Wrong proofs could cancel a legitimate pairing, and a failure could not name its entry | Fixed: the token and request carry an entry id; failures never remove or change an entry; one attempt per second gateway-wide (section 7); R3 tests |
 | 4 | medium | `remote_native_unsupported` cannot be produced, since the peer's listing omits native sessions | Fixed: `no_such_agent` with a CrossTalk-only hint everywhere (sections 9, 11; ADR 0022) |
 | 5 | medium | S1 demanded detection of agent and role forgery the trust model cannot detect | Fixed: S1 now checks that the host comes from the connection, malformed fields are refused, and attested fields stay in the host's namespace with no command authority (section 10); R4 tests |
+
+Round 3, on 7828d47 (1 finding; the reviewer confirmed all round-2 fixes and found no further security or code-integration issue):
+
+| # | Severity | Finding | Disposition |
+|---|---|---|---|
+| 1 | low | S3 said two concurrent redemptions both fail, while section 7 and `TestPairConcurrentRedeem` require exactly one winner | Fixed: S3 now requires one enrollment and no write by the loser (section 10) |
 
 ## 14. Open questions for the operator
 
