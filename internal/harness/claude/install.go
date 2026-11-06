@@ -533,8 +533,8 @@ func shadowing(home string) []string {
 // user-scope entry, each project's local-scope entry in ~/.claude.json, and the
 // crosstalk entry in the .mcp.json of each project recorded there. A project
 // that ~/.claude.json does not list is not found.
-func entriesAnyScope(home string) (user *mcpEntry, other []*mcpEntry, err error) {
-	var out []*mcpEntry
+func entriesAnyScope(home string) (user *mcpEntry, other []scopedEntry, err error) {
+	var out []scopedEntry
 	b, err := os.ReadFile(claudeJSONPath(home))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil, nil
@@ -555,7 +555,10 @@ func entriesAnyScope(home string) (user *mcpEntry, other []*mcpEntry, err error)
 	var errs []error
 	for dir, p := range cj.Projects {
 		if e := p.MCPServers["crosstalk"]; e != nil {
-			out = append(out, e)
+			out = append(out, scopedEntry{e, "local scope, project " + dir})
+		}
+		if !filepath.IsAbs(dir) {
+			continue
 		}
 		path := filepath.Join(dir, ".mcp.json")
 		mb, err := os.ReadFile(path)
@@ -573,7 +576,7 @@ func entriesAnyScope(home string) (user *mcpEntry, other []*mcpEntry, err error)
 			continue
 		}
 		if e := mj.MCPServers["crosstalk"]; e != nil {
-			out = append(out, e)
+			out = append(out, scopedEntry{e, "project scope, " + path})
 		}
 	}
 	return user, out, errors.Join(errs...)
@@ -582,16 +585,29 @@ func entriesAnyScope(home string) (user *mcpEntry, other []*mcpEntry, err error)
 func (h *Harness) Registered(env harness.InstallEnv) (bool, error) {
 	u, es, err := entriesAnyScope(env.Home)
 	if u != nil {
-		es = append(es, u)
+		es = append(es, scopedEntry{u, "user scope"})
 	}
-	return slices.ContainsFunc(es, func(e *mcpEntry) bool { return e.Command == env.Bin }), err
+	return slices.ContainsFunc(es, func(e scopedEntry) bool { return e.Command == env.Bin }), err
 }
 
-// Leftover reports local- or project-scope entries, which uninstall leaves in
-// place; an error means they could not be read.
-func (h *Harness) Leftover(env harness.InstallEnv) (bool, error) {
+// scopedEntry is a crosstalk server entry with where Claude found it.
+type scopedEntry struct {
+	*mcpEntry
+	where string
+}
+
+// Leftover describes local- or project-scope entries, which uninstall leaves
+// in place, or returns "". With anyBin false only entries that run env.Bin
+// count. An error means they could not be read.
+func (h *Harness) Leftover(env harness.InstallEnv, anyBin bool) (string, error) {
 	_, es, err := entriesAnyScope(env.Home)
-	return len(es) > 0, err
+	var out []string
+	for _, e := range es {
+		if anyBin || e.Command == env.Bin {
+			out = append(out, e.where+" runs "+e.Command)
+		}
+	}
+	return strings.Join(out, "; "), err
 }
 
 func (h *Harness) SetUp(env harness.InstallEnv) (bool, error) {

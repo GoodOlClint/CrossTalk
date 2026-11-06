@@ -250,16 +250,23 @@ func installStillRegistered(all, targets []installTarget, env harness.InstallEnv
 	var out []string
 	var errs []error
 	for _, t := range all {
-		check := t.in.Registered
-		if setUp {
-			check = t.in.SetUp
-		}
 		if slices.ContainsFunc(targets, func(x installTarget) bool { return x.name == t.name }) {
 			l, ok := t.in.(harness.Leftover)
 			if !ok {
 				continue
 			}
-			check = l.Leftover
+			what, err := l.Leftover(env, setUp)
+			if err != nil {
+				errs = append(errs, fmt.Errorf("%s: %w", t.name, err))
+			}
+			if what != "" {
+				out = append(out, t.name+" ("+what+")")
+			}
+			continue
+		}
+		check := t.in.Registered
+		if setUp {
+			check = t.in.SetUp
 		}
 		ok, err := check(env)
 		if err != nil {
