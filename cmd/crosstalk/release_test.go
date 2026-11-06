@@ -573,7 +573,7 @@ func TestReleaseWorkflowPostReleaseJobs(t *testing.T) {
 			"\n    permissions: {}\n",
 			"\n    timeout-minutes: 50\n",
 			"uses: actions/create-github-app-token@v3\n",
-			"app-id: ${{ secrets.RELEASE_APP_ID }}",
+			"client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}",
 			"private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}",
 			"owner: GoodOlClint\n",
 			"repositories: " + c.repo + "\n",
