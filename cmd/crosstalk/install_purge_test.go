@@ -97,3 +97,32 @@ func TestUninstallPurgeKeepsStateForClaudeNonUserScope(t *testing.T) {
 		})
 	}
 }
+
+func TestUninstallPurgeKeepsStateForClaudeLocalEntryWhenClaudeSelected(t *testing.T) {
+	for _, sel := range [][]string{{"claude"}, {}} {
+		t.Run(strings.Join(sel, "")+"-all", func(t *testing.T) {
+			home := installSandbox(t, "claude", "codex")
+			_, _, state := installUserFiles(t, home)
+			bin := filepath.Join(home, "bin")
+			if code, out := installRunCmd(t, "install", "--yes", "--bin-dir", bin); code != 0 {
+				t.Fatalf("install: %d\n%s", code, out)
+			}
+			cj := filepath.Join(home, ".claude.json")
+			b, err := os.ReadFile(cj)
+			if err != nil {
+				t.Fatal(err)
+			}
+			installWrite(t, cj, strings.Replace(string(b), "{", `{"projects":{"`+filepath.Join(home, "proj")+`":{"mcpServers":{"crosstalk":{"command":"`+filepath.Join(bin, "crosstalk")+`","args":["mcp"]}}}},`, 1))
+			args := append(sel, "--purge", "--yes", "--bin-dir", bin)
+			if code, out := installRunCmd(t, "uninstall", args...); code != 0 {
+				t.Fatalf("%v: %d\n%s", args, code, out)
+			}
+			if _, err := os.Stat(state); err != nil {
+				t.Errorf("%v: state removed while a local-scope entry remains: %v", args, err)
+			}
+			if _, err := os.Stat(filepath.Join(bin, "crosstalk")); err != nil {
+				t.Errorf("%v: binary removed while a local-scope entry remains: %v", args, err)
+			}
+		})
+	}
+}

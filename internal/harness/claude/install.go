@@ -533,14 +533,14 @@ func shadowing(home string) []string {
 // user-scope entry, each project's local-scope entry in ~/.claude.json, and the
 // crosstalk entry in the .mcp.json of each project recorded there. A project
 // that ~/.claude.json does not list is not found.
-func entriesAnyScope(home string) ([]*mcpEntry, error) {
+func entriesAnyScope(home string) (user *mcpEntry, other []*mcpEntry, err error) {
 	var out []*mcpEntry
 	b, err := os.ReadFile(claudeJSONPath(home))
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
+		return nil, nil, nil
 	}
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	var cj struct {
 		MCPServers map[string]*mcpEntry `json:"mcpServers"`
@@ -549,11 +549,9 @@ func entriesAnyScope(home string) ([]*mcpEntry, error) {
 		} `json:"projects"`
 	}
 	if err := json.Unmarshal(b, &cj); err != nil {
-		return nil, fmt.Errorf("%s: %w", claudeJSONPath(home), err)
+		return nil, nil, fmt.Errorf("%s: %w", claudeJSONPath(home), err)
 	}
-	if e := cj.MCPServers["crosstalk"]; e != nil {
-		out = append(out, e)
-	}
+	user = cj.MCPServers["crosstalk"]
 	var errs []error
 	for dir, p := range cj.Projects {
 		if e := p.MCPServers["crosstalk"]; e != nil {
@@ -578,16 +576,26 @@ func entriesAnyScope(home string) ([]*mcpEntry, error) {
 			out = append(out, e)
 		}
 	}
-	return out, errors.Join(errs...)
+	return user, out, errors.Join(errs...)
 }
 
 func (h *Harness) Registered(env harness.InstallEnv) (bool, error) {
-	es, err := entriesAnyScope(env.Home)
+	u, es, err := entriesAnyScope(env.Home)
+	if u != nil {
+		es = append(es, u)
+	}
 	return slices.ContainsFunc(es, func(e *mcpEntry) bool { return e.Command == env.Bin }), err
 }
 
+// Leftover reports local- or project-scope entries, which uninstall leaves in
+// place; an error means they could not be read.
+func (h *Harness) Leftover(env harness.InstallEnv) (bool, error) {
+	_, es, err := entriesAnyScope(env.Home)
+	return len(es) > 0, err
+}
+
 func (h *Harness) SetUp(env harness.InstallEnv) (bool, error) {
-	if es, err := entriesAnyScope(env.Home); len(es) > 0 || err != nil {
+	if u, es, err := entriesAnyScope(env.Home); u != nil || len(es) > 0 || err != nil {
 		return true, err
 	}
 	b, err := os.ReadFile(filepath.Join(env.Home, ".claude", "plugins", "installed_plugins.json"))
