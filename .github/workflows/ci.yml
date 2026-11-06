@@ -42,7 +42,7 @@ jobs:
           go-version-file: go.mod
       - name: Fast tests (docs and marketplace changes only)
         if: steps.scope.outputs.scope == 'docs'
-        run: go test ./cmd/crosstalk -run 'TestSetupDocCoversGaps|TestUpgradeFromBundledServerDocumented|TestManifestsMatchBinary|TestMarketplacesPinToReleaseTag|TestVersionIs015AndManifestsMatch|TestSiteConfig|TestSiteLinks|TestSkillCoversStatesAndCodes|TestEvalFixtureNoticesMatchConst|TestPluginShipsNoServer'
+        run: go test ./cmd/crosstalk -run 'TestSetupDocCoversGaps|TestUpgradeFromBundledServerDocumented|TestManifestsMatchBinary|TestMarketplacesPinToReleaseTag|TestVersionIs015AndManifestsMatch|TestSiteConfig|TestSiteLinks|TestSiteNamesEveryTool|TestSkillCoversStatesAndCodes|TestEvalFixtureNoticesMatchConst|TestPluginShipsNoServer'
       - if: steps.scope.outputs.scope != 'docs'
         run: go build ./...
       - if: steps.scope.outputs.scope != 'docs'
