@@ -531,6 +531,7 @@ func TestReleaseWorkflowPostReleaseJobs(t *testing.T) {
 		job, needs, repo, branch string
 	}{
 		{"marketplace", "release", "CrossTalk", "marketplace-$TAG"},
+		{"homebrew", "[release, marketplace]", "homebrew-tap", "crosstalk-$TAG"},
 	}
 	forbidden := regexp.MustCompile(`APPLE_|AC_API|(?m)^    environment: release\s*$|always\(\)|!cancelled\(\)`)
 	for _, c := range cases {
