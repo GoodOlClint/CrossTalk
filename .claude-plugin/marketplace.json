@@ -14,7 +14,7 @@
         "ref": "v0.1.3"
       },
       "description": "Message other running agent sessions (Claude Code, Codex) on this Mac by name.",
-      "version": "0.1.3",
+      "version": "0.1.4",
       "author": {
         "name": "GoodOlClint"
       },
