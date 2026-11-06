@@ -158,6 +158,9 @@ func TestPagesWorkflow(t *testing.T) {
 	if !strings.Contains(deploy, "if: github.event_name != 'pull_request'") {
 		t.Error("deploy does not skip pull requests")
 	}
+	if !strings.Contains(deploy, "github.ref == 'refs/heads/main'") {
+		t.Error("deploy can run from a ref other than main")
+	}
 	for _, perm := range []string{"pages: write", "id-token: write"} {
 		if !strings.Contains(deploy, perm) {
 			t.Errorf("deploy lacks %s", perm)
