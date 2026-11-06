@@ -533,6 +533,9 @@ func TestReleaseWorkflowPostReleaseJobs(t *testing.T) {
 		{"marketplace", "release", "CrossTalk", "marketplace-$TAG"},
 		{"homebrew", "[release, marketplace]", "homebrew-tap", "crosstalk-$TAG"},
 	}
+	if !strings.Contains(jobs["homebrew"], "newer than $TAG") {
+		t.Error("homebrew job does not refuse a tag older than the formula on tap main")
+	}
 	forbidden := regexp.MustCompile(`APPLE_|AC_API|(?m)^    environment: release\s*$|always\(\)|!cancelled\(\)`)
 	for _, c := range cases {
 		body := jobs[c.job]

@@ -265,6 +265,14 @@ jobs:
         run: |
           set -eu
           scripts/release-build.sh formula "$TAG" "$RUNNER_TEMP/assets" "$RUNNER_TEMP/assets" > "$RUNNER_TEMP/crosstalk.rb"
+          cur="$(sed -n 's|.*/releases/download/v\([0-9.]*\)/.*|\1|p' tap/Formula/crosstalk.rb 2>/dev/null | head -n 1)"
+          if [ -n "$cur" ]; then
+            newer="$(awk -v a="$cur" -v b="${TAG#v}" 'BEGIN { split(a, x, "."); split(b, y, "."); for (i = 1; i <= 3; i++) if (x[i] + 0 != y[i] + 0) { print (x[i] + 0 > y[i] + 0) ? "cur" : "tag"; exit } }')"
+            if [ "$newer" = cur ]; then
+              echo "tap main already holds crosstalk $cur, newer than $TAG" >&2
+              exit 1
+            fi
+          fi
           if cmp -s "$RUNNER_TEMP/crosstalk.rb" tap/Formula/crosstalk.rb; then
             echo "tap main already holds this formula"
             echo "changed=false" >> "$GITHUB_OUTPUT"
