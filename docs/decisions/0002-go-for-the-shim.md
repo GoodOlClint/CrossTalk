@@ -23,9 +23,9 @@ Go. Single static binary, fast start, `net` and `golang.org/x/sys/unix` cover un
 
 - Repo is a Go module; build is `go build ./...`, tests `go test ./...`.
 - Peer-credential code is platform-specific: `internal/peercred` has a darwin and a linux implementation selected by file suffix, and other platforms return `ErrUnsupported`.
-- The macOS `LOCAL_PEERPID` call is covered by `internal/peercred/peercred_test.go` (`TestPeerPIDOtherProcess` reads another process's pid). Spike 5, planned to verify it before the uds ingress, is still listed pending in `docs/spikes/README.md`.
+- The macOS `LOCAL_PEERPID` call was verified by spike 5 before the uds ingress was written ([report](https://github.com/GoodOlClint/CrossTalk/blob/main/docs/spikes/05-peerpid.md), passed, including a separate-process peer), and `internal/peercred/peercred_test.go` keeps that check in `go test`.
 - The MCP Go SDK's stdio transport is the model-facing surface. A2A is the a2a-go SDK's JSON-RPC and agent-card handlers hosted on net/http (`internal/a2a/server.go`); the Codex app-server client is a small hand-written websocket client (`internal/harness/codex/appserver/ws.go`). Release builds set `CGO_ENABLED=0` (`scripts/release-build.sh`).
 
 ## Council review 2026-11-06
 
-Sat: chair Claude (Opus 5.5), advisor A Codex 3c9b659b079700f3 (accuracy), advisor B Codex 93c0805d291aa89e (still right, merge, withdraw). Verdict: EDIT (spike 5 claim replaced by the peercred test; A2A SDK handlers named). Status stays Provisional.
+Sat: chair Claude (Opus 5.5), advisor A Codex 3c9b659b079700f3 (accuracy), advisor B Codex 93c0805d291aa89e (still right, merge, withdraw). Verdict: EDIT (spike 5 evidence linked to its report and the peercred test; A2A SDK handlers named). Status stays Provisional.
