@@ -191,3 +191,75 @@ func TestUninstallKeepsWhenOwnershipUncertain(t *testing.T) {
 		t.Errorf("state purged with an unreadable codex config: %v", err)
 	}
 }
+
+func TestUninstallHomebrewKeepsBinary(t *testing.T) {
+	home := installSandbox(t, "claude", "codex")
+	prefix := installBrewKeg(t, "opt/homebrew", true)
+	link := filepath.Join(prefix, "bin", "crosstalk")
+	if code, out := installRunCmd(t, "install", "--yes"); code != 0 {
+		t.Fatalf("install: %d\n%s", code, out)
+	}
+	code, out := installRunCmd(t, "uninstall", "--yes")
+	if code != 0 {
+		t.Fatalf("uninstall: %d\n%s", code, out)
+	}
+	if _, err := os.Lstat(link); err != nil {
+		t.Errorf("Homebrew link removed: %v", err)
+	}
+	if _, err := os.Stat(link); err != nil {
+		t.Errorf("keg binary gone: %v", err)
+	}
+	if !strings.Contains(out, "brew uninstall crosstalk") {
+		t.Errorf("output does not name brew uninstall crosstalk:\n%s", out)
+	}
+	if got := installRead(t, filepath.Join(home, ".claude.json")); strings.Contains(got, link) {
+		t.Errorf("Claude entry still names %s:\n%s", link, got)
+	}
+	if got := installRead(t, filepath.Join(home, ".codex", "config.toml")); strings.Contains(got, "mcp_servers.crosstalk") {
+		t.Errorf("Codex table remains:\n%s", got)
+	}
+	if got := installRead(t, filepath.Join(home, ".claude", "settings.json")); strings.Contains(got, "mcp__crosstalk__") {
+		t.Errorf("allow rule remains:\n%s", got)
+	}
+}
+
+func TestUninstallPurgeCodexOnly(t *testing.T) {
+	home := installSandbox(t, "codex")
+	_, _, state := installUserFiles(t, home)
+	bin := filepath.Join(home, "bin")
+	if code, out := installRunCmd(t, "install", "--yes", "--bin-dir", bin); code != 0 {
+		t.Fatalf("install: %d\n%s", code, out)
+	}
+	code, out := installRunCmd(t, "uninstall", "codex", "--purge", "--yes", "--bin-dir", bin)
+	if code != 0 {
+		t.Fatalf("uninstall: %d\n%s", code, out)
+	}
+	if _, err := os.Stat(state); !os.IsNotExist(err) {
+		t.Errorf("state dir kept with no claude on PATH and nothing else set up: %v\n%s", err, out)
+	}
+}
+
+func TestUninstallHomebrewKeepsBinaryWithBinDir(t *testing.T) {
+	for _, dir := range []string{filepath.Join("bin"), filepath.Join("Cellar", "crosstalk", "0.1.4", "bin")} {
+		t.Run(dir, func(t *testing.T) {
+			installSandbox(t, "claude")
+			prefix := installBrewKeg(t, "opt/homebrew", true)
+			bin := filepath.Join(prefix, dir)
+			if code, out := installRunCmd(t, "install", "--yes", "--bin-dir", bin); code != 0 {
+				t.Fatalf("install: %d\n%s", code, out)
+			}
+			code, out := installRunCmd(t, "uninstall", "--yes", "--bin-dir", bin)
+			if code != 0 {
+				t.Fatalf("uninstall: %d\n%s", code, out)
+			}
+			for _, p := range []string{filepath.Join(prefix, "bin", "crosstalk"), filepath.Join(prefix, "Cellar", "crosstalk", "0.1.4", "bin", "crosstalk")} {
+				if _, err := os.Lstat(p); err != nil {
+					t.Errorf("%s removed: %v", p, err)
+				}
+			}
+			if !strings.Contains(out, "brew uninstall crosstalk") {
+				t.Errorf("output does not name brew uninstall crosstalk:\n%s", out)
+			}
+		})
+	}
+}

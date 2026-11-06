@@ -236,3 +236,121 @@ func TestInstallMarketplaceOverride(t *testing.T) {
 		t.Errorf("default marketplace used:\n%s", b)
 	}
 }
+
+// installBrewKeg puts a copy of the sandbox binary at
+// <root>/<prefix>/Cellar/crosstalk/0.1.4/bin/crosstalk, links
+// <prefix>/bin/crosstalk to it when link is set, and makes the sandbox run
+// as that binary (through the link when there is one). It returns the prefix.
+func installBrewKeg(t *testing.T, prefix string, link bool) string {
+	t.Helper()
+	real, err := installExecutable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	prefix = filepath.Join(root, prefix)
+	keg := filepath.Join(prefix, "Cellar", "crosstalk", "0.1.4", "bin", "crosstalk")
+	b, err := os.ReadFile(real)
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.MkdirAll(filepath.Dir(keg), 0o755)
+	if err := os.WriteFile(keg, b, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	exe := keg
+	if link {
+		exe = filepath.Join(prefix, "bin", "crosstalk")
+		os.MkdirAll(filepath.Dir(exe), 0o755)
+		if err := os.Symlink(keg, exe); err != nil {
+			t.Fatal(err)
+		}
+	}
+	installExecutable = func() (string, error) { return exe, nil }
+	return prefix
+}
+
+func TestInstallHomebrewBinary(t *testing.T) {
+	for _, rel := range []string{"opt/homebrew", "usr/local", "home/linuxbrew/.linuxbrew"} {
+		t.Run(rel, func(t *testing.T) {
+			home := installSandbox(t, "claude", "codex")
+			prefix := installBrewKeg(t, rel, true)
+			want := filepath.Join(prefix, "bin", "crosstalk")
+			code, out := installRunCmd(t, "install", "--yes")
+			if code != 0 {
+				t.Fatalf("exit %d\n%s", code, out)
+			}
+			if _, err := os.Stat(filepath.Join(home, ".local", "bin", "crosstalk")); !os.IsNotExist(err) {
+				t.Errorf("~/.local/bin/crosstalk exists: %v", err)
+			}
+			if got := installRead(t, filepath.Join(home, ".claude.json")); !strings.Contains(got, `"command": "`+want+`"`) {
+				t.Errorf(".claude.json does not name %s:\n%s", want, got)
+			}
+			if got := installRead(t, filepath.Join(home, ".codex", "config.toml")); !strings.Contains(got, `command = "`+want+`"`) {
+				t.Errorf("config.toml does not name %s:\n%s", want, got)
+			}
+			for _, h := range []string{"claude", "codex"} {
+				if l := installCheckLine(out, "K5", h); !strings.Contains(l, "PASS") {
+					t.Errorf("K5 %s: %q", h, l)
+				}
+			}
+		})
+	}
+}
+
+func TestInstallNotHomebrewUsrLocal(t *testing.T) {
+	home := installSandbox(t, "claude")
+	real, _ := installExecutable()
+	b, _ := os.ReadFile(real)
+	root, _ := filepath.EvalSymlinks(t.TempDir())
+	plain := filepath.Join(root, "usr", "local", "bin", "crosstalk")
+	os.MkdirAll(filepath.Dir(plain), 0o755)
+	if err := os.WriteFile(plain, b, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	installExecutable = func() (string, error) { return plain, nil }
+	code, out := installRunCmd(t, "install", "--yes")
+	if code != 0 {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".local", "bin", "crosstalk")); err != nil {
+		t.Errorf("binary not copied to ~/.local/bin: %v", err)
+	}
+	if got := installRead(t, filepath.Join(home, ".claude.json")); !strings.Contains(got, filepath.Join(home, ".local", "bin", "crosstalk")) {
+		t.Errorf(".claude.json does not name ~/.local/bin/crosstalk:\n%s", got)
+	}
+}
+
+func TestInstallHomebrewUnlinked(t *testing.T) {
+	home := installSandbox(t, "claude")
+	installBrewKeg(t, "opt/homebrew", false)
+	code, out := installRunCmd(t, "install", "--yes")
+	if code != 0 {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".local", "bin", "crosstalk")); err != nil {
+		t.Errorf("binary not copied to ~/.local/bin: %v", err)
+	}
+	if !strings.Contains(out, "not linked") {
+		t.Errorf("no note about the unlinked keg:\n%s", out)
+	}
+}
+
+func TestInstallHomebrewBinDirOverride(t *testing.T) {
+	home := installSandbox(t, "claude")
+	installBrewKeg(t, "opt/homebrew", true)
+	bin := filepath.Join(home, "elsewhere")
+	code, out := installRunCmd(t, "install", "--yes", "--bin-dir", bin)
+	if code != 0 {
+		t.Fatalf("exit %d\n%s", code, out)
+	}
+	if _, err := os.Stat(filepath.Join(bin, "crosstalk")); err != nil {
+		t.Errorf("binary not copied to --bin-dir: %v", err)
+	}
+	if got := installRead(t, filepath.Join(home, ".claude.json")); !strings.Contains(got, filepath.Join(bin, "crosstalk")) {
+		t.Errorf(".claude.json does not name the --bin-dir copy:\n%s", got)
+	}
+}

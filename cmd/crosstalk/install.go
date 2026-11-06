@@ -97,8 +97,22 @@ func runInstall(mode string, args []string, in io.Reader, tty bool, stdout, stde
 		fmt.Fprintf(stderr, "crosstalk %s: %v\n", mode, err)
 		return 1
 	}
+	var brewBin string
 	if o.binDir == "" {
 		o.binDir = filepath.Join(home, ".local", "bin")
+		if exe, err := installExecutable(); err == nil {
+			switch bin, linked, ok := installHomebrew(exe); {
+			case ok && linked:
+				brewBin, o.binDir = bin, filepath.Dir(bin)
+				if old := filepath.Join(home, ".local", "bin", "crosstalk"); mode != "uninstall" {
+					if _, err := os.Stat(old); err == nil {
+						fmt.Fprintf(stdout, "%s from an earlier install is left in place; rm %s removes it\n", old, old)
+					}
+				}
+			case ok:
+				fmt.Fprintf(stdout, "Homebrew's keg is not linked into its prefix (%s is missing or points elsewhere); using %s instead\n", bin, o.binDir)
+			}
+		}
 	}
 	if o.binDir, err = filepath.Abs(o.binDir); err != nil {
 		fmt.Fprintf(stderr, "crosstalk %s: %v\n", mode, err)
@@ -149,7 +163,7 @@ func runInstall(mode string, args []string, in io.Reader, tty bool, stdout, stde
 	}
 	ctx := context.Background()
 	if o.check {
-		if installChecks(ctx, stdout, targets, env) {
+		if installChecks(ctx, stdout, targets, env, len(o.names) == 0) {
 			return 1
 		}
 		return 0
@@ -160,7 +174,7 @@ func runInstall(mode string, args []string, in io.Reader, tty bool, stdout, stde
 	}
 	var groups []group
 	if mode != "uninstall" {
-		groups = append(groups, group{"crosstalk", []harness.Step{installBinaryStep(env.Bin)}})
+		groups = append(groups, group{"crosstalk", []harness.Step{installBinaryStep(env.Bin, brewBin != "")}})
 	}
 	for _, t := range targets {
 		var steps []harness.Step
@@ -217,7 +231,7 @@ func runInstall(mode string, args []string, in io.Reader, tty bool, stdout, stde
 			}
 		}
 	}
-	failed := installChecks(ctx, stdout, targets, env)
+	failed := installChecks(ctx, stdout, targets, env, false)
 	fmt.Fprintln(stdout, "Running Claude and Codex sessions keep their old CrossTalk server. Restart them (in Claude, /mcp and reconnect also works).")
 	if failed {
 		return 1
@@ -225,17 +239,23 @@ func runInstall(mode string, args []string, in io.Reader, tty bool, stdout, stde
 	return 0
 }
 
-// installStillRegistered names the harnesses outside targets whose config
-// still runs env.Bin, whether or not their CLI is on PATH. An error means a
-// config could not be read, so the binary and state must stay.
-func installStillRegistered(all, targets []installTarget, env harness.InstallEnv) ([]string, error) {
+// installStillRegistered names the harnesses outside targets that still need
+// what uninstall would delete: with setUp, any CrossTalk setup whatever binary
+// it names, otherwise only a config that runs env.Bin. It looks at config
+// files whether or not the harness CLI is on PATH. An error means a config
+// could not be read, so the binary and state must stay.
+func installStillRegistered(all, targets []installTarget, env harness.InstallEnv, setUp bool) ([]string, error) {
 	var out []string
 	var errs []error
 	for _, t := range all {
 		if slices.ContainsFunc(targets, func(x installTarget) bool { return x.name == t.name }) {
 			continue
 		}
-		ok, err := t.in.Registered(env)
+		check := t.in.Registered
+		if setUp {
+			check = t.in.SetUp
+		}
+		ok, err := check(env)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", t.name, err))
 		}
@@ -246,13 +266,15 @@ func installStillRegistered(all, targets []installTarget, env harness.InstallEnv
 	return out, errors.Join(errs...)
 }
 
-// installKeep reports why the binary and state stay, or "" when nothing
-// else runs the binary.
-func installKeep(all, targets []installTarget, env harness.InstallEnv) string {
-	still, err := installStillRegistered(all, targets, env)
+// installKeep reports why the binary (setUp false) or the state (setUp true)
+// stays, or "" when nothing else needs it.
+func installKeep(all, targets []installTarget, env harness.InstallEnv, setUp bool) string {
+	still, err := installStillRegistered(all, targets, env, setUp)
 	switch {
 	case err != nil:
-		return "cannot tell whether another harness still runs it: " + err.Error()
+		return "cannot tell whether another harness still needs it: " + err.Error()
+	case len(still) > 0 && setUp:
+		return strings.Join(still, ", ") + " is still set up"
 	case len(still) > 0:
 		return strings.Join(still, ", ") + " still runs it"
 	}
@@ -266,12 +288,16 @@ func installRemoveSteps(o installOpts, all, targets []installTarget, env harness
 		Title:  "binary",
 		Change: "delete " + env.Bin + " and the PATH lines install marked, unless another harness still runs it",
 		Apply: func(ctx context.Context) error {
-			if why := installKeep(all, targets, env); why != "" {
+			if why := installKeep(all, targets, env, false); why != "" {
 				fmt.Fprintf(w, "    kept %s: %s\n", env.Bin, why)
 				return nil
 			}
 			if err := installRemovePath(installPathFiles(runtime.GOOS, env.Home), installPathLine(filepath.Dir(env.Bin))); err != nil {
 				return err
+			}
+			if _, _, brew := installHomebrew(env.Bin); brew {
+				fmt.Fprintf(w, "    Homebrew owns %s; run brew uninstall crosstalk\n", env.Bin)
+				return nil
 			}
 			if err := os.Remove(env.Bin); err != nil && !errors.Is(err, os.ErrNotExist) {
 				return err
@@ -286,7 +312,7 @@ func installRemoveSteps(o installOpts, all, targets []installTarget, env harness
 		Title:  "state",
 		Change: "delete " + stateDir + " (journals, tokens, descriptors) unless another harness is still installed or a shim is running",
 		Apply: func(ctx context.Context) error {
-			if why := installKeep(all, targets, env); why != "" {
+			if why := installKeep(all, targets, env, true); why != "" {
 				fmt.Fprintf(w, "    kept %s: %s\n", stateDir, why)
 				return nil
 			}
@@ -362,7 +388,34 @@ func installBinary(src, dst string) (skipped bool, err error) {
 	return false, err
 }
 
-func installBinaryStep(bin string) harness.Step {
+// installHomebrew reports whether exe is a Homebrew keg binary
+// (<prefix>/Cellar/crosstalk/<version>/bin/crosstalk), with bin the
+// <prefix>/bin/crosstalk Homebrew links to it and linked that the link
+// resolves to the same file.
+func installHomebrew(exe string) (bin string, linked, ok bool) {
+	exe, err := filepath.EvalSymlinks(exe)
+	if err != nil || filepath.Base(exe) != "crosstalk" {
+		return "", false, false
+	}
+	keg := filepath.Dir(exe)
+	cellar := filepath.Dir(filepath.Dir(filepath.Dir(keg)))
+	if filepath.Base(keg) != "bin" || filepath.Base(filepath.Dir(filepath.Dir(keg))) != "crosstalk" || filepath.Base(cellar) != "Cellar" {
+		return "", false, false
+	}
+	bin = filepath.Join(filepath.Dir(cellar), "bin", "crosstalk")
+	a, err1 := os.Stat(exe)
+	b, err2 := os.Stat(bin)
+	return bin, err1 == nil && err2 == nil && os.SameFile(a, b), true
+}
+
+func installBinaryStep(bin string, brew bool) harness.Step {
+	if brew {
+		return harness.Step{
+			Title:  "binary",
+			Change: fmt.Sprintf("use Homebrew's %s (no copy)", bin),
+			Apply:  func(context.Context) error { return nil },
+		}
+	}
 	src, err := installExecutable()
 	if err == nil {
 		src, err = filepath.EvalSymlinks(src)
@@ -451,10 +504,18 @@ func installReport(w io.Writer, who string, rs []harness.CheckResult) (failed bo
 	return failed
 }
 
-func installChecks(ctx context.Context, w io.Writer, targets []installTarget, env harness.InstallEnv) bool {
+// installChecks runs every target's checks; with skip, a target with no
+// CrossTalk setup at all is skipped instead of failing its checks.
+func installChecks(ctx context.Context, w io.Writer, targets []installTarget, env harness.InstallEnv, skip bool) bool {
 	fmt.Fprintln(w, "== checks")
 	failed := false
 	for _, t := range targets {
+		if skip {
+			if ok, err := t.in.SetUp(env); !ok && err == nil {
+				fmt.Fprintf(w, "%s: not set up, skipped\n", t.name)
+				continue
+			}
+		}
 		if installReport(w, t.name, t.in.Checks(ctx, env)) {
 			failed = true
 		}

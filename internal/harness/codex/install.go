@@ -425,6 +425,25 @@ func (h *Harness) Registered(env harness.InstallEnv) (bool, error) {
 	return ok && e.command == env.Bin, nil
 }
 
+func (h *Harness) SetUp(env harness.InstallEnv) (bool, error) {
+	b, err := os.ReadFile(configPath(env.Home))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return true, err
+	}
+	if otherForm(strings.Split(string(b), "\n")) {
+		return true, nil
+	}
+	if _, ok := readEntry(string(b)); ok || slices.ContainsFunc(tables(strings.Split(string(b), "\n")), func(t table) bool {
+		return t.name == serverTable || strings.HasPrefix(t.name, serverTable+".")
+	}) {
+		return true, nil
+	}
+	if _, err = os.Stat(pluginCache(env.Home)); errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	return true, err
+}
+
 // pluginCache holds one directory per installed version of the plugin.
 func pluginCache(home string) string {
 	return filepath.Join(codexHome(home), "plugins", "cache", "crosstalk", "crosstalk")
