@@ -53,11 +53,7 @@ func TestEntryRunsBinary(t *testing.T) {
 			}
 			return l + "/../crosstalk"
 		}, true},
-		"local relative symlink": {"local", func(t *testing.T, bin string) string {
-			if err := os.Symlink("crosstalk", filepath.Join(filepath.Dir(bin), "alias")); err != nil {
-				t.Fatal(err)
-			}
-			t.Chdir(filepath.Dir(bin))
+		"local relative command": {"local", func(t *testing.T, bin string) string {
 			return "./alias"
 		}, true},
 		"local other binary": {"local", func(t *testing.T, bin string) string {

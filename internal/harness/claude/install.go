@@ -597,6 +597,10 @@ func runsBin(cmd, bin string) bool {
 	if cmd == bin {
 		return true
 	}
+	if !filepath.IsAbs(cmd) && strings.ContainsRune(cmd, filepath.Separator) {
+		// Claude's launch directory is not recorded, so what the command names is unknown: keep the binary.
+		return true
+	}
 	if !strings.ContainsRune(cmd, filepath.Separator) {
 		p, err := exec.LookPath(cmd)
 		if err != nil {
@@ -613,14 +617,6 @@ func runsBin(cmd, bin string) bool {
 // lexical Clean is the fallback for a path whose ".." passes through a
 // directory that does not exist.
 func resolvePath(p string) (string, error) {
-	// ponytail: a relative command resolves against this process's cwd; Claude's launch directory is not recorded
-	if !filepath.IsAbs(p) {
-		wd, err := os.Getwd()
-		if err != nil {
-			return "", err
-		}
-		p = wd + string(filepath.Separator) + p
-	}
 	r, err := filepath.EvalSymlinks(p)
 	if err != nil {
 		r, err = filepath.EvalSymlinks(filepath.Clean(p))
