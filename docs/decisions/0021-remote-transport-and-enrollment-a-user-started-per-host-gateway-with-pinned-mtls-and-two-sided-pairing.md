@@ -36,7 +36,7 @@ CrossTalk is same-machine only: each agent's A2A server binds `127.0.0.1:0` (`in
 - CrossTalk owns key and pairing code. Revocation is manual and per host: `unpair` on each side. A lost or reset key means pairing again with every peer; `uninstall --purge` lists them.
 - `crosstalk install --check` gains K8; `uninstall` removes a login unit CrossTalk wrote (identified by a sha256 stored in `remote.json`), and `--purge` removes `~/.config/crosstalk`.
 - macOS Local Network privacy and the firewall may prompt or block; spike S2 records what the user must do, and setup.md documents it.
-- Spikes S1, S2, S3, S5, S6, S7 in the change plan gate the slices; a failed S7 goes to the operator, since the login unit is in v0.2.0 by ruling.
+- Spikes S1, S2, S3, S4, S5, S6, S7 in the change plan gate the slices; a failed S7 goes to the operator, since the login unit is in v0.2.0 by ruling.
 - ADR 0006 is amended to allow the user-started gateway and its login unit; ADR 0001 to name the gateway a per-host forwarder.
 
 ## Trial record
