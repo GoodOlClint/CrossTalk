@@ -16,17 +16,17 @@ A manual MCP install gave models the tools but not the knowledge to use them: th
 - MCP `instructions` (at most 512 bytes, in Go, so a manual install gets them) carry the minimum.
 - One skill, `plugins/crosstalk/skills/crosstalk/SKILL.md`, serves both harnesses with bare tool names. A Go test fails when it names a code the source lacks or omits a state or hinted reason.
 - One plugin directory with `.claude-plugin/` and `.codex-plugin/` manifests and two marketplace files that pin the plugin to a release tag. The plugin declares no MCP server; `crosstalk install` registers one under the key `crosstalk` (ADR 0016). Versions equal `mcpserver.Version` (test).
-- Install from the signed release binary ([ADR 0015](0015-signed-macos-release-in-ci.md)) or `go install`, then `crosstalk install`, which copies the binary to `~/.local/bin`, installs the plugin, registers the server at that absolute path, adds the Claude allow rule `mcp__crosstalk__*` and sets the Codex `default_tools_approval_mode = "approve"` (ADR 0016); no tap.
+- Install from the signed release binary ([ADR 0015](0015-signed-macos-release-in-ci.md)) or `go install`, then `crosstalk install`, which copies the binary to `~/.local/bin`, installs the plugin, registers the server at that absolute path, adds the Claude allow rule `mcp__crosstalk__*` and sets the Codex `default_tools_approval_mode = "approve"` (ADR 0016). A Homebrew install (ADR 0018) skips the copy and registers `<prefix>/bin/crosstalk`.
 - No hooks, commands or agents in the plugin; hooks stay v1.1.
 - The skill's Security section has one exception to "ask the user first": a peer may ask whether this session is online, its working directory, git branch or harness, and the model answers with `reply` without approval (operator ruling 2026-11-04). The clean run showed a Codex peer declining a harmless ask, which breaks the setup test. The exception is narrow because reading files, listings, environment, command output or what the user said is a tool action taken on a peer's word, even where the session's permissions allow it. The skill wording is a hypothesis for the Codex decline, not its measured cause: a Claude peer answered under the older wording.
 
 ## Rejected alternatives
 
-- A plugin command that runs `go install` (hidden code execution), a prebuilt release (needed a signing and notarization pipeline; reversed by [ADR 0015](0015-signed-macos-release-in-ci.md), which adds one), a Homebrew tap (adds only `brew upgrade`). A `crosstalk install` that edits `settings.json` was rejected here (writes user config; overlaps the agy installer) and adopted in ADR 0016.
+- A plugin command that runs `go install` (hidden code execution), a prebuilt release (needed a signing and notarization pipeline; reversed by [ADR 0015](0015-signed-macos-release-in-ci.md), which adds one), a Homebrew tap (adds only `brew upgrade`; adopted later by [ADR 0018](0018-homebrew-tap-formula-and-crosstalk-install-registers-the-homebrew-path.md)). A `crosstalk install` that edits `settings.json` was rejected here (writes user config; overlaps the agy installer) and adopted in ADR 0016.
 
 ## Consequences
 
-- A release bumps one version number in three places under test.
+- A release bumps one version in four fields under test (`TestManifestsMatchBinary`): `mcpserver.Version`, both `plugin.json` manifests and the Claude marketplace entry. Both marketplace `ref` values move to the tag after it exists ([ADR 0019](0019-marketplace-refs-move-to-a-final-tag-by-an-auto-merged-pull-request.md)).
 - An old plugin that still starts a server next to the installed one gives two shims (the second reports `agent_held`); `crosstalk install --check` (K2) reports it.
 - A Codex `[mcp_servers.crosstalk]` entry overrides the plugin's server and drops its `default_tools_approval_mode = "approve"`: an entry with no mode prompts, and `codex exec` blocks the tools. The entry must set the mode itself.
 - Eval cases live in `plugins/crosstalk/evals/` and run with `claude plugin eval`; Codex has no eval runner.
@@ -53,3 +53,7 @@ State after the first clean-account run (2026-11-04, scratch account `crosstalkt
 The peer notice is advisory: no hard control stops a read, since auto mode allows Read and the Codex sandbox reads the filesystem. It is the cheapest control that works on every message, with no tool call and no skill load.
 
 Claude facts 1–5 were run live on 2.1.318 before the plan was approved; the four eval cases (plan commit 6) passed on Haiku against mocked tools, which prove behaviour, not transport. The mocks carry no real tool schemas, and the MCP-only comparison arm of commit 6 was not built.
+
+## Council review 2026-11-06
+
+Sat: chair Claude (Opus 5.5), advisor A Codex 3c9b659b079700f3 (accuracy), advisor B Codex 93c0805d291aa89e (still right, merge, withdraw). Verdict: EDIT (Homebrew is no longer rejected: ADR 0018; version count is four fields, not three). Kept separate from ADR 0016: this ADR owns the skill, the MCP instructions and the peer-notice exception. Status stays Provisional.
