@@ -70,7 +70,8 @@ Homebrew is a package manager for macOS and Linux; a *formula* is its recipe for
 2. **Set up the harnesses.** Run `crosstalk install` (the steps and checks are in step 2 above). It sees the Homebrew binary, copies nothing, and registers `$(brew --prefix)/bin/crosstalk` (`brew --prefix` prints Homebrew's install directory, such as `/opt/homebrew`). That path stays valid when `brew upgrade` moves to a new version.
 3. **Upgrade.** Run `brew upgrade crosstalk`, then `crosstalk install` again so the plugin (which carries the skill) matches the new binary.
 4. **Uninstall.** Run `crosstalk uninstall` before `brew uninstall crosstalk`: uninstall never removes a file under Homebrew's prefix, so the binary stays for Homebrew to remove, and `brew uninstall` does not undo the Claude and Codex setup.
-5. **Restart** every running Claude and Codex session after each of these steps. A running session keeps the old server.
+5. **Shadowed command.** If an earlier install left `~/.local/bin/crosstalk` and that directory comes before Homebrew's in your PATH (the list of directories your shell searches), `crosstalk` runs the old copy and install registers it instead of the Homebrew binary. Check with `command -v crosstalk`; it must print `$(brew --prefix)/bin/crosstalk`. If not, run `"$(brew --prefix)/bin/crosstalk" install`, then remove the old copy with `rm ~/.local/bin/crosstalk`.
+6. **Restart** every running Claude and Codex session after each of these steps. A running session keeps the old server.
 
 ## Linux
 
