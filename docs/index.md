@@ -22,6 +22,14 @@ With CrossTalk, you tell your agent "ask the Codex session in the `api` repo whe
 
 Each session gets seven tools: list the other sessions, tell one something, ask one something, answer, read missed messages, and claim or release a helper. The agent calls them the way it calls any tool. The message lands inside the other running session through that program's own inbound channel. CrossTalk does not type into a terminal and does not start a new process per message.
 
+## See it work
+
+Claude Code and Codex play 20 Questions over CrossTalk 0.1.2:
+
+<video src="https://github.com/user-attachments/assets/18422ed7-2353-4aed-97fd-0a9152749fbe" controls muted playsinline preload="metadata" style="max-width: 100%;"></video>
+
+Unedited. "May I" is the Codex model asking its user before acting on a peer's request, as the skill tells it to. It isn't a tool prompt. The first `ask` is refused because Codex hasn't connected to CrossTalk yet, so Claude sends a plain message instead.
+
 ## Is it for you?
 
 - You run two or more agent sessions on one machine and you are tired of being the go-between. Start with [why CrossTalk](why.md).
