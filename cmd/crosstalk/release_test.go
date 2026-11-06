@@ -622,3 +622,147 @@ func TestReleaseBuildStampsTagIntoBinary(t *testing.T) {
 		}
 	}
 }
+
+func ciScopeRepo(t *testing.T, files map[string]string) (dir, base, head string) {
+	t.Helper()
+	dir = t.TempDir()
+	git := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = dir
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	git("init", "-q")
+	write := func(rel, body string) {
+		p := filepath.Join(dir, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("main.go", "package main\n")
+	git("add", ".")
+	git("commit", "-q", "-m", "base")
+	base = git("rev-parse", "HEAD")
+	for rel, body := range files {
+		write(rel, body)
+	}
+	git("add", ".")
+	git("commit", "-q", "--allow-empty", "-m", "head")
+	head = git("rev-parse", "HEAD")
+	return dir, base, head
+}
+
+func TestCIScope(t *testing.T) {
+	zero := strings.Repeat("0", 40)
+	cases := []struct {
+		name  string
+		files map[string]string
+		base  string
+		want  string
+	}{
+		{"docs only", map[string]string{"README.md": "x", "docs/setup.md": "x", "docs/plans/a.txt": "x", "plugins/crosstalk/NOTES.md": "x"}, "", "docs"},
+		{"marketplace only", map[string]string{".claude-plugin/marketplace.json": "{}", ".agents/plugins/marketplace.json": "{}"}, "", "docs"},
+		{"mixed with go file", map[string]string{"README.md": "x", "internal/a.go": "package a\n"}, "", "code"},
+		{"workflow change", map[string]string{".github/workflows/ci.yml": "x"}, "", "code"},
+		{"script change", map[string]string{"scripts/release-build.sh": "x"}, "", "code"},
+		{"plugin manifest", map[string]string{"plugins/crosstalk/plugin.json": "{}"}, "", "code"},
+		{"empty before sha", map[string]string{"README.md": "x"}, "-", "code"},
+		{"zero before sha", map[string]string{"README.md": "x"}, zero, "code"},
+		{"no changes", map[string]string{}, "", "code"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir, base, head := ciScopeRepo(t, c.files)
+			switch c.base {
+			case "-":
+				base = ""
+			case "":
+			default:
+				base = c.base
+			}
+			script, err := filepath.Abs(filepath.Join(releaseRepoRoot(t), "scripts", "release-build.sh"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.Command(script, "ci-scope", base, head)
+			cmd.Dir = dir
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("ci-scope: %v\n%s", err, out)
+			}
+			if got := strings.TrimSpace(string(out)); got != c.want {
+				t.Errorf("ci-scope = %q, want %q", got, c.want)
+			}
+		})
+	}
+}
+
+func TestCIWorkflowScopesTests(t *testing.T) {
+	test := workflowJobs(repoFile(t, ".github/workflows/ci.yml"))["test"]
+	steps := strings.Split(test, "\n      - ")[1:]
+	find := func(sub string) string {
+		for _, s := range steps {
+			if strings.Contains(s, sub) {
+				return s
+			}
+		}
+		return ""
+	}
+	scope := find("release-build.sh ci-scope")
+	if scope == "" || !strings.Contains(scope, "id: scope") || !strings.Contains(scope, "github.event.pull_request.base.sha") || !strings.Contains(scope, "github.event.before") || !strings.Contains(scope, `"$GITHUB_OUTPUT"`) {
+		t.Errorf("no scope step classifying PR base and push before sha:\n%s", scope)
+	}
+	if !strings.Contains(test, "fetch-depth: 0") {
+		t.Error("test job does not fetch history for the diff")
+	}
+	fast := find("-run '")
+	if fast == "" || !strings.Contains(fast, "steps.scope.outputs.scope == 'docs'") || strings.Contains(fast, "-race") {
+		t.Errorf("no docs-scoped fast test step without -race:\n%s", fast)
+	}
+	for _, name := range []string{"TestSetupDocCoversGaps", "TestUpgradeFromBundledServerDocumented", "TestManifestsMatchBinary", "TestMarketplacesPinToReleaseTag", "TestVersionIs015AndManifestsMatch", "TestSiteConfig", "TestSiteLinks"} {
+		if !strings.Contains(fast, name) {
+			t.Errorf("fast step lacks %s", name)
+		}
+	}
+	for _, sub := range []string{"go build ./...", "go test -race ./...", "go vet ./...", "gofmt -l ."} {
+		s := find(sub)
+		if s == "" || !strings.Contains(s, "steps.scope.outputs.scope != 'docs'") {
+			t.Errorf("step running %s is not skipped for docs scope:\n%s", sub, s)
+		}
+	}
+	if strings.Contains(repoFile(t, ".github/workflows/ci.yml"), "paths:") {
+		t.Error("ci.yml path-filters a trigger; required checks would stay pending")
+	}
+}
+
+func TestReleaseWorkflowChecksMainCI(t *testing.T) {
+	release := workflowJobs(repoFile(t, ".github/workflows/release.yml"))["release"]
+	if strings.Contains(release, "go test") {
+		t.Error("release job still runs go test")
+	}
+	var step string
+	for _, s := range strings.Split(release, "\n      - ")[1:] {
+		if strings.Contains(s, "name: Check main CI") {
+			step = s
+		}
+	}
+	if step == "" {
+		t.Fatal("release job has no Check main CI step")
+	}
+	for _, want := range []string{"check-runs", "GITHUB_SHA", "test (ubuntu-latest)", "test (macos-latest)", "success", "GH_TOKEN: ${{ github.token }}"} {
+		if !strings.Contains(step, want) {
+			t.Errorf("Check main CI step lacks %q:\n%s", want, step)
+		}
+	}
+	if !regexp.MustCompile(`(?m)^    permissions:\n      contents: write\n      checks: read$`).MatchString(release) {
+		t.Error("release job permissions are not contents: write, checks: read")
+	}
+}
