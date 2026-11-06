@@ -22,8 +22,12 @@ The unit of the system is the **shim**, the `crosstalk mcp` process a harness st
 
 ## Consequences
 
-- Every supported harness implements `harness.Harness` (ADR 0008) and needs a verified native inbound path before it is added.
+- Every supported harness implements `harness.Harness` (ADR 0008). Currently supported harnesses require a verified native inbound path; a separately decided and verified deferred-delivery path may qualify a future harness (planned in [ADR 0012](0012-antigravity-harness-via-hook-mailbox.md), which keeps a shim process and so is not the hooks-only design rejected above).
 - Sender identity comes from transport evidence, never from message text (ADR 0004); a session's own identity comes from harness-provided evidence on each call (ADR 0006).
 - The shim is the only writer of its own agent's identity: a claim or release is applied in the target agent's own process, against that agent's own journal, and never written by another shim (ADR 0004).
-- herdr is reduced to pane host and restore; herdr-a2a is superseded.
-- Spawning agents is out of scope for this repo; a separate delegate tool composes "spawn via herdr, then send_message".
+- An agent host (herdr, now Herdr) is reduced to pane host and restore; herdr-a2a is superseded.
+- Spawning agents is out of scope for this repo; a separate tool composes "launch through an external agent host, then send_message".
+
+## Council review 2026-11-06
+
+Sat: chair Claude (Opus 5.5), advisor A Codex 3c9b659b079700f3 (accuracy), advisor B Codex 93c0805d291aa89e (still right, merge, withdraw). Verdict: EDIT (deferred-delivery exception for ADR 0012 named as planned; harness-neutral delegate line). Status stays Provisional.
