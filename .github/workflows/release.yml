@@ -48,17 +48,21 @@ jobs:
           waited=0
           while :; do
             line="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&event=push&branch=main&per_page=1" --jq '.workflow_runs[0] | select(. != null) | [.id, .status, (.conclusion // "none")] | @tsv')"
-            [ -n "$line" ] || {
-              echo "no ci.yml push run on main for $GITHUB_SHA; the tagged commit has not passed main CI" >&2
-              exit 1
-            }
-            run="$(printf '%s' "$line" | cut -f1)"
-            status="$(printf '%s' "$line" | cut -f2)"
-            conclusion="$(printf '%s' "$line" | cut -f3)"
+            if [ -z "$line" ]; then
+              run=none status=missing conclusion=none
+            else
+              run="$(printf '%s' "$line" | cut -f1)"
+              status="$(printf '%s' "$line" | cut -f2)"
+              conclusion="$(printf '%s' "$line" | cut -f3)"
+            fi
             case "$status" in
-            queued | in_progress | waiting | pending | requested)
+            queued | in_progress | waiting | pending | requested | missing)
               [ "$waited" -lt 1200 ] || {
-                echo "ci.yml run $run on $GITHUB_SHA still $status after 1200 s" >&2
+                if [ "$status" = missing ]; then
+                  echo "no ci.yml push run on main for $GITHUB_SHA after 1200 s" >&2
+                else
+                  echo "ci.yml run $run on $GITHUB_SHA still $status after 1200 s" >&2
+                fi
                 exit 1
               }
               sleep 30

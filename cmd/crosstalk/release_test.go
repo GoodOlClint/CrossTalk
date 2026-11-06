@@ -770,6 +770,12 @@ func TestReleaseWorkflowChecksMainCI(t *testing.T) {
 	if strings.Contains(step, "status=success") {
 		t.Error("Check main CI filters runs by status=success, so an in-progress main run fails the release at once")
 	}
+	if !regexp.MustCompile(`(?m)^\s*queued \| in_progress \|[^)]*\| missing\)`).MatchString(step) {
+		t.Error("Check main CI does not treat a not-yet-created run (missing) like a queued one")
+	}
+	if !strings.Contains(step, `no ci.yml push run on main for $GITHUB_SHA after`) {
+		t.Error("Check main CI does not fail with a no-run-found message after the wait")
+	}
 	for _, want := range []string{"actions/workflows/ci.yml/runs", "head_sha=$GITHUB_SHA", "event=push", "branch=main", "in_progress", "queued", "sleep 30", "1200", ".conclusion", "/jobs", "test (ubuntu-latest)", "test (macos-latest)", "GH_TOKEN: ${{ github.token }}"} {
 		if !strings.Contains(step, want) {
 			t.Errorf("Check main CI step lacks %q:\n%s", want, step)
