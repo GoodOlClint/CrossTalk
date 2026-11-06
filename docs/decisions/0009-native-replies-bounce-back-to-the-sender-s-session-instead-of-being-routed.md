@@ -13,9 +13,9 @@ The shim never has the context to correlate a native frame. The model that sent 
 
 ## Decision
 
-A native frame from the bound session is never forwarded. The shim journals it as `bounced` and injects a short message back into the same session (through the harness `Inject`, from `crosstalk`) saying the native message was not delivered and listing the open inbound messages it may answer (every open ask, then the ten newest informs and a count of the rest, ADR 0010), each as `message_id`, sender name and kind, with the instruction to use `reply` (for an inbound message) or `send_message` (for anything else). With no open route it says so and names `send_message`. The bounce quotes the first line of the undelivered text so the model can repeat it.
+A native frame from the bound session is never forwarded. The shim journals it as `bounced` and injects a short message back into the same session (through the harness `Inject`, from `crosstalk`) saying the native message was not delivered and listing the open inbound messages it may answer (every open ask, then the ten newest informs and a count of the rest, ADR 0010), each as `message_id`, sender name and kind, to answer with `reply`. With no open route it says so and names `send_message`. The bounce quotes the first line of the undelivered text, cut to 200 characters, so the model can repeat it.
 
-A bounce is an injection, not a delivery: it opens no route, is never bounced itself, and completes nothing. `reply` remains the only path that completes an ask or closes a route (e6a3b2b). Delivered messages therefore always carry an authoritative `in_reply_to` or none.
+A bounce is an injection, not a delivery: it opens no route, is never bounced itself, and completes nothing. Only `reply` completes an ask (e6a3b2b). Routes close by `reply`, by their ask task reaching a terminal state, by a rejected or unreachable injection, or by inform expiry (ADR 0010); never by a native frame. Delivered messages therefore always carry an authoritative `in_reply_to` or none.
 
 The `uncorrelated` state is replaced by `bounced` (mailbox only). The receiver's `Forwarder` and the sole-open-route lookup are removed.
 
@@ -28,9 +28,13 @@ The `uncorrelated` state is replaced by `bounced` (mailbox only). The receiver's
 
 ## Consequences
 
-- Design §5 native-reply paragraph, §8 states and §11 test 5 rewritten; §12 "reply-route lifetime" item stays (routes are closed only by `reply` or deadline).
+- Design §5 native-reply paragraph, §8 states and §11 test 5 rewritten; route lifetime is ADR 0010.
 - One extra model turn in the sending session per native attempt; the text is lost unless the model repeats it.
 - A model that answers a bounce natively gets another bounce; each needs a model turn, so this is bounded by the model, not by the shim. The bounce text says not to reply to it natively.
 - Codex is unaffected (no native path; `NativeReplyAddress` is empty). A future harness with a native reply path gets this behaviour for free.
 - Supersedes the native-routing part of design F4/F6; ADR 0004 (trust model) unchanged.
-- Wave 2 (2026-11-04, operator ruling): the MCP send path starts a fresh hop chain for every send, and no message limit exists. Loops, including over native delivery (no chain), get a per-peer nudge in the send result (ADR 0014; design §4). A model answering a native bounce natively is outside it.
+- Native frames carry no hop chain and no message limit applies (ADR 0014); a model answering a native bounce natively is outside the per-peer nudge.
+
+## Council review 2026-11-06
+
+Sat: chair Claude (Opus 5.5), advisor A Codex 3c9b659b079700f3 (accuracy), advisor B Codex 93c0805d291aa89e (still right, merge, withdraw). Verdict: EDIT (route-close paths named, with route lifetime pointed at ADR 0010; bounce wording and the 200-character cap; wave 2 bullet cut to what ADR 0014 does not already say). Decision unchanged; kept separate from 0010. Status stays Provisional.

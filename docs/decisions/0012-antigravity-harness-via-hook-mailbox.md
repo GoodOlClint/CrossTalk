@@ -3,6 +3,7 @@
 - **Status:** Provisional
 - **Date:** 2026-11-04
 - **Deciders:** operator + Claude
+- **Implementation:** planned, not built (stretch goal, operator ruling 2026-11-04). No `internal/harness/antigravity`, no `mailboxed` state, no hook command, no `MailSignal` or `ToolAnnotator` in the code; only Claude and Codex are compiled in (`cmd/crosstalk/main.go`).
 - **Context source:** operator rulings 2026-11-04; [spike 12](https://github.com/GoodOlClint/CrossTalk/blob/main/docs/spikes/12-antigravity-cli.md); [change plan](https://github.com/GoodOlClint/CrossTalk/blob/main/docs/plans/antigravity-harness.md)
 
 ## Context
@@ -15,7 +16,7 @@ Google's Antigravity terms say "Using third party software, tools, or services t
 
 ## Decision
 
-agy is one more harness package, `internal/harness/antigravity`, delivering by hook mailbox on documented interfaces only.
+When built, agy is one more harness package, `internal/harness/antigravity`, delivering by hook mailbox on documented interfaces only.
 
 1. **The journal is the mailbox.** A new state `mailboxed` means durable in the recipient's journal, reply route open, ask still open, not yet handed to the model. All inbound messages still pass authenticate → dedupe → hop-chain → policy → `Inject`. The adapter's `Inject` writes nothing and returns `mailboxed`, since the chain has already journaled the body. `queued` is not reused.
 2. **Body as tool result; pointer has no peer text.** A hook injects only a fixed sentence with an integer count, naming the `receive_message` tool on server `crosstalk`: `ephemeralMessage` from `PreInvocation`, `reason` from `Stop`. No sender-controlled field enters it. The body returns from `receive_message` with a fixed no-operator-authority notice.
@@ -28,7 +29,7 @@ agy is one more harness package, `internal/harness/antigravity`, delivering by h
 9. **Install.** `crosstalk install antigravity` and `uninstall` merge one owned key into each of `mcp_config.json`, `hooks.json` and `settings.json`, preserving everything else. It is idempotent. On unparseable input or a conflicting existing `crosstalk` entry it writes nothing. It records what it added, and uninstall removes only those entries while their value is unchanged.
 10. **Version gate.** Tested major or refuse, tested minor or warn, as `codex/version.go`. Pinned to 1.5; re-verified per minor.
 
-ADR 0008's extension points grow by two optional interfaces, `MailSignal` and `ToolAnnotator`, and one `Session` field. The core still names no harness.
+ADR 0008's extension points would grow by two optional interfaces, `MailSignal` and `ToolAnnotator`, and one `Session` field. The core still names no harness.
 
 ## Rejected alternatives
 
@@ -50,10 +51,14 @@ ADR 0008's extension points grow by two optional interfaces, `MailSignal` and `T
 ## Consequences
 
 - Delivery latency is the next model call and is unbounded for an idle agent. Senders see `mailboxed` and a hint; asks need realistic deadlines. An ask that expires while mailboxed is still collected, and `reply` then returns `ask_closed` (ADR 0010).
-- Known gaps shipped and stated: after `/clear`, mail sent to the old name strands until `/resume` or until the conditional proof lands; a conversation is unreachable before its first tool call; an interrupted collection can show a message again labelled `unknown`, and settlement proves agy continued, not that the model used it; a crash-window `unknown` message has no pointer.
+- Planned, accepted gaps: after `/clear`, mail sent to the old name strands until `/resume` or until the conditional proof lands; a conversation is unreachable before its first tool call; an interrupted collection can show a message again labelled `unknown`, and settlement proves agy continued, not that the model used it; a crash-window `unknown` message has no pointer.
 - The sender-side evidence is stronger than for other harnesses in one way (the model's own tool call took the message) and weaker in another (no wake).
 - `_meta` keys and hook behaviour are changelog-level or measured contracts, pinned by fixtures from spike 12. Identity fails closed if they change.
 - Whether this setup is permitted by Google's terms is unresolved. The operator decides and the user is told before install; the consequence named in the terms falls on the user's account.
 - Text in ADRs 0003, 0006, 0008 and 0010, `docs/design.md` and `AGENTS.md` must change when this is built. The plan's section 10 lists it; none is edited yet.
 - `liveSet` in the journal keeps outbound asks at `mailboxed`, so an asker's deadline and receipt survive retention while the recipient holds the ask.
 - Implementation commits carry `Provisional-ADR: 0012`.
+
+## Council review 2026-11-06
+
+Sat: chair Claude (Opus 5.5), advisor A Codex 3c9b659b079700f3 (accuracy), advisor B Codex 93c0805d291aa89e (still right, merge, withdraw). Verdict: EDIT (marked planned and unbuilt; decision text conditional). Not withdrawn: no replacement exists. Kept separate from 0007 and 0010. Status stays Provisional.
