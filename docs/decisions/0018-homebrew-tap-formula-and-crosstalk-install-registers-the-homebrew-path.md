@@ -12,11 +12,11 @@ Today a user downloads a release asset, checks its `.sha256` and runs `./crossta
 ## Decision
 
 - Distribute through a formula, `Formula/crosstalk.rb` in `GoodOlClint/homebrew-tap`, that downloads the release assets (`macos-universal.zip` on macOS, `linux-amd64` or `linux-arm64` `.tar.gz` on Linux) with their published SHA-256 sums and runs `bin.install "crosstalk"`. No bottles, no `post_install`.
-- `scripts/release-build.sh formula` renders the formula from the assets' `.sha256` files. A `homebrew` job in `release.yml`, after the `release` job and after the `marketplace` job has merged the new plugin ref (ADR 0019), only on a final tag (`is-final`), mints a 1-hour GitHub App token for the tap and hands the new formula to `scripts/release-build.sh land-pr`, which opens or reuses the PR, enables auto-merge and waits until it is merged, failing the run otherwise; the tap's `brew test-bot` checks gate the merge. A re-run after the formula is already on the tap's `main` is a no-op.
-- The job runs in its own environment that holds only the App's secrets, with no required reviewer: it runs only after the operator approved the `release` job, and never sees the signing secrets.
+- `scripts/release-build.sh formula` renders the formula from the assets' `.sha256` files. A `homebrew` job in `release.yml`, after the `release` job and after the `marketplace` job has merged the new plugin ref (ADR 0019), only on a final tag (`is-final`), mints a 1-hour GitHub App token for the tap and hands the new formula to `scripts/release-build.sh land-pr`, which opens or reuses the PR, enables auto-merge and waits until it is merged, failing the run otherwise; the tap's `brew test-bot` checks gate the merge. When the repo refuses auto-merge, `land-pr` merges the PR itself once GitHub reports it `CLEAN` (required checks passed) and fails at once on a failed required check (3622409, 148607a); that fallback is only as strong as the required checks the target repo's ruleset sets. A re-run after the formula is already on the tap's `main` is a no-op, and a tag older than the tap's current formula fails the job (638c358).
+- The job runs in the `homebrew-tap` environment, shared with the `marketplace` job (ADR 0019), which holds only the App's client id (variable `RELEASE_APP_CLIENT_ID`) and private key (secret `RELEASE_APP_PRIVATE_KEY`), with no required reviewer: it runs only after the operator approved the `release` job, and never sees the signing secrets.
 - `crosstalk install` detects a Homebrew keg binary (resolved path under `<prefix>/Cellar/crosstalk/`, with `<prefix>/bin/crosstalk` resolving to the same file) and uses `<prefix>/bin/crosstalk` as the installed binary: no copy, and that path is what both harnesses register. `--bin-dir` overrides detection; an unlinked keg falls back to the copy.
 - `uninstall --purge` keeps the state directory while any harness still has CrossTalk set up, whichever binary path it names, because a Homebrew and a `~/.local/bin` install can coexist.
-- `crosstalk uninstall` never deletes a file under the Homebrew prefix; it points to `brew uninstall crosstalk`. The formula's caveats say to run `crosstalk install` after install and after `brew upgrade`, and `crosstalk uninstall` before `brew uninstall`.
+- `crosstalk uninstall` never deletes a recognized Homebrew keg binary (a path that resolves into `<prefix>/Cellar/crosstalk/<version>/bin/`); it points to `brew uninstall crosstalk`. A plain copy placed in the prefix with `--bin-dir` is not recognized and is deleted. The formula's caveats say to run `crosstalk install` after install and after `brew upgrade`, and `crosstalk uninstall` before `brew uninstall`.
 
 ## Rejected alternatives
 
@@ -29,7 +29,7 @@ Today a user downloads a release asset, checks its `.sha256` and runs `./crossta
 
 ## Consequences
 
-- The operator creates a GitHub App installed on the tap (and CrossTalk, ADR 0019), an environment with its two secrets, auto-merge on, and a ruleset on the tap's main requiring the test-bot checks (plan section 9).
+- The operator creates a GitHub App installed on the tap (and CrossTalk, ADR 0019), the `homebrew-tap` environment with the App's client-id variable and private-key secret, auto-merge on, and a ruleset on the tap's main requiring the test-bot checks (plan section 9).
 - Every final release opens one tap PR; an rc tag opens none.
 - After `brew upgrade crosstalk`, the registered path is unchanged, but the plugin stays at the old version until the user runs `crosstalk install` again (caveats say so; K1 reports it).
 - The tap's generated `publish.yml` and `autobump.yml` are removed (plan slice E6): the release job is the formula's one writer.
@@ -37,6 +37,10 @@ Today a user downloads a release asset, checks its `.sha256` and runs `./crossta
 ## Trial record
 
 - Rests on: ADR 0015, 0016, 0017; ADR 0019 (shared App and auto-merge pattern).
-- Commits: none yet. Implementing commits carry `Provisional-ADR: 0018`.
-- Pinning tests (planned): `TestIsFinal`, `TestFormulaRender`, `TestLandPR`, `TestReleaseWorkflowPostReleaseJobs`, `TestInstallHomebrewBinary`, `TestInstallHomebrewUnlinked`, `TestInstallHomebrewBinDirOverride`, `TestUninstallHomebrewKeepsBinary`, `TestUninstallPurgeKeepsStateForOtherBinary`.
-- Not yet run live: signature and quarantine of the keg binary on this Mac (slice H6); the first final-tag tap PR.
+- Commits (no `Provisional-ADR` trailer was used): 47d5c71 H1 `is-final`; 3a363c3 H2 `formula`; 0a748fc H2a `land-pr`; 67fed3a H3 `homebrew` job; 638c358 older-tag refusal; a80734a H4 Homebrew detection; 75502b7 H5 uninstall keeps the keg binary; ce3f443 H5a purge keeps shared state; 3622409 and 148607a `land-pr` direct-merge fallback; f80058b App token by client id.
+- Pinning tests: `TestIsFinal`, `TestFormulaRender`, `TestLandPR`, `TestReleaseWorkflowPostReleaseJobs`, `TestInstallHomebrewBinary`, `TestInstallHomebrewUnlinked`, `TestInstallHomebrewBinDirOverride`, `TestUninstallHomebrewKeepsBinary`, `TestUninstallPurgeKeepsStateForOtherBinary`.
+- Run live: tap PRs #3 (`crosstalk 0.1.4`) and #4 (`crosstalk 0.1.5`) opened and merged by `crosstalk-release[bot]` on 2026-11-06. Not verified by the council: signature and quarantine of the keg binary on a Mac (slice H6).
+
+## Council review 2026-11-06
+
+Sat: chair Claude (Opus 5.5), advisor A Codex 3c9b659b079700f3 (accuracy), advisor B Codex 93c0805d291aa89e (still right, merge, withdraw). Verdict: EDIT (Trial record was "none yet"; shared `homebrew-tap` environment with a client-id variable; `land-pr` direct-merge fallback). Kept separate from ADR 0019: a different repo and gate, sharing only the helper. Status stays Provisional.
