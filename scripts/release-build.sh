@@ -177,7 +177,8 @@ land-pr)
 				echo "merged: $pr"
 				exit 0
 			fi
-			if gh pr checks --required --repo "$repo" "$pr" >/dev/null 2>&1; then :; elif [ "$?" -eq 1 ]; then
+			failed="$(gh pr checks --required --repo "$repo" "$pr" --json bucket --jq '[.[] | select(.bucket == "fail")] | length' 2>/dev/null || true)"
+			if [ "${failed:-0}" -gt 0 ] 2>/dev/null; then
 				echo "required checks failed: $pr (auto-merge was refused; enable \"Allow auto-merge\" in $repo)" >&2
 				exit 1
 			fi
