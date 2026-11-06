@@ -16,7 +16,7 @@ Today a user downloads a release asset, checks its `.sha256` and runs `./crossta
 - The job runs in the `homebrew-tap` environment, shared with the `marketplace` job (ADR 0019), which holds only the App's client id (variable `RELEASE_APP_CLIENT_ID`) and private key (secret `RELEASE_APP_PRIVATE_KEY`), with no required reviewer: it runs only after the operator approved the `release` job, and never sees the signing secrets.
 - `crosstalk install` detects a Homebrew keg binary (resolved path under `<prefix>/Cellar/crosstalk/`, with `<prefix>/bin/crosstalk` resolving to the same file) and uses `<prefix>/bin/crosstalk` as the installed binary: no copy, and that path is what both harnesses register. `--bin-dir` overrides detection; an unlinked keg falls back to the copy.
 - `uninstall --purge` keeps the state directory while any harness still has CrossTalk set up, whichever binary path it names, because a Homebrew and a `~/.local/bin` install can coexist.
-- `crosstalk uninstall` never deletes a file under the Homebrew prefix; it points to `brew uninstall crosstalk`. The formula's caveats say to run `crosstalk install` after install and after `brew upgrade`, and `crosstalk uninstall` before `brew uninstall`.
+- `crosstalk uninstall` never deletes a recognized Homebrew keg binary (a path that resolves into `<prefix>/Cellar/crosstalk/<version>/bin/`); it points to `brew uninstall crosstalk`. A plain copy placed in the prefix with `--bin-dir` is not recognized and is deleted. The formula's caveats say to run `crosstalk install` after install and after `brew upgrade`, and `crosstalk uninstall` before `brew uninstall`.
 
 ## Rejected alternatives
 
