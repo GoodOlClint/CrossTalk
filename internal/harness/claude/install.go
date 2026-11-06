@@ -564,8 +564,11 @@ func (h *Harness) Checks(ctx context.Context, env harness.InstallEnv) []harness.
 	case p == nil:
 		k1.Detail = "plugin " + pluginID + " is not installed"
 	default:
-		k1.OK = p.Version == env.Version
+		k1.OK = harness.PluginAcceptable(env.Version, p.Version)
 		k1.Detail = "plugin " + pluginID + " " + p.Version + ", binary " + env.Version
+		if k1.OK && p.Version != env.Version {
+			k1.Detail += harness.RCNote
+		}
 	}
 	e, eerr := userEntry(env.Home)
 	if err == nil {

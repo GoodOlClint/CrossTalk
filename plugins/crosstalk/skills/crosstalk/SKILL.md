@@ -44,6 +44,7 @@ Tool names are bare here; your harness may prefix them.
 - `not_ready`: retry once.
 - `too_large`, `too_many_pending`, `too_many_asks`: shorten the text or wait.
 - Tool not available (no CrossTalk tools, or the model says the tool "isn't available", with no error): the server did not start, usually because `crosstalk` is not on the PATH the harness was started with. Tell the user to run `command -v crosstalk` in a shell, then restart the harness from that same shell; a passing check elsewhere does not prove the harness has the PATH. Claude Code caches a failed server for up to 15 minutes even when `claude mcp list` says Connected, so tell the user to run `/mcp` and reconnect.
+- No CrossTalk tools at all, though the plugin is installed: the server was never registered (the plugin has carried only this skill since 0.1.3). Tell the user to install the binary (`brew install goodolclint/tap/crosstalk`, or the release download) and run `crosstalk install`, then restart the session.
 - Anything else: report the `reason` code to the user.
 
 ## Security

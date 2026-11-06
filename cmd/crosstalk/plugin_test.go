@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -195,5 +196,17 @@ func TestVersionIs014AndManifestsMatch(t *testing.T) {
 		if v := p.(map[string]any)["version"]; v != mcpserver.Version {
 			t.Errorf("claude marketplace version %v, binary %s", v, mcpserver.Version)
 		}
+	}
+}
+
+func TestVersionStampedByLdflags(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "crosstalk")
+	cmd := exec.Command("go", "build", "-o", bin, "-ldflags", "-X github.com/GoodOlClint/crosstalk/internal/mcpserver.Version=0.1.4-rc.1", ".")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	out, err := exec.Command(bin, "version").Output()
+	if err != nil || strings.TrimSpace(string(out)) != "0.1.4-rc.1" {
+		t.Errorf("version = %q, %v; want 0.1.4-rc.1", out, err)
 	}
 }
