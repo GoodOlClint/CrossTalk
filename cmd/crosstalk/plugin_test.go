@@ -182,7 +182,7 @@ func TestMarketplacesPinToReleaseTag(t *testing.T) {
 	}
 }
 
-func TestVersionIs013AndManifestsMatch(t *testing.T) {
+func TestVersionIs014AndManifestsMatch(t *testing.T) {
 	if mcpserver.Version != "0.1.4" {
 		t.Errorf("binary version %s, want 0.1.4", mcpserver.Version)
 	}
