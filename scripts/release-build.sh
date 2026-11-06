@@ -11,9 +11,8 @@ asset() {
 	echo "$NAME-$1-macos-universal"
 }
 
-case "${1:-}" in
-check-tag)
-	tag="${2:?usage: release-build.sh check-tag TAG}"
+check_tag() {
+	tag="$1"
 	ver="$(version)"
 	[ -n "$ver" ] || {
 		echo "cannot read mcpserver.Version" >&2
@@ -31,6 +30,179 @@ check-tag)
 		exit 1
 		;;
 	esac
+}
+
+sha_of() {
+	h="$(awk 'NR == 1 { print $1 }' "$1")" || exit 1
+	case "$h" in
+	*[!0-9a-f]* | "") h="" ;;
+	esac
+	[ "${#h}" = 64 ] || {
+		echo "no sha256 in $1" >&2
+		exit 1
+	}
+	echo "$h"
+}
+
+case "${1:-}" in
+check-tag)
+	check_tag "${2:?usage: release-build.sh check-tag TAG}"
+	;;
+is-final)
+	tag="${2:?usage: release-build.sh is-final TAG}"
+	check_tag "$tag"
+	if [ "$tag" = "v$(version)" ]; then echo true; else echo false; fi
+	;;
+formula)
+	usage="usage: release-build.sh formula TAG DIST DIST_LINUX"
+	tag="${2:?$usage}"
+	dist="${3:?$usage}"
+	distlinux="${4:?$usage}"
+	case "$tag" in
+	v*[!0-9.]* | v*..* | v*. | v.* | v) bad=1 ;;
+	v*.*.*) bad= ;;
+	*) bad=1 ;;
+	esac
+	[ -z "$bad" ] || {
+		echo "formula needs a final tag vX.Y.Z, got $tag" >&2
+		exit 1
+	}
+	mac="$NAME-$tag-macos-universal.zip"
+	amd="$NAME-$tag-linux-amd64.tar.gz"
+	arm="$NAME-$tag-linux-arm64.tar.gz"
+	mac_sha="$(sha_of "$dist/$mac.sha256")"
+	amd_sha="$(sha_of "$distlinux/$amd.sha256")"
+	arm_sha="$(sha_of "$distlinux/$arm.sha256")"
+	base="https://github.com/GoodOlClint/CrossTalk/releases/download/$tag"
+	sed -e "s|@BASE@|$base|g" \
+		-e "s|@MAC@|$mac|" -e "s|@MAC_SHA@|$mac_sha|" \
+		-e "s|@AMD@|$amd|" -e "s|@AMD_SHA@|$amd_sha|" \
+		-e "s|@ARM@|$arm|" -e "s|@ARM_SHA@|$arm_sha|" <<'EOF'
+class Crosstalk < Formula
+  desc "Message other running agent sessions (Claude Code, Codex) by name"
+  homepage "https://getcrosstalk.dev"
+  license "MIT"
+
+  on_macos do
+    on_arm do
+      url "@BASE@/@MAC@"
+      sha256 "@MAC_SHA@"
+    end
+    on_intel do
+      url "@BASE@/@MAC@"
+      sha256 "@MAC_SHA@"
+    end
+  end
+
+  on_linux do
+    on_intel do
+      url "@BASE@/@AMD@"
+      sha256 "@AMD_SHA@"
+    end
+    on_arm do
+      url "@BASE@/@ARM@"
+      sha256 "@ARM_SHA@"
+    end
+  end
+
+  def install
+    bin.install "crosstalk"
+  end
+
+  def caveats
+    <<~EOS
+      Register CrossTalk with Claude Code and Codex:
+        crosstalk install
+      Run it again after `brew upgrade crosstalk` so the plugin matches the binary.
+      Before `brew uninstall crosstalk`, run:
+        crosstalk uninstall
+      Restart running Claude and Codex sessions after either.
+    EOS
+  end
+
+  test do
+    assert_equal version.to_s, shell_output("#{bin}/crosstalk version").strip
+  end
+end
+EOF
+	;;
+land-pr)
+	usage="usage: release-build.sh land-pr REPO BRANCH TITLE"
+	repo="${2:?$usage}"
+	branch="${3:?$usage}"
+	title="${4:?$usage}"
+	timeout="${LAND_PR_TIMEOUT:-2400}"
+	poll="${LAND_PR_POLL:-30}"
+	find_pr() {
+		gh pr list --repo "$repo" --head "$branch" --state "$1" --json url --jq '.[0].url // empty'
+	}
+	merged="$(find_pr merged)"
+	[ -z "$merged" ] || {
+		echo "already merged: $merged"
+		exit 0
+	}
+	pr="$(find_pr open)"
+	if [ -n "$pr" ]; then
+		echo "reusing $pr"
+	else
+		git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1 || git push origin "HEAD:refs/heads/$branch"
+		pr="$(gh pr create --repo "$repo" --head "$branch" --title "$title" --body "Opened by release-build.sh land-pr.")"
+		echo "opened $pr"
+	fi
+	gh pr merge --auto --squash --repo "$repo" "$pr" || echo "auto-merge not enabled; polling anyway" >&2
+	waited=0
+	while :; do
+		status="$(gh pr view "$pr" --repo "$repo" --json state,mergeStateStatus --jq '.state + " " + .mergeStateStatus')"
+		state="${status%% *}"
+		case "$state" in
+		MERGED)
+			echo "merged: $pr"
+			exit 0
+			;;
+		CLOSED)
+			echo "closed without merging: $pr" >&2
+			exit 1
+			;;
+		esac
+		if [ "$waited" -ge "$timeout" ]; then
+			echo "not merged after ${timeout}s: $pr (state $state, mergeStateStatus ${status#* })" >&2
+			exit 1
+		fi
+		sleep "$poll"
+		waited=$((waited + poll))
+	done
+	;;
+bump-marketplaces)
+	tag="${2:?usage: release-build.sh bump-marketplaces TAG}"
+	echo "$tag" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+$' || {
+		echo "bump-marketplaces needs a final tag vX.Y.Z, got $tag" >&2
+		exit 1
+	}
+	files="${CLAUDE_MARKETPLACE:-.claude-plugin/marketplace.json} ${CODEX_MARKETPLACE:-.agents/plugins/marketplace.json}"
+	todo=
+	for f in $files; do
+		cur="$(sed -n 's/^[[:space:]]*"ref": "\(v[0-9.]*\)",\{0,1\}$/\1/p' "$f")"
+		[ -n "$cur" ] && [ "$(echo "$cur" | wc -l)" -eq 1 ] || {
+			echo "$f: need exactly one release-tag ref, found '$cur'" >&2
+			exit 1
+		}
+		[ "$cur" = "$tag" ] && continue
+		newer="$(awk -v a="${cur#v}" -v b="${tag#v}" 'BEGIN { split(a, x, "."); split(b, y, "."); for (i = 1; i <= 3; i++) if (x[i] + 0 != y[i] + 0) { print (x[i] + 0 > y[i] + 0) ? "cur" : "tag"; exit } }')"
+		[ "$newer" != cur ] || {
+			echo "$f: ref $cur is newer than $tag" >&2
+			exit 1
+		}
+		todo="$todo $f"
+	done
+	[ -n "$todo" ] || {
+		echo unchanged
+		exit 0
+	}
+	for f in $todo; do
+		sed "s|^\([[:space:]]*\"ref\": \"\)v[0-9.]*\(\"\)|\1$tag\2|" "$f" >"$f.tmp"
+		mv "$f.tmp" "$f"
+		echo "$f: ref -> $tag"
+	done
 	;;
 check-identity)
 	keychain="${2:?usage: release-build.sh check-identity KEYCHAIN}"
@@ -98,7 +270,7 @@ package-linux)
 	done
 	;;
 *)
-	echo "usage: release-build.sh check-tag TAG | check-identity KEYCHAIN | build OUTDIR | package OUTDIR TAG | build-linux OUTDIR | package-linux OUTDIR TAG" >&2
+	echo "usage: release-build.sh check-tag TAG | is-final TAG | formula TAG DIST DIST_LINUX | land-pr REPO BRANCH TITLE | bump-marketplaces TAG | check-identity KEYCHAIN | build OUTDIR | package OUTDIR TAG | build-linux OUTDIR | package-linux OUTDIR TAG" >&2
 	exit 2
 	;;
 esac
