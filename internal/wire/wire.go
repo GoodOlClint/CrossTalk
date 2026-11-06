@@ -125,7 +125,7 @@ func (w *Wire) startA2A(_ context.Context, st *shim.AgentState) (shim.A2AListene
 			if role == "" {
 				role = registry.RolePrimary
 			}
-			return a2a.Profile{Name: a.Name(), Harness: string(a.Harness()), Role: role, Cwd: d.Cwd}
+			return a2a.Profile{Name: a.Name(), Harness: string(a.Harness()), Role: role}
 		},
 		Version:       mcpserver.Version,
 		PeerTokenPath: w.PeerTokenPath(),
