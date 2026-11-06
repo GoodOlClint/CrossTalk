@@ -60,6 +60,12 @@ Nothing here is set by the repo. In order:
 5. Actions permissions: the repo's workflow token default can stay read-only, since the job asks for `contents: write` itself.
 6. Recommended: enable immutable releases, so published assets and tags are locked (draft then publish is the pattern GitHub recommends for it). Recommended: protect `main`, or read `git diff <last-tag>..<new-tag> -- .github scripts` before approving a run.
 7. Rehearse: push `v0.1.2-rc.1` (it publishes a prerelease), watch the run, then tag the real `v0.1.2` only after an rc run succeeds.
+8. Recovering a half-published release (the `release` job published the assets, then `marketplace` or `homebrew` failed; plan section 4.1). Never delete, re-tag or re-upload a published release. In order:
+   1. Read the failed job's last lines: `land-pr` prints the PR URL and its `mergeStateStatus`.
+   2. Fix the cause: a failed CI or test-bot check (push a fix to the PR branch, or to `main` and update the branch), a merge conflict (rebase the PR branch on `main`), or a missing secret or App installation.
+   3. Actions, the release run, "Re-run failed jobs". `land-pr` reuses the open PR or the existing branch and waits again; a PR merged meanwhile exits 0. `homebrew` runs once `marketplace` succeeds.
+   4. If a re-run cannot work (the App is gone, or the run is past GitHub's re-run window): from a clean checkout of `main`, `scripts/release-build.sh bump-marketplaces vX.Y.Z`, PR, merge on green CI; then in a tap checkout, `gh release download vX.Y.Z` into an empty directory, `scripts/release-build.sh formula vX.Y.Z DIR DIR > Formula/crosstalk.rb`, PR, merge on green test-bot. Marketplace first, tap second.
+   5. Until it is fixed, a curl-download user gets the previous plugin (K1 fails until the ref moves) and a Homebrew user the previous formula; existing installs are unaffected.
 
 ## Trial record
 

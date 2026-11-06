@@ -42,12 +42,19 @@ Decision records read: ADR 0013 (plugin and marketplaces), 0015 (signed release,
 class Crosstalk < Formula
   desc "Message other running agent sessions (Claude Code, Codex) by name"
   homepage "https://getcrosstalk.dev"
-  version "0.1.4"
   license "MIT"
+
   on_macos do
-    url "https://github.com/GoodOlClint/CrossTalk/releases/download/v0.1.4/crosstalk-v0.1.4-macos-universal.zip"
-    sha256 "<from .zip.sha256>"
+    on_arm do
+      url "https://github.com/GoodOlClint/CrossTalk/releases/download/v0.1.4/crosstalk-v0.1.4-macos-universal.zip"
+      sha256 "<from .zip.sha256>"
+    end
+    on_intel do
+      url "https://github.com/GoodOlClint/CrossTalk/releases/download/v0.1.4/crosstalk-v0.1.4-macos-universal.zip"
+      sha256 "<from .zip.sha256>"
+    end
   end
+
   on_linux do
     on_intel do
       url ".../crosstalk-v0.1.4-linux-amd64.tar.gz"
@@ -77,7 +84,7 @@ class Crosstalk < Formula
 end
 ```
 
-A formula (not a cask) because CrossTalk is one command-line binary (gen 4 ruling). No `post_install` that runs `crosstalk install`: it would edit `~/.claude` and `~/.codex` inside Homebrew's install and could not prompt (ADR 0018). No bottles: the formula installs the release binary; `publish.yml` is removed (slice E6).
+A formula (not a cask) because CrossTalk is one command-line binary (gen 4 ruling). No `post_install` that runs `crosstalk install`: it would edit `~/.claude` and `~/.codex` inside Homebrew's install and could not prompt (ADR 0018). There is no `version` line: Homebrew reads the version from the URL. Both macOS arches point at the one universal zip. No bottles: the formula installs the release binary; `publish.yml` is removed (slice E6).
 
 ### 3.2 Release job `homebrew`
 

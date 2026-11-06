@@ -503,3 +503,69 @@ func TestBumpMarketplaces(t *testing.T) {
 		}
 	})
 }
+
+func TestReleaseWorkflowPostReleaseJobs(t *testing.T) {
+	src := repoFile(t, ".github/workflows/release.yml")
+	jobs := workflowJobs(src)
+
+	trigger, _, _ := strings.Cut(src, "\npermissions:")
+	if strings.Contains(trigger, "branches") {
+		t.Error("release.yml has a branch trigger; the marketplace merge would start a release")
+	}
+
+	release := jobs["release"]
+	if !regexp.MustCompile(`(?m)^    outputs:\n      final: \$\{\{ steps\.final\.outputs\.final \}\}$`).MatchString(release) {
+		t.Error("release job does not export final from the final step")
+	}
+	var finalStep string
+	for _, s := range strings.Split(release, "\n      - ")[1:] {
+		if strings.Contains(s, "id: final") {
+			finalStep = s
+		}
+	}
+	if !strings.Contains(finalStep, `scripts/release-build.sh is-final "$TAG"`) || !strings.Contains(finalStep, `"$GITHUB_OUTPUT"`) {
+		t.Errorf("step with id final does not write is-final to GITHUB_OUTPUT:\n%s", finalStep)
+	}
+
+	cases := []struct {
+		job, needs, repo, branch string
+	}{
+		{"marketplace", "release", "CrossTalk", "marketplace-$TAG"},
+		{"homebrew", "[release, marketplace]", "homebrew-tap", "crosstalk-$TAG"},
+	}
+	if !strings.Contains(jobs["homebrew"], "newer than $TAG") {
+		t.Error("homebrew job does not refuse a tag older than the formula on tap main")
+	}
+	forbidden := regexp.MustCompile(`APPLE_|AC_API|(?m)^    environment: release\s*$|always\(\)|!cancelled\(\)`)
+	for _, c := range cases {
+		body := jobs[c.job]
+		if body == "" {
+			t.Errorf("release.yml has no job %s", c.job)
+			continue
+		}
+		for _, want := range []string{
+			"\n    needs: " + c.needs + "\n",
+			"\n    if: needs.release.outputs.final == 'true'\n",
+			"\n    runs-on: ubuntu-latest\n",
+			"\n    environment: homebrew-tap\n",
+			"\n    permissions: {}\n",
+			"\n    timeout-minutes: 50\n",
+			"uses: actions/create-github-app-token@v3\n",
+			"app-id: ${{ secrets.RELEASE_APP_ID }}",
+			"private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}",
+			"owner: GoodOlClint\n",
+			"repositories: " + c.repo + "\n",
+			"scripts/release-build.sh land-pr GoodOlClint/" + c.repo + ` "` + c.branch + `"`,
+		} {
+			if !strings.Contains(body, want) {
+				t.Errorf("job %s lacks %q", c.job, want)
+			}
+		}
+		if m := forbidden.FindString(body); m != "" {
+			t.Errorf("job %s contains %q", c.job, strings.TrimSpace(m))
+		}
+		if n := strings.Count(body, "repositories:"); n != 1 {
+			t.Errorf("job %s mints a token for %d repository lists, want 1", c.job, n)
+		}
+	}
+}
