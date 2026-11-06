@@ -18,6 +18,7 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: write
+      actions: read
     outputs:
       final: ${{ steps.final.outputs.final }}
     env:
@@ -39,8 +40,48 @@ jobs:
           set -eu
           final="$(scripts/release-build.sh is-final "$TAG")"
           echo "final=$final" >> "$GITHUB_OUTPUT"
-      - name: Test
-        run: go test ./...
+      - name: Check main CI
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          waited=0
+          while :; do
+            line="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&event=push&branch=main&per_page=1" --jq '.workflow_runs[0] | select(. != null) | [.id, .status, (.conclusion // "none")] | @tsv')"
+            if [ -z "$line" ]; then
+              run=none status=missing conclusion=none
+            else
+              run="$(printf '%s' "$line" | cut -f1)"
+              status="$(printf '%s' "$line" | cut -f2)"
+              conclusion="$(printf '%s' "$line" | cut -f3)"
+            fi
+            case "$status" in
+            queued | in_progress | waiting | pending | requested | missing)
+              [ "$waited" -lt 1200 ] || {
+                if [ "$status" = missing ]; then
+                  echo "no ci.yml push run on main for $GITHUB_SHA after 1200 s" >&2
+                else
+                  echo "ci.yml run $run on $GITHUB_SHA still $status after 1200 s" >&2
+                fi
+                exit 1
+              }
+              sleep 30
+              waited=$((waited + 30))
+              ;;
+            *) break ;;
+            esac
+          done
+          [ "$conclusion" = success ] || {
+            echo "ci.yml run $run on $GITHUB_SHA concluded $conclusion" >&2
+            exit 1
+          }
+          jobs="$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$run/jobs?per_page=100" --jq '.jobs[] | [.name, .conclusion] | @tsv')"
+          for name in 'test (ubuntu-latest)' 'test (macos-latest)'; do
+            printf '%s\n' "$jobs" | grep -Fx "$name	success" > /dev/null || {
+              echo "job '$name' did not succeed in ci.yml run $run on $GITHUB_SHA" >&2
+              exit 1
+            }
+          done
       - name: Build universal binary
         run: scripts/release-build.sh build "$RUNNER_TEMP/dist"
       - name: Build Linux binaries

@@ -52,6 +52,34 @@ case "${1:-}" in
 check-tag)
 	check_tag "${2:?usage: release-build.sh check-tag TAG}"
 	;;
+ci-scope)
+	base="${2-}"
+	head="${3:?usage: release-build.sh ci-scope BASE HEAD}"
+	case "$base" in
+	"" | 0000000000000000000000000000000000000000)
+		echo code
+		exit 0
+		;;
+	esac
+	files="$(git diff --no-renames --name-only "$base" "$head")" || {
+		echo code
+		exit 0
+	}
+	[ -n "$files" ] || {
+		echo code
+		exit 0
+	}
+	scope=docs
+	while IFS= read -r f; do
+		case "$f" in
+		*.md | docs/* | .claude-plugin/marketplace.json | .agents/plugins/marketplace.json) ;;
+		*) scope=code ;;
+		esac
+	done <<EOT
+$files
+EOT
+	echo "$scope"
+	;;
 is-final)
 	tag="${2:?usage: release-build.sh is-final TAG}"
 	check_tag "$tag"
@@ -293,7 +321,7 @@ package-linux)
 	done
 	;;
 *)
-	echo "usage: release-build.sh check-tag TAG | is-final TAG | formula TAG DIST DIST_LINUX | land-pr REPO BRANCH TITLE | bump-marketplaces TAG | check-identity KEYCHAIN | build OUTDIR | package OUTDIR TAG | build-linux OUTDIR | package-linux OUTDIR TAG" >&2
+	echo "usage: release-build.sh check-tag TAG | ci-scope BASE HEAD | is-final TAG | formula TAG DIST DIST_LINUX | land-pr REPO BRANCH TITLE | bump-marketplaces TAG | check-identity KEYCHAIN | build OUTDIR | package OUTDIR TAG | build-linux OUTDIR | package-linux OUTDIR TAG" >&2
 	exit 2
 	;;
 esac

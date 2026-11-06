@@ -26,13 +26,31 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
+          fetch-depth: 0
+      - name: Classify change
+        id: scope
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -eu
+          scope="$(scripts/release-build.sh ci-scope "$BASE" "$HEAD")"
+          echo "scope=$scope" >> "$GITHUB_OUTPUT"
+          echo "change scope: $scope"
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      - run: go build ./...
-      - run: go test -race ./...
-      - run: go vet ./...
+      - name: Fast tests (docs and marketplace changes only)
+        if: steps.scope.outputs.scope == 'docs'
+        run: go test ./cmd/crosstalk -run 'TestSetupDocCoversGaps|TestUpgradeFromBundledServerDocumented|TestManifestsMatchBinary|TestMarketplacesPinToReleaseTag|TestVersionIs015AndManifestsMatch|TestSiteConfig|TestSiteLinks|TestSkillCoversStatesAndCodes|TestEvalFixtureNoticesMatchConst|TestPluginShipsNoServer'
+      - if: steps.scope.outputs.scope != 'docs'
+        run: go build ./...
+      - if: steps.scope.outputs.scope != 'docs'
+        run: go test -race ./...
+      - if: steps.scope.outputs.scope != 'docs'
+        run: go vet ./...
       - name: gofmt
+        if: steps.scope.outputs.scope != 'docs'
         run: test -z "$(gofmt -l .)"
 
   govulncheck:
