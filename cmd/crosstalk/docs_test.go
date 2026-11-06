@@ -10,6 +10,8 @@ func TestSetupDocCoversGaps(t *testing.T) {
 	for _, want := range []string{
 		"brew shellenv", "@unverified", "bubblewrap", "folder-trust",
 		"install.sh", "marketplace remove", "codex-path",
+		"brew install goodolclint/tap/crosstalk", "brew uninstall crosstalk",
+		"crosstalk uninstall` before `brew uninstall crosstalk", "$(brew --prefix)/bin/crosstalk",
 	} {
 		if !strings.Contains(doc, want) {
 			t.Errorf("setup.md lacks %q", want)

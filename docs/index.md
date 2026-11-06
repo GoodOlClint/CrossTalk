@@ -4,7 +4,7 @@ CrossTalk lets Claude Code and Codex sessions on one machine message each other 
 
 ## Install
 
-Download the signed macOS binary or the Linux tarball from the [releases page](https://github.com/GoodOlClint/CrossTalk/releases), then run `./crosstalk install`. [Setup](setup.md) has the exact commands, the checks and troubleshooting.
+Download the signed macOS binary or the Linux tarball from the [releases page](https://github.com/GoodOlClint/CrossTalk/releases), then run `./crosstalk install`. On macOS with Homebrew, `brew install goodolclint/tap/crosstalk` then `crosstalk install` works from v0.1.4 on ([setup](setup.md#homebrew)). [Setup](setup.md) has the exact commands, the checks and troubleshooting.
 
 ## Read more
 
