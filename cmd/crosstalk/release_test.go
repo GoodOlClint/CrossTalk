@@ -737,7 +737,7 @@ func TestCIWorkflowScopesTests(t *testing.T) {
 	if fast == "" || !strings.Contains(fast, "steps.scope.outputs.scope == 'docs'") || strings.Contains(fast, "-race") {
 		t.Errorf("no docs-scoped fast test step without -race:\n%s", fast)
 	}
-	for _, name := range []string{"TestSetupDocCoversGaps", "TestUpgradeFromBundledServerDocumented", "TestManifestsMatchBinary", "TestMarketplacesPinToReleaseTag", "TestVersionIs015AndManifestsMatch", "TestSiteConfig", "TestSiteLinks", "TestSkillCoversStatesAndCodes", "TestEvalFixtureNoticesMatchConst", "TestPluginShipsNoServer"} {
+	for _, name := range []string{"TestSetupDocCoversGaps", "TestUpgradeFromBundledServerDocumented", "TestManifestsMatchBinary", "TestMarketplacesPinToReleaseTag", "TestVersionIs015AndManifestsMatch", "TestSiteConfig", "TestSiteLinks", "TestSiteNamesEveryTool", "TestSkillCoversStatesAndCodes", "TestEvalFixtureNoticesMatchConst", "TestPluginShipsNoServer"} {
 		if !strings.Contains(fast, name) {
 			t.Errorf("fast step lacks %s", name)
 		}

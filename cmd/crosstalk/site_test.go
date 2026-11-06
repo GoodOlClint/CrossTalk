@@ -74,3 +74,31 @@ func TestSiteLinks(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+var sitePages = []string{"why.md", "examples.md", "how-it-works.md", "faq.md", "contributing.md", "setup.md", "design.md"}
+
+func TestSiteLinksPages(t *testing.T) {
+	index := repoFile(t, "docs/index.md")
+	for _, p := range sitePages {
+		repoFile(t, "docs/"+p)
+		if !strings.Contains(index, "]("+p+")") {
+			t.Errorf("docs/index.md does not link %s", p)
+		}
+	}
+	if !strings.Contains(index, "](decisions/README.md)") {
+		t.Error("docs/index.md does not link decisions/README.md")
+	}
+	repoFile(t, "CONTRIBUTING.md")
+	if !strings.Contains(repoFile(t, "docs/contributing.md"), "CONTRIBUTING.md") {
+		t.Error("docs/contributing.md does not point at CONTRIBUTING.md")
+	}
+}
+
+func TestSiteNamesEveryTool(t *testing.T) {
+	pages := repoFile(t, "docs/examples.md") + repoFile(t, "docs/how-it-works.md")
+	for _, tool := range []string{"list_agents", "send_message", "ask", "reply", "receive_message", "claim", "release"} {
+		if !strings.Contains(pages, "`"+tool+"`") {
+			t.Errorf("examples.md and how-it-works.md never name `%s`", tool)
+		}
+	}
+}
