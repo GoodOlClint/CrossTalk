@@ -62,6 +62,17 @@ codex --remote "unix://$S"
 
 `CROSSTALK_CODEX_ENDPOINTS` is a comma-separated list of Codex app-server endpoints (`unix://PATH` or `ws://HOST:PORT`) that CrossTalk queries besides the managed daemon. A `ws://` endpoint carries peer text in cleartext; use it only on this machine's loopback.
 
+## Upgrading from a plugin that bundled the server (before 0.1.3)
+
+Before 0.1.3 the CrossTalk plugin started the server itself. Since 0.1.3 the plugin carries only the skill, and `crosstalk install` registers the server (ADR 0016). A machine that took the plugin update but not the binary has the skill and no server: Codex sessions say the CrossTalk tools are unavailable, and nothing else says why. Claude can look fine, because the old plugin's server (`mcp__plugin_crosstalk_crosstalk__` tools) keeps working until the plugin updates.
+
+1. **Get the new binary.** Run `brew install goodolclint/tap/crosstalk`, or download the release as in step 1 above.
+2. **Register the server.** Run `crosstalk install --yes`. It updates the plugin and registers the server at the binary's absolute path in Claude and in Codex.
+3. **Check.** Run `crosstalk install --check` (every line must say PASS), and `codex mcp list` (it must list `crosstalk`).
+4. **Restart** every running Claude and Codex session. A running session keeps the server set it started with.
+
+A prerelease binary (`0.1.4-rc.1`) installs the last release's plugin, because the marketplace stays on the last final tag. K1 passes with a note in that case. To test the rc plugin too, set `CROSSTALK_MARKETPLACE` to the rc tag before `crosstalk install`.
+
 ## Homebrew
 
 Homebrew is a package manager for macOS and Linux; a *formula* is its recipe for one program, and a *tap* is a repository of formulae. From release v0.1.4 on, CrossTalk has a formula in the `goodolclint/tap` tap, and it installs the same signed release binary as the download in step 1. Until v0.1.4 is released the `brew` lines below do not work.

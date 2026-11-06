@@ -7,6 +7,10 @@ version() {
 	sed -n 's/^[[:space:]]*Version = "\(.*\)"$/\1/p' internal/mcpserver/server.go
 }
 
+stamp() {
+	if [ -n "${TAG:-}" ]; then echo "-X github.com/GoodOlClint/crosstalk/internal/mcpserver.Version=${TAG#v}"; fi
+}
+
 asset() {
 	echo "$NAME-$1-macos-universal"
 }
@@ -216,7 +220,7 @@ build)
 	out="${2:?usage: release-build.sh build OUTDIR}"
 	mkdir -p "$out"
 	for arch in arm64 amd64; do
-		CGO_ENABLED=0 GOOS=darwin GOARCH=$arch go build -trimpath -o "$out/$NAME-$arch" ./cmd/crosstalk
+		CGO_ENABLED=0 GOOS=darwin GOARCH=$arch go build -trimpath -ldflags "$(stamp)" -o "$out/$NAME-$arch" ./cmd/crosstalk
 	done
 	lipo -create -output "$out/$NAME" "$out/$NAME-arm64" "$out/$NAME-amd64"
 	rm "$out/$NAME-arm64" "$out/$NAME-amd64"
@@ -231,8 +235,8 @@ package)
 	out="${2:?usage: release-build.sh package OUTDIR TAG}"
 	tag="${3:?usage: release-build.sh package OUTDIR TAG}"
 	got="$("$out/$NAME" version)"
-	[ "$got" = "$(version)" ] || {
-		echo "binary reports $got, want $(version)" >&2
+	[ "$got" = "${tag#v}" ] || {
+		echo "binary reports $got, want ${tag#v}" >&2
 		exit 1
 	}
 	zip="$(asset "$tag").zip"
@@ -248,7 +252,7 @@ build-linux)
 	out="${2:?usage: release-build.sh build-linux OUTDIR}"
 	mkdir -p "$out"
 	for arch in amd64 arm64; do
-		CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath -o "$out/$NAME-linux-$arch" ./cmd/crosstalk
+		CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath -ldflags "$(stamp)" -o "$out/$NAME-linux-$arch" ./cmd/crosstalk
 	done
 	;;
 package-linux)

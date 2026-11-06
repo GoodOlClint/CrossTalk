@@ -569,3 +569,34 @@ func TestReleaseWorkflowPostReleaseJobs(t *testing.T) {
 		}
 	}
 }
+
+func TestReleaseBuildStampsTagIntoBinary(t *testing.T) {
+	bin := t.TempDir()
+	log := filepath.Join(bin, "args.log")
+	fake := "#!/bin/sh\necho \"$@\" >> " + log + "\nwhile [ $# -gt 0 ]; do [ \"$1\" = -o ] && : > \"$2\"; shift; done\n"
+	if err := os.WriteFile(filepath.Join(bin, "go"), []byte(fake), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	env := []string{"PATH=" + bin + ":" + os.Getenv("PATH")}
+	const stamp = "-X github.com/GoodOlClint/crosstalk/internal/mcpserver.Version=0.1.4-rc.1"
+	for _, c := range []struct {
+		tag  string
+		want bool
+	}{{"v0.1.4-rc.1", true}, {"", false}} {
+		os.Remove(log)
+		e := append(env, "TAG="+c.tag)
+		if out, err := releaseScript(t, e, "build-linux", t.TempDir()); err != nil {
+			t.Fatalf("tag %q: %v\n%s", c.tag, err, out)
+		}
+		b, _ := os.ReadFile(log)
+		lines := strings.Split(strings.TrimSpace(string(b)), "\n")
+		if len(lines) != 2 {
+			t.Fatalf("tag %q: %d go builds, want 2", c.tag, len(lines))
+		}
+		for _, l := range lines {
+			if strings.Contains(l, stamp) != c.want {
+				t.Errorf("tag %q: go build %q, stamp want %v", c.tag, l, c.want)
+			}
+		}
+	}
+}

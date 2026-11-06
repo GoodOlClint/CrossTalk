@@ -10,6 +10,8 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -249,3 +251,33 @@ func ReplaceFile(path string, data []byte) error {
 	}
 	return os.Rename(tmp.Name(), path)
 }
+
+// PluginAcceptable is the K1 comparison. A final binary needs the plugin at
+// its own version. A prerelease binary ("0.1.4-rc.1") also accepts the
+// plugin at its base release or any older one, because the marketplace ref
+// stays on the last final tag until the final tag moves it (ADR 0019).
+func PluginAcceptable(binary, plugin string) bool {
+	if binary == plugin {
+		return true
+	}
+	i := strings.Index(binary, "-")
+	if i < 0 {
+		return false
+	}
+	base := binary[:i]
+	return plugin == base || !strings.Contains(plugin, "-") && VersionLess(plugin, base)
+}
+
+func VersionLess(a, b string) bool {
+	as, bs := strings.Split(a, "."), strings.Split(b, ".")
+	for i := 0; i < len(as) && i < len(bs); i++ {
+		x, _ := strconv.Atoi(as[i])
+		y, _ := strconv.Atoi(bs[i])
+		if x != y {
+			return x < y
+		}
+	}
+	return len(as) < len(bs)
+}
+
+const RCNote = " (a prerelease binary installs the last release's plugin; set CROSSTALK_MARKETPLACE to the rc tag to test the rc plugin)"

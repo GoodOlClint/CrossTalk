@@ -21,3 +21,23 @@ func TestSetupDocCoversGaps(t *testing.T) {
 		t.Error("setup.md still says install has not run on a clean account")
 	}
 }
+
+func TestUpgradeFromBundledServerDocumented(t *testing.T) {
+	doc := repoFile(t, "docs/setup.md")
+	for _, want := range []string{
+		"Upgrading from a plugin that bundled the server (before 0.1.3)",
+		"brew install goodolclint/tap/crosstalk",
+		"crosstalk install --yes", "crosstalk install --check", "codex mcp list",
+		"mcp__plugin_crosstalk_crosstalk__",
+	} {
+		if !strings.Contains(doc, want) {
+			t.Errorf("setup.md lacks %q", want)
+		}
+	}
+	skill := repoFile(t, "plugins/crosstalk/skills/crosstalk/SKILL.md")
+	for _, want := range []string{"crosstalk install", "brew install goodolclint/tap/crosstalk", "restart"} {
+		if !strings.Contains(skill, want) {
+			t.Errorf("SKILL.md lacks %q", want)
+		}
+	}
+}
