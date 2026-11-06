@@ -652,6 +652,15 @@ func ciScopeRepo(t *testing.T, files map[string]string) (dir, base, head string)
 	git("commit", "-q", "-m", "base")
 	base = git("rev-parse", "HEAD")
 	for rel, body := range files {
+		if src, ok := strings.CutPrefix(body, "rename:"); ok {
+			if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, rel)), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Rename(filepath.Join(dir, src), filepath.Join(dir, rel)); err != nil {
+				t.Fatal(err)
+			}
+			continue
+		}
 		write(rel, body)
 	}
 	git("add", ".")
@@ -676,6 +685,7 @@ func TestCIScope(t *testing.T) {
 		{"plugin manifest", map[string]string{"plugins/crosstalk/plugin.json": "{}"}, "", "code"},
 		{"empty before sha", map[string]string{"README.md": "x"}, "-", "code"},
 		{"zero before sha", map[string]string{"README.md": "x"}, zero, "code"},
+		{"go file renamed into docs", map[string]string{"docs/x.md": "rename:main.go"}, "", "code"},
 		{"no changes", map[string]string{}, "", "code"},
 	}
 	for _, c := range cases {
@@ -757,7 +767,10 @@ func TestReleaseWorkflowChecksMainCI(t *testing.T) {
 	if step == "" {
 		t.Fatal("release job has no Check main CI step")
 	}
-	for _, want := range []string{"actions/workflows/ci.yml/runs", "head_sha=$GITHUB_SHA", "event=push", "branch=main", "status=success", "/jobs", "test (ubuntu-latest)", "test (macos-latest)", "GH_TOKEN: ${{ github.token }}"} {
+	if strings.Contains(step, "status=success") {
+		t.Error("Check main CI filters runs by status=success, so an in-progress main run fails the release at once")
+	}
+	for _, want := range []string{"actions/workflows/ci.yml/runs", "head_sha=$GITHUB_SHA", "event=push", "branch=main", "in_progress", "queued", "sleep 30", "1200", ".conclusion", "/jobs", "test (ubuntu-latest)", "test (macos-latest)", "GH_TOKEN: ${{ github.token }}"} {
 		if !strings.Contains(step, want) {
 			t.Errorf("Check main CI step lacks %q:\n%s", want, step)
 		}

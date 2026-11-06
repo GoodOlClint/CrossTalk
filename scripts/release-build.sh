@@ -61,7 +61,7 @@ ci-scope)
 		exit 0
 		;;
 	esac
-	files="$(git diff --name-only "$base" "$head")" || {
+	files="$(git diff --no-renames --name-only "$base" "$head")" || {
 		echo code
 		exit 0
 	}
