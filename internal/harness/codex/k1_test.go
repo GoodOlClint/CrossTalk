@@ -48,3 +48,16 @@ func TestK1FinalBinaryMismatchStillFails(t *testing.T) {
 		t.Errorf("final binary accepted an older plugin: k1=%v k2=%v", k1, k2)
 	}
 }
+
+func TestK1RCBinaryRejectsManifestWithoutVersion(t *testing.T) {
+	env, _ := codexEnv(t, "")
+	env.Version = "0.1.4-rc.1"
+	p := pluginManifest(env.Home, "0.1.3")
+	os.MkdirAll(filepath.Dir(p), 0o755)
+	os.WriteFile(p, []byte(`{"name":"crosstalk"}`), 0o644)
+	for _, c := range new(Harness).Checks(context.Background(), env) {
+		if c.ID == "K1" && c.OK {
+			t.Errorf("K1 passed a manifest with no version: %s", c.Detail)
+		}
+	}
+}

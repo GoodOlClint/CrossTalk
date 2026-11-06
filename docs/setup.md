@@ -71,7 +71,7 @@ Before 0.1.3 the CrossTalk plugin started the server itself. Since 0.1.3 the plu
 3. **Check.** Run `crosstalk install --check` (every line must say PASS), and `codex mcp list` (it must list `crosstalk`).
 4. **Restart** every running Claude and Codex session. A running session keeps the server set it started with.
 
-A prerelease binary (`0.1.4-rc.1`) installs the last release's plugin, because the marketplace stays on the last final tag. K1 passes with a note in that case. To test the rc plugin too, set `CROSSTALK_MARKETPLACE` to the rc tag before `crosstalk install`.
+A prerelease binary (`0.1.4-rc.1`) installs the last release's plugin, because the marketplace stays on the last final tag. K1 passes with a note in that case. To test the rc plugin too, point `CROSSTALK_MARKETPLACE` at a scratch marketplace, not at the tag: copy `.claude-plugin/marketplace.json` and `.agents/plugins/marketplace.json` from the rc tag into a scratch directory at the same paths, set each crosstalk entry's `ref` to the rc tag (for example `v0.1.4-rc.1`), and run `CROSSTALK_MARKETPLACE=<scratch dir> crosstalk install`. Setting the variable to the tag itself does not work: it is passed to `plugin marketplace add` as a marketplace source, and the marketplace's own `ref` still names the last release.
 
 ## Homebrew
 

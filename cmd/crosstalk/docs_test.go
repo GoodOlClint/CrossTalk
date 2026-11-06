@@ -28,7 +28,7 @@ func TestUpgradeFromBundledServerDocumented(t *testing.T) {
 		"Upgrading from a plugin that bundled the server (before 0.1.3)",
 		"brew install goodolclint/tap/crosstalk",
 		"crosstalk install --yes", "crosstalk install --check", "codex mcp list",
-		"mcp__plugin_crosstalk_crosstalk__",
+		"mcp__plugin_crosstalk_crosstalk__", "scratch marketplace",
 	} {
 		if !strings.Contains(doc, want) {
 			t.Errorf("setup.md lacks %q", want)

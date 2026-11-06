@@ -43,3 +43,11 @@ func TestK1FinalBinaryMismatchStillFails(t *testing.T) {
 		t.Error("matching versions failed")
 	}
 }
+
+func TestK1RCBinaryRejectsMalformedPluginVersion(t *testing.T) {
+	for _, v := range []string{"", "garbage", "0.1", "0.1.x", "0.1.3-beta"} {
+		if ok, _ := k1(t, "0.1.4-rc.1", v); ok {
+			t.Errorf("rc binary accepted plugin version %q", v)
+		}
+	}
+}

@@ -261,11 +261,24 @@ func PluginAcceptable(binary, plugin string) bool {
 		return true
 	}
 	i := strings.Index(binary, "-")
-	if i < 0 {
+	if i < 0 || !releaseVersion(plugin) || !releaseVersion(binary[:i]) {
 		return false
 	}
-	base := binary[:i]
-	return plugin == base || !strings.Contains(plugin, "-") && VersionLess(plugin, base)
+	return plugin == binary[:i] || VersionLess(plugin, binary[:i])
+}
+
+// releaseVersion reports whether v is exactly X.Y.Z with decimal parts.
+func releaseVersion(v string) bool {
+	ps := strings.Split(v, ".")
+	if len(ps) != 3 {
+		return false
+	}
+	for _, p := range ps {
+		if _, err := strconv.ParseUint(p, 10, 32); err != nil {
+			return false
+		}
+	}
+	return true
 }
 
 func VersionLess(a, b string) bool {
@@ -280,4 +293,4 @@ func VersionLess(a, b string) bool {
 	return len(as) < len(bs)
 }
 
-const RCNote = " (a prerelease binary installs the last release's plugin; set CROSSTALK_MARKETPLACE to the rc tag to test the rc plugin)"
+const RCNote = " (a prerelease binary installs the last release's plugin; to test the rc plugin, point CROSSTALK_MARKETPLACE at a scratch marketplace whose ref is the rc tag, see docs/setup.md)"
