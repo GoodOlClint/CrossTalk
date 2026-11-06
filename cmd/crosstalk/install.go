@@ -244,16 +244,22 @@ func runInstall(mode string, args []string, in io.Reader, tty bool, stdout, stde
 // it names, otherwise only a config that runs env.Bin. It looks at config
 // files whether or not the harness CLI is on PATH. An error means a config
 // could not be read, so the binary and state must stay.
+// A target is checked only for config its own uninstall leaves behind
+// (harness.Leftover).
 func installStillRegistered(all, targets []installTarget, env harness.InstallEnv, setUp bool) ([]string, error) {
 	var out []string
 	var errs []error
 	for _, t := range all {
-		if slices.ContainsFunc(targets, func(x installTarget) bool { return x.name == t.name }) {
-			continue
-		}
 		check := t.in.Registered
 		if setUp {
 			check = t.in.SetUp
+		}
+		if slices.ContainsFunc(targets, func(x installTarget) bool { return x.name == t.name }) {
+			l, ok := t.in.(harness.Leftover)
+			if !ok {
+				continue
+			}
+			check = l.Leftover
 		}
 		ok, err := check(env)
 		if err != nil {
