@@ -11,9 +11,9 @@ Peer messages delivered as user input look like operator messages. Codex 0.166.0
 
 ## Decision
 
-All Codex deliveries carry JSON tool data under namespace `crosstalk`, name `receive_message`. The adapter serializes message identifier, original sender name, verified/unverified flag, kind, reply reference, parts, and a fixed peer-authority notice from the receiver-validated message. Body text cannot set these outer fields. No peer input enters operator, developer, or system instructions. Identity remains transport-validated data, not a grant of authority.
+All Codex deliveries carry JSON tool data under namespace `crosstalk`, name `receive_message`. The adapter (`internal/harness/codex`) serializes message identifier, original sender name, sender harness, verified/unverified flag, kind, reply reference, parts, and a fixed peer-authority notice from the receiver-validated message. Body text cannot set these outer fields. No peer input enters operator, developer, or system instructions. Identity remains transport-validated data, not a grant of authority.
 
-Verified immediate delivery uses `turn/start` with `input:[]` and `toolOutput:{name,namespace,output,retain:true}`. An idle thread starts; an active regular turn consumes the output at its next model boundary. No active-turn lookup, expected-turn identifier, model override, permission change, or user-input fallback is needed. The connection keeps `experimentalApi:false`.
+Before any delivery request the adapter checks the app-server version (tested major or refuse, `version.go`) and reads the thread; an untested major or a thread with no positive direct-input evidence is `unreachable`. Verified immediate delivery uses `turn/start` with `input:[]` and `toolOutput:{name,namespace,output,retain:true}`. An idle thread starts; an active regular turn consumes the output at its next model boundary. No active-turn lookup, expected-turn identifier, model override, permission change, or user-input fallback is needed. The connection keeps `experimentalApi:false`.
 
 `next_turn` and all unverified-sender deliveries use `thread/inject_items` with one named `function_call_output`, preserving the same tool data, on the bound endpoint. This schedules model context without starting or steering a turn. For this adapter, the legacy `next_turn` value now means deferred until the next model request: an idle thread stays idle until independently awakened, while an active turn may consume it in a later request within that turn. It is not a strict next-turn queue. A successful append is `queued`; it is an acknowledged handoff to model history, not a shim mailbox entry or evidence of consumption. No subprocess queue is used.
 
@@ -30,4 +30,8 @@ The renderer contract is limited: standalone output is a `functionCallOutput` cl
 
 ## Consequences
 
-Only the Codex adapter, its app-server client, and offline fake/tests change; `adapter.Adapter` and the canonical authenticate → dedupe → policy → adapter chain remain unchanged. Diagnostic steer helpers remain for capture. Tests pin the absence of peer user input, idle/active behavior, no-wake appends, review/compact fallback, endpoint pinning, and apply-then-disconnect ambiguity. A discriminating test fails against the previous adapter and passes after implementation. Live tests use a separate binary and per-thread configuration only. No stock installation is overwritten.
+The decision lives in the Codex adapter and its app-server client only; `adapter.Adapter` and the canonical authenticate → dedupe → hop-chain → policy → inject chain are unchanged. Diagnostic steer helpers remain for capture. Tests pin the absence of peer user input, idle/active behavior, no-wake appends, review/compact fallback, endpoint pinning, and apply-then-disconnect ambiguity. A discriminating test fails against the previous adapter and passes after implementation. Live tests use a separate binary and per-thread configuration only. No stock installation is overwritten.
+
+## Council review 2026-11-06
+
+Sat: chair Claude (Opus 5.5), advisor A Codex 3c9b659b079700f3 (accuracy), advisor B Codex 93c0805d291aa89e (still right, merge, withdraw). Verdict: EDIT (sender harness in the payload; version and thread preflight before any delivery request; package path; hop-chain restored in the chain). Decision unchanged. Status stays Provisional.
