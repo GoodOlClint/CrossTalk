@@ -1,0 +1,6 @@
+title: CrossTalk
+description: Cross-harness agent messaging for Claude Code and Codex
+url: https://getcrosstalk.dev
+exclude:
+  - plans
+  - spikes

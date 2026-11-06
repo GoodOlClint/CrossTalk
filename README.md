@@ -21,6 +21,7 @@ Every existing bridge either spawns a fresh `claude -p` / `codex exec` per reque
 - `docs/design.md`: the design document (components, registry, message schema, ingress contracts, injector per harness, trust model, tool surface, gating tests).
 - `docs/decisions/`: architecture decision records.
 - `docs/setup.md`: install on macOS or Linux.
+- Site: https://getcrosstalk.dev (the same `docs/` pages, built by GitHub Pages).
 - `plugins/crosstalk/`: the Claude Code and Codex plugin and its skill.
 
 ## License
