@@ -32,14 +32,14 @@ Public-repo secret handling:
 - **Athena's workflow as is.** Job-wide secret env, no environment, unpinned actions, steps that silently skip, and app-specific parts (Xcode, Rust, .pkg, Installer identity).
 - **Skip signing.** A downloaded unsigned binary runs into Gatekeeper and gives a stranger a worse install than `go install`.
 - **A third-party release action.** One more sha to pin and trust, for what `gh release create` does.
-- **A Homebrew tap.** Deferred.
+- **A Homebrew tap.** Deferred here; adopted later by [ADR 0018](0018-homebrew-tap-formula-and-crosstalk-install-registers-the-homebrew-path.md).
 
 ## Consequences
 
-- The first run is unproven. Nothing here has run with real credentials: the local proof covers the build, `lipo`, version check, zip, checksum and an ad hoc signature, not the certificate import, the notarization status or `spctl`. Watch on the first run: the certificate import step, the `notarytool` status (must be `Accepted`), the `spctl` line (a bare binary may print "rejected"; the check that counts is `codesign --verify --check-notarization -R=notarized`), `lipo -archs` (both `arm64` and `x86_64`), and the release assets `crosstalk-<tag>-macos-universal.zip` and `.zip.sha256`.
+- The workflow has run live with real credentials: `v0.1.2-rc.1` and `v0.1.2` (2026-11-05) through `v0.1.5` (2026-11-06), seven published releases. The verify step runs before publish with no condition, so each published zip passed `--check-notarization`. Watch on any run after a change to the signing steps: the certificate import step, the `notarytool` status (must be `Accepted`), the `spctl` line (a bare binary may print "rejected"; the check that counts is `codesign --verify --check-notarization -R=notarized`), `lipo -archs` (both `arm64` and `x86_64`), and the release assets `crosstalk-<tag>-macos-universal.zip` and `.zip.sha256`.
 - A release needs the Mac-only toolchain on the runner (`codesign`, `notarytool`, `lipo`); `macos-latest` provides it.
-- A run that fails before publish leaves no release, or a draft; rerun from the tag as above. A published release is never overwritten, and once immutable releases are on, deleting it and rerunning under the same tag fails: a bad published release needs a new tag. A tag is public to the Go module proxy at once, so a fix to `release.yml` needs a new tag (a new `-rc.N`, or a bumped version), not a moved one. Rehearse with `v0.1.2-rc.1` before the real `v0.1.2`.
-- A rc run rehearses everything except the plain-tag path through the publish step; that path is first exercised by `v0.1.2` itself.
+- A run that fails before publish leaves no release, or a draft; rerun from the tag as above. A published release is never overwritten, and once immutable releases are on, deleting it and rerunning under the same tag fails: a bad published release needs a new tag. A tag is public to the Go module proxy at once, so a fix to `release.yml` needs a new tag (a new `-rc.N`, or a bumped version), not a moved one. Rehearse a change to the release path with a new `-rc.N` tag before the final tag.
+- A rc run rehearses everything except the final-tag path: publishing as a full release, and the `marketplace` ([ADR 0019](0019-marketplace-refs-move-to-a-final-tag-by-an-auto-merged-pull-request.md)) and `homebrew` ([ADR 0018](0018-homebrew-tap-formula-and-crosstalk-install-registers-the-homebrew-path.md)) jobs that run after this job, in that order, on a final tag only.
 - The x86_64 slice is built and inspected but has never been executed (the runner is arm64).
 - Linux binaries are built and packaged in the same job, outside the signing path, as built by [ADR 0017](0017-linux-release-assets-outside-the-signing-path.md).
 
@@ -59,7 +59,7 @@ Nothing here is set by the repo. In order:
 4. Add a tag ruleset: target `refs/tags/v*`, Active, restrict creations, updates and deletions, block force pushes, bypass Repository admin only, no App. Afterwards check that the ruleset's `conditions.ref_name.include` is exactly `refs/tags/v*` (`GET /repos/GoodOlClint/CrossTalk/rulesets/<id>`); GitHub's docs do not say whether the field takes `v*` or the full ref.
 5. Actions permissions: the repo's workflow token default can stay read-only, since the job asks for `contents: write` itself.
 6. Recommended: enable immutable releases, so published assets and tags are locked (draft then publish is the pattern GitHub recommends for it). Recommended: protect `main`, or read `git diff <last-tag>..<new-tag> -- .github scripts` before approving a run.
-7. Rehearse: push `v0.1.2-rc.1` (it publishes a prerelease), watch the run, then tag the real `v0.1.2` only after an rc run succeeds.
+7. Rehearse: push `vX.Y.Z-rc.N` (it publishes a prerelease), watch the run, then tag the final `vX.Y.Z` only after an rc run succeeds.
 8. Recovering a half-published release (the `release` job published the assets, then `marketplace` or `homebrew` failed; plan section 4.1). Never delete, re-tag or re-upload a published release. In order:
    1. Read the failed job's last lines: `land-pr` prints the PR URL and its `mergeStateStatus`.
    2. Fix the cause: a failed CI or test-bot check (push a fix to the PR branch, or to `main` and update the branch), a merge conflict (rebase the PR branch on `main`), or a missing secret or App installation.
@@ -72,3 +72,8 @@ Nothing here is set by the repo. In order:
 - Rests on: ADR 0013 (the binary the plugins start).
 - Local proof (2026-11-05): `scripts/release-build.sh` build, package, zip listing, checksum and tag checks run with signing skipped; ad hoc `codesign` and `--verify --strict` on the universal binary; the `setup.md` download commands run against a local zip in a scratch HOME; `actionlint` and `shellcheck` clean.
 - Verifier and Codex reviews of the first version drove the dispatch, cache, zip-layout and operator-list changes above.
+- Run live: `v0.1.2-rc.1`, `v0.1.2`, `v0.1.3-rc.1`, `v0.1.3`, `v0.1.4-rc.1`, `v0.1.4`, `v0.1.5` published (GitHub releases list, 2026-11-05 to 2026-11-06).
+
+## Council review 2026-11-06
+
+Sat: chair Claude (Opus 5.5), advisor A Codex 3c9b659b079700f3 (accuracy), advisor B Codex 93c0805d291aa89e (still right, merge, withdraw). Verdict: EDIT (first-run-unproven replaced by the seven live releases; Homebrew rejection points at ADR 0018; rc wording no longer names v0.1.2). ADR 0017 stays separate (chair proposed merging it here; both advisors kept it for its unsigned-Linux trust decision, and the chair agreed). The Context paragraph on a bare `crosstalk` command stays as history (README rule). Status stays Provisional.

@@ -13,7 +13,7 @@ The code builds and tests on Linux (CI runs `ubuntu-latest`), and a Linux test V
 
 - The release job builds `linux/amd64` and `linux/arm64` (`CGO_ENABLED=0`, `-trimpath`) with a new `scripts/release-build.sh build-linux OUTDIR` into its own directory, `$RUNNER_TEMP/dist-linux`. The signing, notarize and verify steps name only `$RUNNER_TEMP/dist`, so no Linux file reaches them.
 - Each Linux binary is packaged as `crosstalk-<tag>-linux-<arch>.tar.gz` holding exactly one entry, `crosstalk` (tar keeps the execute bit), with a `.tar.gz.sha256` beside it, by `scripts/release-build.sh package-linux OUTDIR TAG`.
-- The Linux build and package steps run after `go test` and before the certificate import, and the publish step uploads the Linux files in the same draft release as the macOS zip.
+- The Linux build and package steps run after the main CI gate (the job checks the `ci.yml` run on `main` for the tagged commit and runs no tests itself; ADR 0015) and before the certificate import, and the publish step uploads the Linux files in the same draft release as the macOS zip.
 - arm64 is built because it costs one more `go build`; it is not executed anywhere before release.
 
 ## Rejected alternatives
@@ -35,5 +35,9 @@ The code builds and tests on Linux (CI runs `ubuntu-latest`), and a Linux test V
 - Rests on: ADR 0015.
 - Commits: 6a90282 (build-linux and package-linux), b25d37c (release job builds, packages and publishes the Linux assets). Implementing commits carry `Provisional-ADR: 0017`.
 - Pinning test: `TestReleaseWorkflowLinuxOutsideSigning` (no step that runs `codesign`, `notarytool`, `security` or `lipo` names `dist-linux`; the publish step lists the four Linux files).
-- Not yet run live: the next rc tag run publishing 2 macOS and 4 Linux files, and the amd64 tarball checked on a Linux host.
+- Run live: the `homebrew` job for `v0.1.4` and `v0.1.5` downloaded the release and passed only with exactly three verified `.sha256` files (`.github/workflows/release.yml`, "Download and verify assets"), the macOS zip and both Linux tarballs. Not yet run live: a release tarball unpacked and executed on a Linux host.
 - Pinning test: `TestReleaseBuildLinux` (plan section (b), slice B1).
+
+## Council review 2026-11-06
+
+Sat: chair Claude (Opus 5.5), advisor A Codex 3c9b659b079700f3 (accuracy), advisor B Codex 93c0805d291aa89e (still right, merge, withdraw). Verdict: EDIT (the job runs no `go test`; it checks main CI). The chair proposed merging this ADR into ADR 0015; both advisors kept it separate because unsigned Linux assets are their own trust decision, and the chair agreed. Status stays Provisional.
