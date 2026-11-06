@@ -587,7 +587,41 @@ func (h *Harness) Registered(env harness.InstallEnv) (bool, error) {
 	if u != nil {
 		es = append(es, scopedEntry{u, "user scope"})
 	}
-	return slices.ContainsFunc(es, func(e scopedEntry) bool { return e.Command == env.Bin }), err
+	return slices.ContainsFunc(es, func(e scopedEntry) bool { return runsBin(e.Command, env.Bin) }), err
+}
+
+// runsBin reports whether an entry command starts bin: a bare name is
+// looked up on PATH, then both sides are symlink-resolved. If
+// either side cannot be resolved the exact strings are compared.
+func runsBin(cmd, bin string) bool {
+	if cmd == bin {
+		return true
+	}
+	if !filepath.IsAbs(cmd) && strings.ContainsRune(cmd, filepath.Separator) {
+		// Claude's launch directory is not recorded, so what the command names is unknown: keep the binary.
+		return true
+	}
+	if !strings.ContainsRune(cmd, filepath.Separator) {
+		p, err := exec.LookPath(cmd)
+		if err != nil {
+			return false
+		}
+		cmd = p
+	}
+	a, errA := resolvePath(cmd)
+	b, errB := resolvePath(bin)
+	return errA == nil && errB == nil && a == b
+}
+
+// resolvePath resolves symlinks and dot components in filesystem order; a
+// lexical Clean is the fallback for a path whose ".." passes through a
+// directory that does not exist.
+func resolvePath(p string) (string, error) {
+	r, err := filepath.EvalSymlinks(p)
+	if err != nil {
+		r, err = filepath.EvalSymlinks(filepath.Clean(p))
+	}
+	return r, err
 }
 
 // scopedEntry is a crosstalk server entry with where Claude found it.
@@ -603,7 +637,7 @@ func (h *Harness) Leftover(env harness.InstallEnv, anyBin bool) (string, error) 
 	_, es, err := entriesAnyScope(env.Home)
 	var out []string
 	for _, e := range es {
-		if anyBin || e.Command == env.Bin {
+		if anyBin || runsBin(e.Command, env.Bin) {
 			out = append(out, e.where+" runs "+e.Command)
 		}
 	}
