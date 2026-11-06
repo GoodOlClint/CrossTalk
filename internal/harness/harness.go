@@ -184,9 +184,11 @@ type Installer interface {
 
 // Leftover is implemented by a harness whose uninstall leaves CrossTalk
 // config in place (Claude's local- and project-scope entries). Uninstall keeps
-// the binary and state while it reports true or an error.
+// the binary and state while it reports a description or an error. With anyBin
+// false only config that runs env.Bin counts (the binary step); with it true
+// any CrossTalk config does (the state step).
 type Leftover interface {
-	Leftover(env InstallEnv) (bool, error)
+	Leftover(env InstallEnv, anyBin bool) (string, error)
 }
 
 type InstallEnv struct {

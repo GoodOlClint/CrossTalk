@@ -101,7 +101,7 @@ func TestUninstallPurgeKeepsStateForClaudeNonUserScope(t *testing.T) {
 func TestUninstallPurgeKeepsStateForClaudeLocalEntryWhenClaudeSelected(t *testing.T) {
 	for _, sel := range [][]string{{"claude"}, {}} {
 		t.Run(strings.Join(sel, "")+"-all", func(t *testing.T) {
-			home := installSandbox(t, "claude", "codex")
+			home := installSandbox(t, "claude")
 			_, _, state := installUserFiles(t, home)
 			bin := filepath.Join(home, "bin")
 			if code, out := installRunCmd(t, "install", "--yes", "--bin-dir", bin); code != 0 {
@@ -124,5 +124,64 @@ func TestUninstallPurgeKeepsStateForClaudeLocalEntryWhenClaudeSelected(t *testin
 				t.Errorf("%v: binary removed while a local-scope entry remains: %v", args, err)
 			}
 		})
+	}
+}
+
+func TestUninstallPurgeBinaryIgnoresLocalEntryForOtherBinary(t *testing.T) {
+	for _, own := range []bool{false, true} {
+		name := "other"
+		if own {
+			name = "own"
+		}
+		t.Run(name, func(t *testing.T) {
+			home := installSandbox(t, "claude")
+			_, _, state := installUserFiles(t, home)
+			bin := filepath.Join(home, "bin")
+			if code, out := installRunCmd(t, "install", "--yes", "--bin-dir", bin); code != 0 {
+				t.Fatalf("install: %d\n%s", code, out)
+			}
+			cmd := "/other/crosstalk"
+			if own {
+				cmd = filepath.Join(bin, "crosstalk")
+			}
+			installWrite(t, filepath.Join(home, ".claude.json"), `{"projects":{"`+filepath.Join(home, "proj")+`":{"mcpServers":{"crosstalk":{"command":"`+cmd+`","args":["mcp"]}}}}}`)
+			code, out := installRunCmd(t, "uninstall", "claude", "--purge", "--yes", "--bin-dir", bin)
+			if code != 0 {
+				t.Fatalf("uninstall: %d\n%s", code, out)
+			}
+			if _, err := os.Stat(state); err != nil {
+				t.Errorf("state removed while claude has a local-scope entry: %v\n%s", err, out)
+			}
+			_, err := os.Stat(filepath.Join(bin, "crosstalk"))
+			if own && err != nil {
+				t.Errorf("binary removed while a local-scope entry runs it: %v\n%s", err, out)
+			}
+			if !own && err == nil {
+				t.Errorf("binary kept for an entry that names another binary:\n%s", out)
+			}
+			if !strings.Contains(out, "local scope, project "+filepath.Join(home, "proj")+" runs "+cmd) {
+				t.Errorf("kept message does not name scope and path:\n%s", out)
+			}
+		})
+	}
+}
+
+func TestUninstallPurgeSkipsEmptyProjectKey(t *testing.T) {
+	home := installSandbox(t, "codex")
+	_, _, state := installUserFiles(t, home)
+	bin := filepath.Join(home, "bin")
+	if code, out := installRunCmd(t, "install", "--yes", "--bin-dir", bin); code != 0 {
+		t.Fatalf("install: %d\n%s", code, out)
+	}
+	cwd := t.TempDir()
+	installWrite(t, filepath.Join(cwd, ".mcp.json"), `{"mcpServers":{"crosstalk":{"command":"/other/crosstalk","args":["mcp"]}}}`)
+	t.Chdir(cwd)
+	installWrite(t, filepath.Join(home, ".claude.json"), `{"projects":{"":{},"rel":{}}}`)
+	code, out := installRunCmd(t, "uninstall", "codex", "--purge", "--yes", "--bin-dir", bin)
+	if code != 0 {
+		t.Fatalf("uninstall: %d\n%s", code, out)
+	}
+	if _, err := os.Stat(state); err == nil {
+		t.Errorf("state kept for a .mcp.json read through an empty or relative project key:\n%s", out)
 	}
 }
