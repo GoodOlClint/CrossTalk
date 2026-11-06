@@ -11,7 +11,8 @@ Both marketplace files pin the plugin source to a release tag (`ref`, plan 0.1.3
 
 ## Decision
 
-- On a final tag only, a `marketplace` job in `release.yml` runs after the `release` job publishes: it mints a 1-hour token from the same GitHub App as ADR 0018 (installed on CrossTalk with Contents and Pull requests write), rewrites only the two `ref` values with `scripts/release-build.sh bump-marketplaces TAG`, runs the marketplace tests, pushes branch `marketplace-<tag>`, and hands it to `scripts/release-build.sh land-pr`, which opens or reuses the PR, enables auto-merge and waits until it is merged; the job then confirms `main`'s refs equal the tag, and fails otherwise. Re-running a failed job is safe: an existing branch or PR is reused, a ref already on `main` is a no-op. `bump-marketplaces` refuses a tag older than `main`'s current ref, so a late older release cannot downgrade it.
+- On a final tag only, a `marketplace` job in `release.yml` runs after the `release` job publishes: it mints a 1-hour token from the same GitHub App as ADR 0018 (installed on CrossTalk with Contents and Pull requests write; client id and key from the shared `homebrew-tap` environment), rewrites only the two `ref` values with `scripts/release-build.sh bump-marketplaces TAG`, runs the marketplace tests, pushes branch `marketplace-<tag>`, and hands it to `scripts/release-build.sh land-pr`, which opens or reuses the PR, enables auto-merge and waits until it is merged; the job then confirms `main`'s refs equal the tag, and fails otherwise. Re-running a failed job is safe: an existing branch or PR is reused, a ref already on `main` is a no-op. `bump-marketplaces` refuses a tag older than `main`'s current ref, so a late older release cannot downgrade it.
+- When the repo refuses auto-merge, `land-pr` merges the PR itself once GitHub reports it `CLEAN` (required checks passed) and fails at once on a failed required check (3622409, 148607a). That fallback is only as strong as the required checks the target repo's ruleset sets.
 - The `homebrew` job (ADR 0018) needs this job, so the formula moves only after the plugin ref it depends on is on `main`.
 - A ruleset on CrossTalk's `main` requires the CI checks (`test (ubuntu-latest)`, `test (macos-latest)`; `govulncheck` runs but is not required, so a new advisory in a dependency cannot block the bump PR) and blocks force-push and deletion, with the operator as bypass. The tap gets the same with its test-bot checks.
 - The bump never creates a tag, and `release.yml` triggers only on `v*` tags (and manual dispatch guarded to tags), so the bump's merge runs `ci.yml` alone.
@@ -34,6 +35,10 @@ Both marketplace files pin the plugin source to a release tag (`ref`, plan 0.1.3
 ## Trial record
 
 - Rests on: ADR 0018 (shared App), ADR 0015 (release job and its gate).
-- Commits: none yet. Implementing commits carry `Provisional-ADR: 0019`.
-- Pinning tests (planned): `TestBumpMarketplaces`, `TestLandPR`, `TestReleaseWorkflowPostReleaseJobs`.
-- Not yet run live: the first final-tag bump PR merging itself, and no release run starting from its merge.
+- Commits (no `Provisional-ADR` trailer was used): bc33868 and 508c253 M1 `bump-marketplaces`; 0a748fc `land-pr`; 03f0a12 M2 `marketplace` job; 3622409 and 148607a `land-pr` direct-merge fallback.
+- Pinning tests: `TestBumpMarketplaces`, `TestLandPR`, `TestReleaseWorkflowPostReleaseJobs`.
+- Run live: bump PRs #21 (`v0.1.4`, 8161db3) and #27 (`v0.1.5`, 49121ea) merged by `crosstalk-release[bot]`; the releases list shows no release from either merge. The ruleset on `main` now exists (AGENTS.md, operator 2026-11-05).
+
+## Council review 2026-11-06
+
+Sat: chair Claude (Opus 5.5), advisor A Codex 3c9b659b079700f3 (accuracy), advisor B Codex 93c0805d291aa89e (still right, merge, withdraw). Verdict: EDIT (Trial record was "none yet"; `land-pr` direct-merge fallback; shared environment). Kept separate from ADR 0018. Status stays Provisional.
