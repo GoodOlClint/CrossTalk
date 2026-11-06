@@ -12,10 +12,10 @@ CrossTalk's docs are Markdown in `docs/` read on GitHub. The operator wants a si
 ## Decision
 
 - Build `docs/` with `actions/jekyll-build-pages` (GitHub's own Jekyll in its own container; no toolchain installed in the workflow, no dependency added to the repo) and deploy with `actions/upload-pages-artifact` and `actions/deploy-pages` from `.github/workflows/pages.yml`.
-- Publish a short `docs/index.md` home page, `setup.md`, `design.md` and `docs/decisions/`; `docs/_config.yml` excludes `plans/` and `spikes/`. Links from published pages into excluded folders are absolute GitHub URLs.
+- Publish every page in `docs/` except working notes: `docs/_config.yml` excludes `plans/` and `spikes/`. Today that is the `index.md` home page, `why.md`, `how-it-works.md`, `examples.md`, `faq.md`, `setup.md`, `contributing.md`, `design.md` and `docs/decisions/`. Links from published pages into excluded folders are absolute GitHub URLs.
 - The apex `getcrosstalk.dev` is the site; `www.getcrosstalk.dev` redirects to it. HTTPS is enforced (the `.dev` top-level domain is HSTS-preloaded, so browsers never use plain HTTP there).
 - The custom domain is set in the repo's Pages settings, not a `CNAME` file: a Pages site deployed by a custom Actions workflow ignores `CNAME`.
-- The build job runs on pull requests that touch `docs/` (build only, no deploy), so a Jekyll error fails the PR; the deploy job runs on push to `main` only.
+- The build job runs on pull requests that touch `docs/` (build only, no deploy), so a Jekyll error fails the PR; the deploy job runs on every other event: a push to `main` that touches `docs/` or `pages.yml`, or a manual `workflow_dispatch`. The workflow has no ref guard, so a dispatch deploys from whatever ref it names; only the `github-pages` environment's deployment-branch rule, a repo setting, can restrict that.
 
 ## Rejected alternatives
 
@@ -34,6 +34,10 @@ CrossTalk's docs are Markdown in `docs/` read on GitHub. The operator wants a si
 ## Trial record
 
 - Rests on: ADR 0018 (formula `homepage`).
-- Commits: none yet. Implementing commits carry `Provisional-ADR: 0020`.
-- Pinning tests (planned): `TestSiteConfig`, `TestSiteLinks`, `TestWorkflowHygiene` (covers `pages.yml`).
-- Not yet run live: the first deploy, the certificate, the `www` redirect.
+- Commits (no `Provisional-ADR` trailer was used): 59d693b P2 Pages workflow; 05537d1 separate concurrency group for pull requests; aabfe75 site overhaul (why, examples, how-it-works, FAQ, contributing).
+- Pinning tests: `TestSiteConfig`, `TestSiteLinks`, `TestSiteLinksPages`, `TestSiteNamesEveryTool`, `TestWorkflowHygiene` (covers `pages.yml`).
+- Run live (checked 2026-11-06): `https://getcrosstalk.dev` answers 200 over HTTPS from GitHub Pages, and `https://www.getcrosstalk.dev` answers 301 to the apex.
+
+## Council review 2026-11-06
+
+Sat: chair Claude (Opus 5.5), advisor A Codex 3c9b659b079700f3 (accuracy), advisor B Codex 93c0805d291aa89e (still right, merge, withdraw). Verdict: EDIT (published page list; deploy also runs on `workflow_dispatch` from any ref; Trial record was "none yet"). Whether to add a `main`-only guard to the deploy job is left to the operator. Status stays Provisional.

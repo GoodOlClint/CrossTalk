@@ -35,12 +35,14 @@ type Harness interface {
 type RequestContext struct { ParentPID int; Meta map[string]any; Client ClientInfo; MCPSessionID string }
 type Session struct { Harness adapter.Harness; SessionRef, Name, Cwd, Status string; Reachable bool; HarnessPID int; Endpoint string }
 type Self struct { Binding adapter.Binding; UDSPath string }
-type Identity struct { Name, Address string; Verified bool }
+type Identity struct { Name, Harness, Address string; Verified bool }
 
 // Optional: the first harness in the list that implements it serves every
 // agent's uds_path.
 type NativeIngress interface { NewIngress(cfg IngressConfig) Ingress }
 type Supersession interface { Superseded(s Session) bool } // optional: the harness can prove s ended while its MCP connection lives on (design §3)
+type Noticer interface { Notice() string } // optional: authority notice sent with every delivered peer message and on pulled mailbox entries
+type Installer interface { ... } // optional: install, uninstall and check steps (ADR 0016); see internal/harness/harness.go
 type Ingress interface { Listen() error; Serve(ctx context.Context) error; Close() error; Files() []string }
 
 var ErrAmbiguous error // Codex: thread loaded on more than one endpoint
@@ -61,3 +63,7 @@ Differences from the first sketch: binding is two calls, because the MCP server 
 - Binding, discovery, rendering and the native-reply address live in the two harness packages, not in `internal/shim`, `internal/mcpserver` or `internal/wire`.
 - Design §2 "Components" and §6 "Injector per harness" are the contract and name the interface; a new harness is one package plus one line in `cmd/crosstalk`.
 - Codex's toolOutput work (ADR 0007) implements `Render` and `Inject` for Codex and must not add Codex knowledge to the shim.
+
+## Council review 2026-11-06
+
+Sat: chair Claude (Opus 5.5), advisor A Codex 3c9b659b079700f3 (accuracy), advisor B Codex 93c0805d291aa89e (still right, merge, withdraw). Verdict: EDIT (interface block: Identity.Harness, Noticer, Installer). Status stays Provisional.
