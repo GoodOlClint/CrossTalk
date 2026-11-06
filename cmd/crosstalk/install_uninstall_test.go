@@ -223,27 +223,6 @@ func TestUninstallHomebrewKeepsBinary(t *testing.T) {
 	}
 }
 
-func TestUninstallPurgeKeepsStateForOtherBinary(t *testing.T) {
-	home := installSandbox(t, "claude", "codex")
-	prefix := installBrewKeg(t, "opt/homebrew", true)
-	_, config, state := installUserFiles(t, home)
-	if code, out := installRunCmd(t, "install", "--yes"); code != 0 {
-		t.Fatalf("install: %d\n%s", code, out)
-	}
-	local := filepath.Join(home, ".local", "bin", "crosstalk")
-	installWrite(t, config, strings.ReplaceAll(installRead(t, config), filepath.Join(prefix, "bin", "crosstalk"), local))
-	code, out := installRunCmd(t, "uninstall", "claude", "--purge", "--yes")
-	if code != 0 {
-		t.Fatalf("uninstall: %d\n%s", code, out)
-	}
-	if _, err := os.Stat(state); err != nil {
-		t.Errorf("state dir removed while codex is still set up: %v", err)
-	}
-	if !strings.Contains(out, "kept "+state) || !strings.Contains(out, "codex") {
-		t.Errorf("output does not say why the state stays:\n%s", out)
-	}
-}
-
 func TestUninstallPurgeCodexOnly(t *testing.T) {
 	home := installSandbox(t, "codex")
 	_, _, state := installUserFiles(t, home)

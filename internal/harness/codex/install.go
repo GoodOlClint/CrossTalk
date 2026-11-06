@@ -438,8 +438,10 @@ func (h *Harness) SetUp(env harness.InstallEnv) (bool, error) {
 	}) {
 		return true, nil
 	}
-	_, err = os.Stat(pluginCache(env.Home))
-	return err == nil, nil
+	if _, err = os.Stat(pluginCache(env.Home)); errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	return true, err
 }
 
 // pluginCache holds one directory per installed version of the plugin.
