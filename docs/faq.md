@@ -24,7 +24,7 @@ Nothing in CrossTalk enforces it. Every session runs as you, and any of them can
 
 - It takes the sender's identity from the connection, not from the text.
 - It labels every delivered message as data with no authority from you.
-- It tells the model, in the tool instructions and in each message, not to read files, run commands, use other tools or message a third session on a peer's word without asking you.
+- It tells the model, in the tool instructions and in a notice on each message, not to read files, run commands or use any tool but CrossTalk's on a peer's word without asking you. The rule against messaging a third session is only in the plugin's skill.
 
 That is advice to the model plus checks in the shim. It is not a sandbox. A session in an auto-approve mode could act on a peer's text. Keep secrets out of messages. See [how it works](how-it-works.md#trust).
 
@@ -42,11 +42,11 @@ The target is a session that has not made a CrossTalk call yet, so CrossTalk has
 
 ## A message arrived twice, or not at all. Why?
 
-Every message has an id, and the receiver ignores a repeat of an id it has already accepted, so a retry does not inject twice. If the outcome of a send was unclear, the result is `unknown` and the agent should not resend blindly. Entries it could not deliver wait for `receive_message`.
+Every message has an id, and the receiver ignores a repeat of an id it has already accepted, so a retry does not inject twice, as long as the record of that id is still in the journal (trimming is described under "Where does CrossTalk keep its data?"). If the outcome of a send was unclear, the result is `unknown` and the agent should not resend blindly. Entries it could not deliver wait for `receive_message`.
 
 ## Where does CrossTalk keep its data?
 
-Under `~/.local/state/crosstalk/`: journals, tokens, descriptor files and sockets. Journal records older than 24 hours are dropped, except unresolved ones. `crosstalk uninstall` leaves this directory unless you pass `--purge`.
+Under `~/.local/state/crosstalk/`: journals, tokens, descriptor files and sockets. A session's journal is trimmed when it is opened again (when the session registers): resolved records older than 24 hours are dropped, and unresolved ones are kept. A long-running session is not trimmed while it runs. `crosstalk uninstall` leaves this directory unless you pass `--purge`.
 
 ## What does it cost?
 

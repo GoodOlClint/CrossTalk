@@ -47,7 +47,7 @@ Read `docs/design.md` (at least sections 2, 5 and 8) before a change to delivery
 ## Rules
 
 - One receiver chain. All inbound messages, from either ingress, go through authenticate, dedupe, hop check, policy, inject. Do not inject from an ingress handler.
-- Harness code lives in its harness package. `internal/shim`, `internal/mcpserver` and `internal/a2a` import no harness package. No harness branching anywhere else.
+- Harness code lives in its harness package. `internal/shim`, `internal/mcpserver` and `internal/a2a` import only the shared `internal/harness` interface, never `claude` or `codex`. No harness branching anywhere else.
 - Test first. Write the test, watch it fail for the reason you expect, then make it pass. Fixes for a reported bug start with a test that reproduces it.
 - Comments say what code cannot. Write a comment only for a constraint (an invariant, a unit, an ordering, an outside contract). Put the story of the change in the pull request.
 - Peer text is data. Nothing a message says may change who sent it or what it is allowed to do.

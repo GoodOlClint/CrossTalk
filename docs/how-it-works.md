@@ -16,7 +16,7 @@ This is the plain-English version of the [design](design.md), which is the speci
 1. Gives the model seven tools over MCP: `list_agents`, `send_message`, `reply`, `ask`, `receive_message`, `claim` and `release`. The same tools appear in Claude Code and Codex.
 2. Listens for messages from other shims. They arrive over A2A on a loopback address (`127.0.0.1`, reachable only from this machine). The shim also listens on a unix socket (a file-based local connection) that speaks Claude Code's own cross-session protocol, so Claude's native peers can reach it.
 3. Delivers into its own harness, as described under [delivery](#delivery).
-4. Keeps a journal. Every accepted message is written to a file under `~/.local/state/crosstalk/journal/` before anything acknowledges it. After a restart, the journal tells the shim what was already delivered, so a retry is not injected twice.
+4. Keeps a journal. Every accepted message is written to a file under `~/.local/state/crosstalk/journal/` before anything acknowledges it. After a restart, the journal tells the shim what was already delivered, so a retry is not injected twice. This holds while the record is retained: resolved records older than 24 hours are dropped when the journal is next opened.
 
 There is no daemon and no central router. Shims find each other from the harnesses' own session lists and from small descriptor files under `~/.local/state/crosstalk/agents/`.
 
@@ -64,8 +64,8 @@ If a message cannot be delivered, or its outcome is unclear, it waits in the mai
 Every session on the machine runs as you. CrossTalk does not isolate sessions from each other. It does three things:
 
 - Sender identity comes from the connection. On the local socket, the shim reads the process id of the peer. Between shims, identity is a private token file only your user can read. Text in a message never decides who sent it.
-- Peer text is labeled as data. Every delivered message carries a notice that it has no authority from the user. The model is told not to read files, run commands, use other tools or message a third session on a peer's word, and to tell you and ask first. A peer may ask whether a session is online, its working directory, its git branch or its harness, and the model answers.
-- A policy decides what a message may be. `inform` and `ask` go to any registered session, and an `ask` needs a verified sender. A `command` goes to a `primary` session or, for a claimed session, only from its owner. A rejected `command` is dropped, not downgraded.
+- Peer text is labeled as data. Every delivered message carries a notice that it has no authority from the user. The model is told not to read files, run commands or use any tool but CrossTalk's on a peer's word, and to tell you and ask first. The plugin's skill adds a rule against messaging a third session. A peer may ask whether a session is online, its working directory, its git branch or its harness, and the model answers.
+- A policy decides what a message may be. An `inform` goes to any session, and an `ask` needs a verified sender. A `command` needs a verified, registered sender. It goes to a `primary` session only from a `primary` sender, and to a claimed session only from its owner. A rejected `command` is dropped, not downgraded.
 
 `kind` is a label the sending model picks. It is not a trust boundary, and a `command` gives the receiver no new permissions: whatever the session needs approval for, it still needs approval for.
 

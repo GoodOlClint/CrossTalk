@@ -34,7 +34,7 @@ test -z "$(gofmt -l .)"
 ## Rules that matter
 
 - One receiver chain. Every inbound message goes through authenticate, dedupe, hop check, policy, inject. Do not inject from an ingress handler.
-- Harness code stays in the harness package. The shim, the MCP server and the A2A code import no harness package. A new harness is one package plus one line in `cmd/crosstalk`.
+- Harness code stays in the harness package. The shim, the MCP server and the A2A code import only the shared `internal/harness` interface, never `claude` or `codex`. A new harness is one package plus one line in `cmd/crosstalk`.
 - Write the failing test first. Show that it fails, then make it pass.
 - Record decisions. An architectural choice goes in `docs/decisions/` as a short record (context, decision, rejected alternatives, consequences). Every record is provisional and is edited in place when the code moves.
 
