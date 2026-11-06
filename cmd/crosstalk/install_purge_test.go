@@ -63,3 +63,37 @@ func TestUninstallPurgeKeepsStateOnCodexCacheStatError(t *testing.T) {
 		t.Errorf("state dir removed although codex setup could not be read: %v\n%s", err, out)
 	}
 }
+
+func TestUninstallPurgeKeepsStateForClaudeNonUserScope(t *testing.T) {
+	cases := map[string]func(t *testing.T, home, bin string){
+		"local": func(t *testing.T, home, bin string) {
+			installWrite(t, filepath.Join(home, ".claude.json"), `{"projects":{"`+filepath.Join(home, "proj")+`":{"mcpServers":{"crosstalk":{"command":"`+filepath.Join(bin, "crosstalk")+`","args":["mcp"]}}}}}`)
+		},
+		"project": func(t *testing.T, home, bin string) {
+			proj := filepath.Join(home, "proj")
+			installWrite(t, filepath.Join(home, ".claude.json"), `{"projects":{"`+proj+`":{}}}`)
+			installWrite(t, filepath.Join(proj, ".mcp.json"), `{"mcpServers":{"crosstalk":{"command":"`+filepath.Join(bin, "crosstalk")+`","args":["mcp"]}}}`)
+		},
+	}
+	for name, seed := range cases {
+		t.Run(name, func(t *testing.T) {
+			home := installSandbox(t, "codex")
+			_, _, state := installUserFiles(t, home)
+			bin := filepath.Join(home, "bin")
+			if code, out := installRunCmd(t, "install", "--yes", "--bin-dir", bin); code != 0 {
+				t.Fatalf("install: %d\n%s", code, out)
+			}
+			seed(t, home, bin)
+			code, out := installRunCmd(t, "uninstall", "codex", "--purge", "--yes", "--bin-dir", bin)
+			if code != 0 {
+				t.Fatalf("uninstall: %d\n%s", code, out)
+			}
+			if _, err := os.Stat(state); err != nil {
+				t.Errorf("state dir removed while claude has a %s-scope entry: %v\n%s", name, err, out)
+			}
+			if _, err := os.Stat(filepath.Join(bin, "crosstalk")); err != nil {
+				t.Errorf("binary removed while claude has a %s-scope entry: %v\n%s", name, err, out)
+			}
+		})
+	}
+}
