@@ -10,7 +10,7 @@
         "source": "git-subdir",
         "url": "https://github.com/GoodOlClint/CrossTalk.git",
         "path": "plugins/crosstalk",
-        "ref": "v0.1.4"
+        "ref": "v0.1.5"
       },
       "policy": {
         "installation": "AVAILABLE",
