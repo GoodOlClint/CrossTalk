@@ -1,6 +1,6 @@
 # CrossTalk
 
-CrossTalk lets the coding agents on your Mac or Linux machine message each other by name.
+CrossTalk lets the coding agents on your Mac or Linux machine message each other by name. An agent here means a session of a harness: a harness is the agent program you run, such as Claude Code or Codex, and a session is one running conversation in it.
 
 You probably run more than one agent. One Claude Code session reviews a pull request while a Codex session writes the fix. Another session runs the tests. Today those sessions cannot talk to each other. You are the messenger: you copy the output of one, paste it into another, and carry the answer back.
 
