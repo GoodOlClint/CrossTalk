@@ -18,6 +18,8 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: write
+    outputs:
+      final: ${{ steps.final.outputs.final }}
     env:
       TAG: ${{ github.ref_name }}
     steps:
@@ -31,6 +33,12 @@ jobs:
           cache: false
       - name: Check tag against mcpserver.Version
         run: scripts/release-build.sh check-tag "$TAG"
+      - name: Classify tag
+        id: final
+        run: |
+          set -eu
+          final="$(scripts/release-build.sh is-final "$TAG")"
+          echo "final=$final" >> "$GITHUB_OUTPUT"
       - name: Test
         run: go test ./...
       - name: Build universal binary
@@ -135,3 +143,75 @@ jobs:
         run: |
           security delete-keychain "$RUNNER_TEMP/release-signing.keychain-db" || true
           rm -rf "$RUNNER_TEMP/release-secrets"
+
+  marketplace:
+    needs: release
+    if: needs.release.outputs.final == 'true'
+    runs-on: ubuntu-latest
+    environment: homebrew-tap
+    timeout-minutes: 50
+    permissions: {}
+    env:
+      TAG: ${{ github.ref_name }}
+      BRANCH: marketplace-${{ github.ref_name }}
+    steps:
+      - name: Mint App token
+        id: app
+        uses: actions/create-github-app-token@v3
+        with:
+          app-id: ${{ secrets.RELEASE_APP_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: GoodOlClint
+          repositories: CrossTalk
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          token: ${{ steps.app.outputs.token }}
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Bump marketplace refs
+        id: bump
+        run: |
+          set -eu
+          out="$(scripts/release-build.sh bump-marketplaces "$TAG")"
+          echo "$out"
+          if [ "$out" = unchanged ]; then echo "changed=false" >> "$GITHUB_OUTPUT"; else echo "changed=true" >> "$GITHUB_OUTPUT"; fi
+      - name: Test manifests
+        if: steps.bump.outputs.changed == 'true'
+        run: go test ./cmd/crosstalk -run 'TestManifestsMatchBinary|TestMarketplacesPinToReleaseTag'
+      - name: Commit and push branch
+        if: steps.bump.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          set -eu
+          url="https://github.com/$GITHUB_REPOSITORY.git"
+          if git ls-remote --exit-code --heads "$url" "$BRANCH" > /dev/null 2>&1; then
+            echo "branch $BRANCH exists; land-pr reuses it"
+            exit 0
+          fi
+          git -c user.name='crosstalk-release[bot]' -c user.email='crosstalk-release[bot]@users.noreply.github.com' \
+            commit -a -m "marketplaces: pin plugin to $TAG"
+          # shellcheck disable=SC2016
+          git -c credential.helper='!f() { echo username=x-access-token; echo "password=$GH_TOKEN"; }; f' \
+            push "$url" "HEAD:refs/heads/$BRANCH"
+      - name: Land pull request
+        if: steps.bump.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          scripts/release-build.sh land-pr GoodOlClint/CrossTalk "marketplace-$TAG" "marketplaces: pin plugin to $TAG"
+      - name: Confirm refs on main
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+        run: |
+          set -eu
+          for f in .claude-plugin/marketplace.json .agents/plugins/marketplace.json; do
+            gh api -H 'Accept: application/vnd.github.raw' "repos/$GITHUB_REPOSITORY/contents/$f?ref=main" | grep -F "\"ref\": \"$TAG\"" > /dev/null || {
+              echo "$f on main does not pin $TAG" >&2
+              exit 1
+            }
+          done
