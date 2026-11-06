@@ -89,7 +89,7 @@ func newEnvOn(t *testing.T, dir string, tasks func(*journal.Journal) TaskStore, 
 		Profile: func() Profile {
 			e.mu.Lock()
 			defer e.mu.Unlock()
-			return Profile{Name: e.self.Name, Harness: "claude", Role: e.self.Role, Cwd: "/work/self"}
+			return Profile{Name: e.self.Name, Harness: "claude", Role: e.self.Role}
 		},
 		ResolvePeer: func(name string) (Peer, bool) {
 			e.mu.Lock()

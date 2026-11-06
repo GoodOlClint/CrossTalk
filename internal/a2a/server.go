@@ -66,7 +66,6 @@ type Profile struct {
 	Name    string
 	Harness string
 	Role    string
-	Cwd     string
 }
 
 // Peer is a registered agent that may authenticate with its own token.

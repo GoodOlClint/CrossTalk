@@ -13,14 +13,15 @@ Status of captured frames: to be committed before `go mod init`. Until then the 
 | 3 | Codex next-turn delivery: `codex queue --remote <addr> --thread <id> --message <text>` against a non-default app-server is delivered and answered. | to be committed before `go mod init` |
 | 4 | Codex managed daemon: a plain `codex` pane appears in daemon `thread/loaded/list`; `codex queue --thread <id>` without `--remote` is delivered at the next turn boundary. | to be committed before `go mod init` |
 | Round trip | Cross-harness round trip with native primitives only: Claude → `codex queue` → Codex writes the envelope to a Claude session socket → arrives as a `<cross-session-message>`. | to be committed before `go mod init` |
+| 5 | macOS peer pid: `LOCAL_PEERPID` (`SOL_LOCAL`) read from Go on an accepted uds connection returns the dialing process's pid, same process and another process (`internal/peercred`). | [05-peerpid.md](05-peerpid.md) |
+| 9 | Harness-provided identity (ADR 0006): a Codex 0.166.0 `tools/call` carries `params._meta.threadId` (and `sessionId` on a model-issued call). | [09-codex-binding/report.md](09-codex-binding/report.md) |
 
 ## Pending (precede the build steps named)
 
 | Spike | Description | Precedes |
 |---|---|---|
-| 5 | macOS peer pid: read `LOCAL_PEERPID` (`SOL_LOCAL`) from Go via `golang.org/x/sys/unix` on an accepted uds connection and map it to a Claude session pid and to another shim's pid. | uds ingress |
 | 6 | Idle Claude wake: inject into a Claude session with no active turn and record whether a turn starts and the model sees the envelope. | Claude adapter idle path (test 19) |
 | 7 | Claude-visible record (R2): publish a `~/.claude/sessions/<pid>.json` + key pair for a shim and record what Claude does with it. | §3 decision, uds ingress (test 11) |
-| 9 | Harness-provided identity (ADR 0006): capture `params._meta` of a model-issued `tools/call` from a Codex thread on 0.166.0 with a metadata-echo MCP server (expect `threadId`, `sessionId`), and confirm a Claude MCP child's parent pid maps to `~/.claude/sessions/<ppid>.json`. | Codex adapter, §3 binding |
+
 - [11 harness landscape](11-harness-landscape.md) — which other harnesses can take in-session delivery; recommended early set OpenCode, Gemini CLI (+Qwen Code), Pi; ACP is not an attach surface.
 - [12 Antigravity CLI](12-antigravity-cli.md) — measured MCP identity, hook payloads, injection forms and Stop re-entry on agy 1.5.0; backs ADR 0012.
