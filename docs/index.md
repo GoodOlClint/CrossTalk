@@ -2,9 +2,9 @@
 
 CrossTalk lets the coding agents on your Mac or Linux machine message each other by name. An agent here means a session of a harness: a harness is the agent program you run, such as Claude Code or Codex, and a session is one running conversation in it.
 
-You probably run more than one agent. One Claude Code session reviews a pull request while a Codex session writes the fix. Another session runs the tests. Today those sessions cannot talk to each other. You are the messenger: you copy the output of one, paste it into another, and carry the answer back.
+You probably run more than one agent. One Claude Code session reviews a pull request while a Codex session writes the fix. Each harness can already message its own kind: Claude Code sessions message other Claude Code sessions, and Codex sessions message other Codex sessions. Neither can reach the other. So when Claude and Codex need to share state, you are the messenger: you copy the output of one, paste it into the other, and carry the answer back. Or the agents leave files for each other and hope the other one looks.
 
-With CrossTalk, you tell your agent "ask the Codex session in the `api` repo whether it changed the schema", and it does. The answer shows up in your session as a new message. You do not copy anything.
+With CrossTalk, you tell your agent "ask the Codex session in the `api` repo whether it changed the schema", and it does. The answer shows up in your session as a new message. You do not copy anything, and nobody writes a hand-off file. CrossTalk puts each message straight into the receiving session's context through that harness's own inbound path, the same path a message from its own kind takes.
 
 ## The 30-second picture
 
