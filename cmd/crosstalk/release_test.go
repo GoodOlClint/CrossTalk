@@ -727,7 +727,7 @@ func TestCIWorkflowScopesTests(t *testing.T) {
 	if fast == "" || !strings.Contains(fast, "steps.scope.outputs.scope == 'docs'") || strings.Contains(fast, "-race") {
 		t.Errorf("no docs-scoped fast test step without -race:\n%s", fast)
 	}
-	for _, name := range []string{"TestSetupDocCoversGaps", "TestUpgradeFromBundledServerDocumented", "TestManifestsMatchBinary", "TestMarketplacesPinToReleaseTag", "TestVersionIs015AndManifestsMatch", "TestSiteConfig", "TestSiteLinks"} {
+	for _, name := range []string{"TestSetupDocCoversGaps", "TestUpgradeFromBundledServerDocumented", "TestManifestsMatchBinary", "TestMarketplacesPinToReleaseTag", "TestVersionIs015AndManifestsMatch", "TestSiteConfig", "TestSiteLinks", "TestSkillCoversStatesAndCodes", "TestEvalFixtureNoticesMatchConst", "TestPluginShipsNoServer"} {
 		if !strings.Contains(fast, name) {
 			t.Errorf("fast step lacks %s", name)
 		}
@@ -757,12 +757,15 @@ func TestReleaseWorkflowChecksMainCI(t *testing.T) {
 	if step == "" {
 		t.Fatal("release job has no Check main CI step")
 	}
-	for _, want := range []string{"check-runs", "GITHUB_SHA", "test (ubuntu-latest)", "test (macos-latest)", "success", "GH_TOKEN: ${{ github.token }}"} {
+	for _, want := range []string{"actions/workflows/ci.yml/runs", "head_sha=$GITHUB_SHA", "event=push", "branch=main", "status=success", "/jobs", "test (ubuntu-latest)", "test (macos-latest)", "GH_TOKEN: ${{ github.token }}"} {
 		if !strings.Contains(step, want) {
 			t.Errorf("Check main CI step lacks %q:\n%s", want, step)
 		}
 	}
-	if !regexp.MustCompile(`(?m)^    permissions:\n      contents: write\n      checks: read$`).MatchString(release) {
-		t.Error("release job permissions are not contents: write, checks: read")
+	if strings.Contains(step, "check-runs") {
+		t.Error("Check main CI reads commit check runs, which any workflow or App can satisfy")
+	}
+	if !regexp.MustCompile(`(?m)^    permissions:\n      contents: write\n      actions: read$`).MatchString(release) {
+		t.Error("release job permissions are not contents: write, actions: read")
 	}
 }

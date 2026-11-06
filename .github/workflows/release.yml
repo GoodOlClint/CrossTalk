@@ -18,7 +18,7 @@ jobs:
     timeout-minutes: 60
     permissions:
       contents: write
-      checks: read
+      actions: read
     outputs:
       final: ${{ steps.final.outputs.final }}
     env:
@@ -45,20 +45,17 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -eu
-          runs="$(gh api --paginate "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/check-runs?per_page=100" --jq '.check_runs[] | [.name, .status, (.conclusion // "none")] | @tsv')"
+          run="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&event=push&branch=main&status=success&per_page=1" --jq '.workflow_runs[0].id // empty')"
+          [ -n "$run" ] || {
+            echo "no successful ci.yml push run on main for $GITHUB_SHA; the tagged commit has not passed main CI" >&2
+            exit 1
+          }
+          jobs="$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$run/jobs?per_page=100" --jq '.jobs[] | [.name, .conclusion] | @tsv')"
           for name in 'test (ubuntu-latest)' 'test (macos-latest)'; do
-            line="$(printf '%s\n' "$runs" | awk -F '\t' -v n="$name" '$1 == n { l = $0 } END { print l }')"
-            [ -n "$line" ] || {
-              echo "check '$name' has no run on $GITHUB_SHA; main CI has not passed for the tagged commit" >&2
+            printf '%s\n' "$jobs" | grep -Fx "$name	success" > /dev/null || {
+              echo "job '$name' did not succeed in ci.yml run $run on $GITHUB_SHA" >&2
               exit 1
             }
-            case "$line" in
-            *"	completed	success") ;;
-            *)
-              echo "check '$name' on $GITHUB_SHA is not completed with success: $line" >&2
-              exit 1
-              ;;
-            esac
           done
       - name: Build universal binary
         run: scripts/release-build.sh build "$RUNNER_TEMP/dist"
