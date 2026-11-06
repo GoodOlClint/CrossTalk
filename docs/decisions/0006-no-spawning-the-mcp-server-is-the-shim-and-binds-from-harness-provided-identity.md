@@ -29,11 +29,11 @@ Role and owner are set at runtime by `claim` and `release` between registered ag
 ## Consequences
 
 - Install registers one MCP server entry per harness, done by `crosstalk install` at the installed binary's absolute path ([ADR 0016](0016-crosstalk-install-registers-mcp-at-the-installed-path.md)); plain `claude` and plain `codex` work. An agent host such as Herdr needs no CrossTalk knowledge.
-- The Codex `_meta` contract is release-source evidence, not a documented API, re-verified per Codex release. 0.166 is the tested minor (`TestedMinors` in `internal/harness/codex/version.go`): another 0.x minor warns and continues, and an untested major is refused. The live capture planned as spike 9 is still listed pending in `docs/spikes/README.md`; the adapter shipped on the source read and the fake app-server tests.
+- The Codex `_meta` contract is release-source evidence, not a documented API, re-verified per Codex release. 0.166 is the tested minor (`TestedMinors` in `internal/harness/codex/version.go`): another 0.x minor warns and continues, and an untested major is refused. Spike 9 captured `_meta.threadId` and `sessionId` live on a model-issued call on 0.166.0 before the Codex adapter was written ([report](https://github.com/GoodOlClint/CrossTalk/blob/main/docs/spikes/09-codex-binding/report.md)).
 - A pooled Codex connection means per-request agent lookup and no process-level "my session" state; the journal, descriptor and name-stable socket are per agent, not per process.
 - A session whose shim process has exited (MCP connection closed) is still reachable natively but its name-stable socket has no listener until the harness reconnects the MCP server; design.md §9 states this.
 - Supersedes ADR 0005.
 
 ## Council review 2026-11-06
 
-Sat: chair Claude (Opus 5.5), advisor A Codex 3c9b659b079700f3 (accuracy), advisor B Codex 93c0805d291aa89e (still right, merge, withdraw). Verdict: EDIT (no spawning scoped to runtime; install via ADR 0016; Codex version check wording; spike 9 still pending). Status stays Provisional.
+Sat: chair Claude (Opus 5.5), advisor A Codex 3c9b659b079700f3 (accuracy), advisor B Codex 93c0805d291aa89e (still right, merge, withdraw). Verdict: EDIT (no spawning scoped to runtime; install via ADR 0016; Codex version check wording; spike 9 report linked). Status stays Provisional.
