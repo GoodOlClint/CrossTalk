@@ -587,7 +587,26 @@ func (h *Harness) Registered(env harness.InstallEnv) (bool, error) {
 	if u != nil {
 		es = append(es, scopedEntry{u, "user scope"})
 	}
-	return slices.ContainsFunc(es, func(e scopedEntry) bool { return e.Command == env.Bin }), err
+	return slices.ContainsFunc(es, func(e scopedEntry) bool { return runsBin(e.Command, env.Bin) }), err
+}
+
+// runsBin reports whether an entry command starts bin: a bare name is
+// looked up on PATH, then both sides are cleaned and symlink-resolved. If
+// either side cannot be resolved the exact strings are compared.
+func runsBin(cmd, bin string) bool {
+	if cmd == bin {
+		return true
+	}
+	if !strings.ContainsRune(cmd, filepath.Separator) {
+		p, err := exec.LookPath(cmd)
+		if err != nil {
+			return false
+		}
+		cmd = p
+	}
+	a, errA := filepath.EvalSymlinks(filepath.Clean(cmd))
+	b, errB := filepath.EvalSymlinks(filepath.Clean(bin))
+	return errA == nil && errB == nil && a == b
 }
 
 // scopedEntry is a crosstalk server entry with where Claude found it.
@@ -603,7 +622,7 @@ func (h *Harness) Leftover(env harness.InstallEnv, anyBin bool) (string, error) 
 	_, es, err := entriesAnyScope(env.Home)
 	var out []string
 	for _, e := range es {
-		if anyBin || e.Command == env.Bin {
+		if anyBin || runsBin(e.Command, env.Bin) {
 			out = append(out, e.where+" runs "+e.Command)
 		}
 	}
