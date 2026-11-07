@@ -222,7 +222,7 @@ func TestReplyHintSeparatesPreBindFromUnknownID(t *testing.T) {
 		"v4":        "3f2b8c1e-5d4a-4b6f-9a7e-0123456789ab",
 	} {
 		h := hint(id)
-		if strings.Contains(h, "predates") || !strings.Contains(h, "check the message_id") || !strings.Contains(h, "send_message") {
+		if strings.Contains(h, "predate") || !strings.Contains(h, "check the message_id") || !strings.Contains(h, "send_message") {
 			t.Fatalf("%s hint %q", name, h)
 		}
 	}
