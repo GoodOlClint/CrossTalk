@@ -550,11 +550,28 @@ func TestRetryInjectsOnce(t *testing.T) {
 	if n := len(w.bob.fc.Writes()); n != 1 {
 		t.Fatalf("bob's harness has %d writes after the retry, want 1", n)
 	}
-	if n := countRecords(records(t, w.b.state, w.bob.id()), journal.TypeDedupe, m.MessageID); n == 0 {
-		t.Fatal("no dedupe record on bob's journal")
-	}
 	if n := w.bob.fc.Writes()[0].Message.MessageID; n != m.MessageID {
 		t.Fatalf("injected message_id %s, want %s", n, m.MessageID)
+	}
+}
+
+func TestRetryDedupedByReceiver(t *testing.T) {
+	w := newWorld(t)
+	m := w.ask("what is 6*7?")
+	st := w.bob.sh.Agent(w.bob.id())
+	in := receiver.Inbound{Ingress: receiver.A2A, Message: m, Sender: receiver.Sender{Verified: true, AgentID: "remote:fpA/" + w.alice.id(), Name: "remote:fpA/" + w.alice.id(), Role: registry.RolePrimary, Harness: "remote"}}
+	if r := st.Receive(context.Background(), in); r.Duplicate || r.State != adapter.Accepted {
+		t.Fatalf("first receive %+v", r)
+	}
+	before := countRecords(records(t, w.b.state, w.bob.id()), journal.TypeDedupe, m.MessageID)
+	if r := st.Receive(context.Background(), in); !r.Duplicate {
+		t.Fatalf("second receive %+v, want Duplicate", r)
+	}
+	if n := len(w.bob.fc.Writes()); n != 1 {
+		t.Fatalf("bob's harness has %d writes, want 1", n)
+	}
+	if n := countRecords(records(t, w.b.state, w.bob.id()), journal.TypeDedupe, m.MessageID); n != before || n == 0 {
+		t.Fatalf("%d dedupe records after the second receive, %d before", n, before)
 	}
 }
 

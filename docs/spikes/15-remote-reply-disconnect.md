@@ -23,6 +23,7 @@ Setup common to all cases: host A and host B each have their own state dir, one 
 | C4 the reply reaches the original asker | `TestReplyReachesOriginalAsker` | Bob's `reply` returns `accepted`; alice's harness has exactly one write, with `in_reply_to` equal to the ask's message_id; alice's journal has the receipt record |
 | C5a the reply never reaches a name reuser, both sessions live | `TestReplyNeverReachesNameReuser` | A second session named `alice` on host A (another agent_id) has zero harness writes; the original alice has one |
 | C5b the reply never reaches a name reuser, original gone | `TestReplyToGoneAskerNotRedirected` | The original alice is closed and a new `alice` runs; bob's reply is not `accepted`, is not journaled delivered, and the new alice has zero writes |
+| C3b receiver dedupe (added after review) | `TestRetryDedupedByReceiver` | The same inbound sent to bob's receiver twice: second result is `Duplicate`, one harness write, no new dedupe record |
 | X1 (not a pass-line clause) pending while the asker's gateway is down | `TestReplyPendingWhileAskerGatewayDown` | Reply while A's gateway is down is not `accepted` and not journaled delivered; after the gateway restarts, a byte-identical `reply` delivers it once |
 
 Where today's code cannot do a clause, the spike stubs the minimum in its own package and the report names the production lines R4 and R8 must change.
@@ -46,7 +47,8 @@ Command: `go test -count=1 -v ./docs/spikes/15-remote-reply-disconnect/` (also p
 |---|---|---|
 | C1 kill after injection, before the response | PASS | `--- PASS: TestKillAfterInjectionBeforeResponse`: one harness write on bob, gateway `dropped=1 written=0`, port refuses connections |
 | C2 the asker shows `unknown` | PASS | `asker saw state=unknown err=failed to send HTTP request: Post ".../v1/a2a/<bob>": EOF` and bob has one write, so unknown was the truthful answer |
-| C3 the retry injects once | PASS | `retry state=accepted err=<nil>`; bob still has one harness write, one dedupe record, injected message_id equal to the ask's |
+| C3 the retry injects once | PASS, by task reuse | `retry state=accepted err=<nil>`; bob still has one harness write and the injected message_id equals the ask's. Bob's shim stayed up, so the retry was answered by the existing journal-backed A2A task (`internal/a2a/tasks.go:84-89` returns it, `:617-625` skips the receiver); the receiver was not reached |
+| C3b receiver dedupe, task store bypassed | PASS | `TestRetryDedupedByReceiver` calls bob's receiver twice with the same sender key and message_id: the second result is `Duplicate`, bob has one harness write, and the second receive adds no dedupe record (the first leaves two: acceptance, then the outcome). Added after Codex review finding 1 |
 | C4 the reply reaches the original asker | PASS | bob's `reply` returns `accepted`; alice's harness has one write with `in_reply_to` = the ask id and text `42`, on thread `T-alice`; alice's journal has the receipt record |
 | C5a no reply to a second session, both live | PASS, weak | A second session on thread `T-alice-2` registered as `codex-alice-2bd36725`, not `alice`: the registry renames a live collision, so a live name reuse cannot happen. It got zero writes; the original got one |
 | C5b no reply to a name reuser, original gone | PASS | the original alice is closed, a new session registers as `alice`, bob's reply is `state:unknown reason:remote_reply_unknown: unexpected HTTP status: 404 Not Found`, journaled not delivered, the new alice has zero writes |
@@ -60,16 +62,16 @@ Nothing failed, so no clause forces a redesign. Three wording fixes, none struct
 
 - Section 8 step 5 and section 9 row "Connection drops after the gateway forwarded" say the asker polls `GetTask` and sees `unknown/pending`. When the connection dies before the SendMessage response (C1) the asker holds no task id, so there is nothing to poll: `a2a.Client.Send` fails with a transport error and `wire.SendTask` returns `unknown` with the raw error text as the reason (`EOF`), not `pending`. R5 should map that error to a stable reason; the retry is a resend of the same message_id (C3), not a poll.
 - Section 8 reply step 3 says A's gateway answers `rejected/no_such_agent` for a gone asker. A bare HTTP 404 reaches the sender as `unknown` (C5b), and `unknown` keeps retrying until the deadline or 24 h. The gateway must answer with the A2A error that carries `metadata.crosstalk.state` and `reason`, as the loopback server does, or R8 must treat a 404 from a gateway as `rejected/no_such_agent`.
-- Section 8 reply step 1 lists "completes the ask's task" before "finds the route's key is remote" and forwards afterwards. The spike forwards from inside the first stage, so a failed forward leaves the route open; R8's own remote stage (after `released`) avoids that.
+- Route lifecycle: `CompleteAsk` closes the ask task, and `OnAskClosed` (production wires it the same way, `internal/wire/wire.go`) closes bob's route before any forward. So when the forward fails the obligation is pending but the route is already closed; a retry needs no open route. Plan section 8 reply step 4 should say the retry works from the obligation alone. X1 does not assert route state.
 
 ## Production lines R4 and R8 must change
 
 The spike reached every clause by stubbing outside production. These are the lines the stubs stand in for (line numbers at f27d828):
 
 - `internal/shim/send.go:583-587`: a reply whose key is not an agent_id is journaled delivered and returned `accepted` with no send. A remote key must take a remote branch before this (R8, plan R4 row also notes it). The spike avoids it only because its `OnReply` returns an error until the forward is accepted.
-- `internal/shim/send.go:558-561` and `Options.OnReply`'s signature: the hook receives the original message and the reply but not the journaled sender key. The spike recovers the destination from `original.From`, which is the label and in production will be `name@host`, not a key. R8 must pass `key` (completeReply has it) to the remote forward.
+- `internal/shim/send.go:562-563` (the hook call; `:558-561` is the missing-hook guard) and `Options.OnReply`'s signature at `internal/shim/shim.go:83`: the hook receives the original message and the reply but not the journaled sender key. The spike recovers the destination from `original.From`, which is the label and in production will be `name@host`, not a key. R8 must pass `key` (completeReply has it) to the remote forward.
 - `internal/shim/send.go:612` `descriptorByID(key)` lists local descriptors only. A remote key needs a lookup by fingerprint in the peer table and a send by agent_id (R8).
-- `internal/shim/send.go:637-693` `retryObligations`, called only from `internal/shim/agent.go:187` at registration: there is no timer. X1 resumed only because the test repeated `reply`. R8's 60 s doubling timer is needed for an agent that stays up.
+- `internal/shim/send.go:637-667` `retryObligations`, called only from `internal/shim/agent.go:187` at registration: there is no timer. X1 resumed only because the test repeated `reply`. R8's 60 s doubling timer is needed for an agent that stays up.
 - `internal/shim/send.go:520`: the inform-route expiry guard tests `IsAgentID(key)`, so it skips a remote key (R4 row).
 - `internal/receiver/receiver.go:61-69` `key()`, `:266-267` (`askedPeer` and the receipt record use `in.Sender.AgentID`) and `:291` (route record): the spike put the host-scoped key into `Sender.AgentID` and the receipt and route worked. With a separate `Sender.Host`, these three lines must use `key()` (R4).
 - `internal/a2a/server.go:443-481` `authenticate`: the spike gets the remote principal through `ResolvePeer` and a credential file. R4 adds the gateway-credential case with gateway-set host and agent headers.
@@ -78,7 +80,7 @@ The spike reached every clause by stubbing outside production. These are the lin
 ## Surprises for R8
 
 - A gateway must forward the `A2A-Version` header. The first spike run dropped it and the target answered `rejected: this version is not supported: requested "0.3", served "1.0"` before injecting anything. R2's gateway must copy that header and every non-`X-CrossTalk-*` request header.
-- The C3 retry was answered by the existing task and receiver dedupe, both journal-backed on bob's side, with the same remote key for the same sender. A retry from a different sender key (a restarted gateway that derives the fingerprint differently) would inject twice; the key must be stable across gateway restarts.
+- The C3 retry was answered by the existing journal-backed task. The same message_id under a different principal is refused (`internal/a2a/tasks.go:85-86`, `message_id is in use by another principal`), so a gateway that derived a different fingerprint after a restart would get a refusal, not a second injection; the key must still be stable across restarts or the retry fails.
 - Registry rename on a live collision (C5a) means a name can only be reused after the original is gone, which is the case the agent_id routing is for.
 
 ## Gates
