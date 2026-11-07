@@ -79,6 +79,7 @@ type gwConn struct {
 	info   *connInfo
 	once   sync.Once
 	closed atomic.Bool
+	mu     sync.Mutex
 	timer  *time.Timer
 }
 
@@ -88,8 +89,11 @@ type gwConn struct {
 func (c *gwConn) Close() error {
 	var err error
 	c.once.Do(func() {
-		if c.timer != nil {
-			c.timer.Stop()
+		c.mu.Lock()
+		t := c.timer
+		c.mu.Unlock()
+		if t != nil {
+			t.Stop()
 		}
 		c.closed.Store(true)
 		err = c.Conn.NetConn().Close()
@@ -312,7 +316,9 @@ func (g *Gateway) handshake(raw net.Conn, slots chan struct{}) {
 	raw.SetDeadline(time.Time{})
 	c := &gwConn{Conn: tc, g: g, info: info}
 	if info.unenrolled {
+		c.mu.Lock()
 		c.timer = time.AfterFunc(g.cfg.Limits.UnenrolledLife, func() { c.Close() })
+		c.mu.Unlock()
 	}
 	if !g.admit(c) {
 		c.Close()

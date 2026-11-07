@@ -739,24 +739,44 @@ func TestCloseDoesNotWaitForCloseNotify(t *testing.T) {
 	}
 }
 
-func TestUnenrolledClosedWhileAdmitting(t *testing.T) {
+func TestUnenrolledTimerIsFirstCloser(t *testing.T) {
 	e := startGateway(t, func(c *GatewayConfig) {
 		c.Limits.UnenrolledLife = time.Millisecond
-		c.Limits.PendingPoll = time.Millisecond
+		c.Limits.PendingPoll = time.Hour
 	})
 	writePending(t, e.stateDir, time.Now().Add(10*time.Minute))
 	stranger := e.newClient(false)
-	for i := 0; i < 40; i++ {
+	const rounds = 40
+	timerClosed, dialed := 0, 0
+	for i := 0; i < rounds; i++ {
 		c, err := e.dial(clientTLS(stranger, 0))
 		if err != nil {
-			continue
+			t.Fatalf("round %d: dial: %v", i, err)
 		}
-		roundTrip(c)
+		dialed++
+		c.SetReadDeadline(time.Now().Add(3 * time.Second))
+		_, err = io.Copy(io.Discard, c)
+		var ne net.Error
+		if errors.As(err, &ne) && ne.Timeout() {
+			t.Fatalf("round %d: the server did not close the unenrolled connection", i)
+		}
+		timerClosed++
 		c.Close()
 	}
-	e.gw.mu.Lock()
-	defer e.gw.mu.Unlock()
-	if e.gw.unen < 0 || e.gw.unen > e.gw.cfg.Limits.MaxUnenrolled {
-		t.Fatalf("unenrolled count %d out of range", e.gw.unen)
+	if dialed != rounds || timerClosed != rounds {
+		t.Fatalf("dialed %d, closed by the server %d, want %d each", dialed, timerClosed, rounds)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		e.gw.mu.Lock()
+		unen, tracked := e.gw.unen, len(e.gw.conns)
+		e.gw.mu.Unlock()
+		if unen == 0 && tracked == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("pool not drained: unenrolled %d tracked %d", unen, tracked)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
