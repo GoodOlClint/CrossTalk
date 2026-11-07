@@ -105,3 +105,31 @@ func TestRemoteConfigCLI(t *testing.T) {
 		t.Fatalf("unreadable remote.json: %d %q, want 1 naming the file", code, errs)
 	}
 }
+
+type hookReader struct{ fn func() }
+
+func (h hookReader) Read(p []byte) (int, error) {
+	h.fn()
+	return copy(p, "y\n"), nil
+}
+
+func TestRemoteConfigOverlappingUpdatesMerge(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if code, _, errs := remoteRun(t, false, "config", "--bind", "127.0.0.1", "--alias", "desk", "--yes"); code != 0 {
+		t.Fatal(errs)
+	}
+	var out, errb bytes.Buffer
+	in := hookReader{func() {
+		if code, _, errs := remoteRun(t, false, "config", "--port", "7800", "--yes"); code != 0 {
+			t.Error(errs)
+		}
+	}}
+	if code := runRemote([]string{"config", "--alias", "tower"}, in, true, &out, &errb); code != 0 {
+		t.Fatalf("%d %s", code, errb.String())
+	}
+	c, err := remote.LoadConfig(filepath.Join(home, ".config", "crosstalk"))
+	if err != nil || c.Alias != "tower" || c.Port != 7800 {
+		t.Fatalf("config after overlapping updates = %+v, %v; want alias tower and port 7800", c, err)
+	}
+}

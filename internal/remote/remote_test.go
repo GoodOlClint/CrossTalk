@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -210,5 +211,93 @@ func TestPeersAtomicUpdateByFingerprint(t *testing.T) {
 	}
 	if err := p.Remove("nobody"); err == nil {
 		t.Fatal("Remove of an unknown alias succeeded")
+	}
+}
+
+func TestConfigRejectsBadPersistedFiles(t *testing.T) {
+	dir := newDir(t)
+	if err := SaveConfig(dir, Config{Alias: "a", Bind: "127.0.0.1", Port: 7745}); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "remote.json")
+	good := `{"version":1,"alias":"a","bind":"127.0.0.1","port":7745}`
+	for name, body := range map[string]string{
+		"wildcard":        strings.Replace(good, "127.0.0.1", "0.0.0.0", 1),
+		"v6 wildcard":     strings.Replace(good, "127.0.0.1", "::", 1),
+		"mapped wildcard": strings.Replace(good, "127.0.0.1", "::ffff:0.0.0.0", 1),
+		"multicast":       strings.Replace(good, "127.0.0.1", "224.0.0.1", 1),
+		"trailing junk":   good + "\nxyz",
+		"second object":   good + good,
+	} {
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := LoadConfig(dir); err == nil || !strings.Contains(err.Error(), path) {
+			t.Errorf("%s: err %v, want one naming %s", name, err, path)
+		}
+	}
+	if err := SaveConfig(dir, Config{Alias: "a", Bind: "0.0.0.0", Port: 1}); err == nil {
+		t.Error("SaveConfig accepted a wildcard bind")
+	}
+	if err := os.WriteFile(path, []byte(good), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadConfig(dir); err != nil {
+		t.Errorf("an address not on any interface must stay loadable: %v", err)
+	}
+}
+
+func TestNamedPipeRefusedWithoutBlocking(t *testing.T) {
+	dir := newDir(t)
+	if _, err := LoadOrCreateHost(dir); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"host.key", "host.crt", "remote.json", "peers.json", "peers.lock", "remote.lock"} {
+		os.Remove(filepath.Join(dir, f))
+		if err := syscall.Mkfifo(filepath.Join(dir, f), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	done := make(chan map[string]error, 1)
+	go func() {
+		_, e1 := LoadHost(dir)
+		_, e2 := LoadConfig(dir)
+		_, e3 := NewPeers(dir).List()
+		e4 := NewPeers(dir).Upsert(Peer{Alias: "x", Address: "h:1", Fingerprint: strings.Repeat("a", 64)})
+		e5 := SaveConfig(dir, Config{Alias: "a", Bind: "127.0.0.1", Port: 1})
+		done <- map[string]error{"host": e1, "config": e2, "peers": e3, "upsert": e4, "save": e5}
+	}()
+	select {
+	case errs := <-done:
+		for k, err := range errs {
+			if !errors.Is(err, ErrMode) {
+				t.Errorf("%s: err %v, want ErrMode", k, err)
+			}
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a named pipe blocked a read or a lock")
+	}
+}
+
+func TestLockFileModeChecked(t *testing.T) {
+	dir := newDir(t)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"peers.lock", "remote.lock", "host.lock"} {
+		if err := os.WriteFile(filepath.Join(dir, name), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		os.Chmod(filepath.Join(dir, name), 0o666)
+	}
+	q := Peer{Alias: "x", Address: "h:1", Fingerprint: strings.Repeat("a", 64)}
+	if err := NewPeers(dir).Upsert(q); !errors.Is(err, ErrMode) {
+		t.Errorf("peers.lock 0666: %v", err)
+	}
+	if err := SaveConfig(dir, Config{Alias: "a", Bind: "127.0.0.1", Port: 1}); !errors.Is(err, ErrMode) {
+		t.Errorf("remote.lock 0666: %v", err)
+	}
+	if _, err := LoadOrCreateHost(dir); !errors.Is(err, ErrMode) {
+		t.Errorf("host.lock 0666: %v", err)
 	}
 }

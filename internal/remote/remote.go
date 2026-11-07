@@ -4,7 +4,6 @@
 package remote
 
 import (
-	"bytes"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -112,7 +111,7 @@ func checkDir(dir string) error {
 // readChecked opens path without following a symlink, checks the open file is
 // regular with exactly mode, and reads it from that same descriptor.
 func readChecked(path string, mode os.FileMode) ([]byte, error) {
-	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if err != nil {
 		if errors.Is(err, syscall.ELOOP) {
 			return nil, fmt.Errorf("%w: %s is a symlink", ErrMode, path)
@@ -163,10 +162,21 @@ func writeAtomic(path string, data []byte, mode os.FileMode) error {
 }
 
 // lock takes a blocking exclusive flock on dir/name and returns its release.
+// An existing lock file must be a regular 0600 file.
 func lock(dir, name string) (func(), error) {
-	f, err := os.OpenFile(filepath.Join(dir, name), os.O_RDWR|os.O_CREATE|syscall.O_NOFOLLOW, 0o600)
+	path := filepath.Join(dir, name)
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0o600)
 	if err != nil {
 		return nil, err
+	}
+	fi, err := f.Stat()
+	if err != nil {
+		f.Close()
+		return nil, err
+	}
+	if !fi.Mode().IsRegular() || fi.Mode().Perm() != 0o600 {
+		f.Close()
+		return nil, fmt.Errorf("%w: %s is %v, want a regular file with mode 0600", ErrMode, path, fi.Mode())
 	}
 	if err := unix.Flock(int(f.Fd()), unix.LOCK_EX); err != nil {
 		f.Close()
@@ -316,16 +326,24 @@ func DefaultAlias() string {
 	return h
 }
 
-// ValidateBind accepts one unicast IP. Unless force is set it must be
-// assigned to an interface of this host.
-func ValidateBind(s string, force bool) (string, error) {
+func checkBindClass(s string) (netip.Addr, error) {
 	a, err := netip.ParseAddr(s)
 	if err != nil || a.Zone() != "" {
-		return "", fmt.Errorf("%q is not an IP address", s)
+		return a, fmt.Errorf("%q is not an IP address", s)
 	}
 	a = a.Unmap()
 	if a.IsUnspecified() || a.IsMulticast() {
-		return "", fmt.Errorf("%s is a wildcard or multicast address; give one address of this host", s)
+		return a, fmt.Errorf("%s is a wildcard or multicast address; give one address of this host", s)
+	}
+	return a, nil
+}
+
+// ValidateBind accepts one unicast IP. Unless force is set it must be
+// assigned to an interface of this host.
+func ValidateBind(s string, force bool) (string, error) {
+	a, err := checkBindClass(s)
+	if err != nil {
+		return "", err
 	}
 	if force {
 		return a.String(), nil
@@ -349,8 +367,8 @@ func validateConfig(c Config) error {
 	if err := ValidAlias(c.Alias); err != nil {
 		return err
 	}
-	if _, err := netip.ParseAddr(c.Bind); err != nil {
-		return fmt.Errorf("bind %q is not an IP address", c.Bind)
+	if _, err := checkBindClass(c.Bind); err != nil {
+		return fmt.Errorf("bind: %w", err)
 	}
 	if c.Port < 1 || c.Port > 65535 {
 		return fmt.Errorf("port %d outside 1-65535", c.Port)
@@ -374,7 +392,7 @@ func LoadConfig(dir string) (Config, error) {
 		return Config{}, err
 	}
 	var c Config
-	if err := json.NewDecoder(bytes.NewReader(b)).Decode(&c); err != nil {
+	if err := json.Unmarshal(b, &c); err != nil {
 		return Config{}, fmt.Errorf("remote: %s: %w", path, err)
 	}
 	if err := validateConfig(c); err != nil {
@@ -383,24 +401,40 @@ func LoadConfig(dir string) (Config, error) {
 	return c, nil
 }
 
-func SaveConfig(dir string, c Config) error {
-	c.Version = version
-	if err := validateConfig(c); err != nil {
-		return err
-	}
+// UpdateConfig reads remote.json under remote.lock, passes it to fn, and
+// writes the result atomically before releasing the lock.
+func UpdateConfig(dir string, fn func(old Config, configured bool) (Config, error)) (Config, error) {
 	if err := ensureDir(dir); err != nil {
-		return err
+		return Config{}, err
 	}
 	unlock, err := lock(dir, "remote.lock")
 	if err != nil {
-		return err
+		return Config{}, err
 	}
 	defer unlock()
+	old, err := LoadConfig(dir)
+	configured := err == nil
+	if err != nil && !errors.Is(err, ErrNotConfigured) {
+		return Config{}, err
+	}
+	c, err := fn(old, configured)
+	if err != nil {
+		return Config{}, err
+	}
+	c.Version = version
+	if err := validateConfig(c); err != nil {
+		return Config{}, err
+	}
 	b, err := json.MarshalIndent(c, "", "  ")
 	if err != nil {
-		return err
+		return Config{}, err
 	}
-	return writeAtomic(filepath.Join(dir, "remote.json"), append(b, '\n'), 0o600)
+	return c, writeAtomic(filepath.Join(dir, "remote.json"), append(b, '\n'), 0o600)
+}
+
+func SaveConfig(dir string, c Config) error {
+	_, err := UpdateConfig(dir, func(Config, bool) (Config, error) { return c, nil })
+	return err
 }
 
 type peersFile struct {
@@ -477,7 +511,7 @@ func (p *Peers) read() ([]Peer, error) {
 		}
 		return nil, err
 	}
-	f, err := os.OpenFile(p.path(), os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	f, err := os.OpenFile(p.path(), os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if errors.Is(err, os.ErrNotExist) {
 		p.valid = false
 		return nil, nil

@@ -62,35 +62,38 @@ func runRemoteConfig(args []string, in io.Reader, tty bool, stdout, stderr io.Wr
 		return remoteShowConfig(dir, old, configured, stdout, stderr)
 	}
 
-	next := old
-	if !configured {
-		if !set["bind"] {
-			fmt.Fprintln(stderr, "crosstalk remote config: --bind IP is required the first time")
-			return 2
+	apply := func(cur remote.Config, have bool) (remote.Config, error) {
+		next := cur
+		if !have {
+			if !set["bind"] {
+				return next, errUsage("--bind IP is required the first time")
+			}
+			next = remote.Config{Alias: remote.DefaultAlias(), Port: remote.DefaultPort}
 		}
-		next = remote.Config{Alias: remote.DefaultAlias(), Port: remote.DefaultPort}
+		if set["bind"] {
+			b, err := remote.ValidateBind(*bind, *force)
+			if err != nil {
+				return next, errUsage("--bind: " + err.Error())
+			}
+			next.Bind = b
+		}
+		if set["port"] {
+			if *port < 1 || *port > 65535 {
+				return next, errUsage(fmt.Sprintf("--port %d is outside 1-65535", *port))
+			}
+			next.Port = *port
+		}
+		if set["alias"] {
+			if err := remote.ValidAlias(*alias); err != nil {
+				return next, errUsage("--alias: " + err.Error())
+			}
+			next.Alias = *alias
+		}
+		return next, nil
 	}
-	if set["bind"] {
-		b, err := remote.ValidateBind(*bind, *force)
-		if err != nil {
-			fmt.Fprintf(stderr, "crosstalk remote config: --bind: %v\n", err)
-			return 2
-		}
-		next.Bind = b
-	}
-	if set["port"] {
-		if *port < 1 || *port > 65535 {
-			fmt.Fprintf(stderr, "crosstalk remote config: --port %d is outside 1-65535\n", *port)
-			return 2
-		}
-		next.Port = *port
-	}
-	if set["alias"] {
-		if err := remote.ValidAlias(*alias); err != nil {
-			fmt.Fprintf(stderr, "crosstalk remote config: --alias: %v\n", err)
-			return 2
-		}
-		next.Alias = *alias
+	next, err := apply(old, configured)
+	if err != nil {
+		return remoteFail(err, stderr)
 	}
 	var rePair []string
 	if configured && (next.Bind != old.Bind || next.Port != old.Port) {
@@ -122,18 +125,30 @@ func runRemoteConfig(args []string, in io.Reader, tty bool, stdout, stderr io.Wr
 	}
 
 	h, err := remote.LoadOrCreateHost(dir)
-	if err == nil {
-		err = remote.SaveConfig(dir, next)
-	}
 	if err != nil {
-		fmt.Fprintf(stderr, "crosstalk remote config: %v\n", err)
-		return 1
+		return remoteFail(err, stderr)
+	}
+	next, err = remote.UpdateConfig(dir, apply)
+	if err != nil {
+		return remoteFail(err, stderr)
 	}
 	printConfig(stdout, dir, next, h.Fingerprint)
 	if len(rePair) > 0 {
 		fmt.Fprintf(stdout, "peers still dial the old address: pair again with %s\n", strings.Join(rePair, ", "))
 	}
 	return 0
+}
+
+type errUsage string
+
+func (e errUsage) Error() string { return string(e) }
+
+func remoteFail(err error, stderr io.Writer) int {
+	fmt.Fprintf(stderr, "crosstalk remote config: %v\n", err)
+	if errors.As(err, new(errUsage)) {
+		return 2
+	}
+	return 1
 }
 
 func remoteShowConfig(dir string, c remote.Config, configured bool, stdout, stderr io.Writer) int {
