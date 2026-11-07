@@ -194,3 +194,16 @@ func TestJSONShape(t *testing.T) {
 		t.Fatalf("round trip: %v", err)
 	}
 }
+
+func TestUUIDv7Time(t *testing.T) {
+	before := time.Now().Add(-time.Second)
+	ts, ok := UUIDv7Time(NewUUIDv7())
+	if !ok || ts.Before(before) || ts.After(time.Now().Add(time.Second)) {
+		t.Fatalf("ts %v ok %v", ts, ok)
+	}
+	for _, s := range []string{"", "nope", "3f2b8c1e-5d4a-4b6f-9a7e-0123456789ab"} {
+		if _, ok := UUIDv7Time(s); ok {
+			t.Fatalf("%q parsed", s)
+		}
+	}
+}
