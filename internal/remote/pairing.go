@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -294,7 +295,7 @@ func redeemPairing(stateDir string, peers *Peers, clock func() time.Time, req pa
 	if err != nil {
 		return fmt.Errorf("%w: address: %v", errPairBadField, err)
 	}
-	err = peers.UpsertThen(Peer{Alias: alias, Address: addr, Fingerprint: clientFP, PairedAt: now.UTC(), PairingID: e.ID}, func() error {
+	err = peers.UpsertThen(Peer{Alias: alias, Address: addr, Fingerprint: clientFP, PairedAt: now.UTC(), PairingIDs: []string{e.ID}}, func() error {
 		return savePending(stateDir, liveOnly(append(es[:at:at], es[at+1:]...), now))
 	})
 	if errors.Is(err, ErrAliasTaken) {
@@ -471,7 +472,7 @@ type WaitOptions struct {
 
 // WaitPaired waits for the entry to be redeemed, to expire, or for ctx to end;
 // the last two remove the entry. Redemption is seen as the entry leaving
-// pending.json with a peer carrying its pairing id.
+// pending.json with a peer listing its pairing id.
 func WaitPaired(ctx context.Context, o WaitOptions) (Peer, error) {
 	if o.Poll <= 0 {
 		o.Poll = 500 * time.Millisecond
@@ -502,7 +503,7 @@ func WaitPaired(ctx context.Context, o WaitOptions) (Peer, error) {
 				return Peer{}, err
 			}
 			for _, p := range ps {
-				if p.PairingID == o.ID {
+				if slices.Contains(p.PairingIDs, o.ID) {
 					return p, nil
 				}
 			}

@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -711,7 +712,7 @@ func TestPairAgainFromPinnedPeerUpdatesAndRepairs(t *testing.T) {
 		t.Fatalf("B did not get A back: %+v", bl)
 	}
 	second := p.peerList()
-	if len(second) != 1 || second[0].Alias != "beta2" || !second[0].PairedAt.After(first[0].PairedAt) || second[0].PairingID != p.entry.ID {
+	if len(second) != 1 || second[0].Alias != "beta2" || !second[0].PairedAt.After(first[0].PairedAt) || !slices.Contains(second[0].PairingIDs, p.entry.ID) {
 		t.Fatalf("re-pairing must update in place: %+v then %+v", first, second)
 	}
 }
@@ -878,5 +879,85 @@ func TestRedeemAliasRaceKeepsEntry(t *testing.T) {
 	after, _ := os.ReadFile(pendingPath(state))
 	if !bytes.Equal(pending, after) {
 		t.Fatalf("the token was burnt: %s", after)
+	}
+}
+
+func TestPinnedPairCountsAgainstHostLimits(t *testing.T) {
+	release := make(chan struct{})
+	p := startPairGateway(t, func(c *GatewayConfig) {
+		c.Limits.MaxPeerConcurrent = 2
+		c.Limits.PairInterval = -1
+		c.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-release })
+	})
+	h := p.newClient(true)
+	var wg sync.WaitGroup
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			p.get(p.httpClient(h), "GET", "/slow")
+		}()
+	}
+	for deadline := time.Now().Add(5 * time.Second); ; {
+		p.gw.mu.Lock()
+		n := p.gw.peerSt[h.Fingerprint]
+		busy := n != nil && n.inflight == 2
+		p.gw.mu.Unlock()
+		if busy {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the two slow requests never became active")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	pending, peers := p.files()
+	if st, _ := p.post(p.httpClient(h), p.good(h.Fingerprint, "beta")); st != http.StatusTooManyRequests {
+		t.Fatalf("pairing request past the host's concurrent allowance: %d, want 429", st)
+	}
+	p.mustBeUnchanged(pending, peers, "a limited pairing request")
+	close(release)
+	wg.Wait()
+
+	q := startPairGateway(t, func(c *GatewayConfig) {
+		c.Limits.MaxPeerPerMinute = 3
+		c.Limits.PairInterval = -1
+	})
+	g := q.newClient(true)
+	gc := q.httpClient(g)
+	for i := 0; i < 3; i++ {
+		q.get(gc, "GET", "/x")
+	}
+	pending, peers = q.files()
+	if st, _ := q.post(gc, q.good(g.Fingerprint, "beta")); st != http.StatusTooManyRequests {
+		t.Fatalf("pairing request past the host's per-minute allowance: %d, want 429", st)
+	}
+	q.mustBeUnchanged(pending, peers, "a limited pairing request")
+}
+
+func TestWaitPairedSurvivesLaterPeerUpdates(t *testing.T) {
+	state := filepath.Join(t.TempDir(), "state")
+	cfg := newDir(t)
+	peers := NewPeers(cfg)
+	now := time.Now()
+	server, fp := strings.Repeat("ef", 32), strings.Repeat("cd", 32)
+	redeem := func(e Pairing, alias string) {
+		req := pairRequest{ID: e.ID, Alias: alias, Address: "127.0.0.1:7746", MAC: pairMAC(e.Secret, fp, server)}
+		if err := redeemPairing(state, peers, time.Now, req, fp, server); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e1, _ := StartPairing(state, now, time.Minute, "")
+	e2, _ := StartPairing(state, now, time.Minute, "")
+	redeem(e1, "beta")
+	if err := peers.Upsert(Peer{Alias: "beta", Address: "127.0.0.1:7746", Fingerprint: fp}); err != nil {
+		t.Fatal(err)
+	}
+	redeem(e2, "beta")
+	for _, e := range []Pairing{e1, e2} {
+		got, err := WaitPaired(context.Background(), WaitOptions{StateDir: state, Peers: peers, ID: e.ID, Poll: 10 * time.Millisecond})
+		if err != nil || got.Fingerprint != fp {
+			t.Fatalf("waiter for %s: %+v %v", e.ID, got, err)
+		}
 	}
 }

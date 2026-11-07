@@ -39,7 +39,8 @@ const (
 	maxFile     = 1 << 20
 	// A file modified this recently may be rewritten again within the same
 	// filesystem timestamp tick, so the cache does not trust its stat.
-	racyWindow = 2 * time.Second
+	racyWindow    = 2 * time.Second
+	maxPairingIDs = 8
 )
 
 var (
@@ -72,8 +73,9 @@ type Peer struct {
 	Address     string    `json:"address"`
 	Fingerprint string    `json:"fingerprint"`
 	PairedAt    time.Time `json:"paired_at"`
-	// PairingID is the pairing that enrolled or last updated this peer.
-	PairingID string `json:"pairing_id,omitempty"`
+	// PairingIDs are the last few pairings that redeemed a token for this
+	// peer, so a waiting `remote pair` still finds its own after later updates.
+	PairingIDs []string `json:"pairing_ids,omitempty"`
 }
 
 // ConfigDir is ~/.config/crosstalk.
@@ -621,6 +623,10 @@ func (p *Peers) UpsertThen(q Peer, commit func() error) error {
 		if at >= 0 {
 			if q.PairedAt.IsZero() {
 				q.PairedAt = ps[at].PairedAt
+			}
+			q.PairingIDs = append(append([]string(nil), ps[at].PairingIDs...), q.PairingIDs...)
+			if n := len(q.PairingIDs); n > maxPairingIDs {
+				q.PairingIDs = q.PairingIDs[n-maxPairingIDs:]
 			}
 			ps[at] = q
 		} else {
