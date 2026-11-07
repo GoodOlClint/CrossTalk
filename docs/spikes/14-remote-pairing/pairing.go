@@ -11,6 +11,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -47,7 +48,11 @@ func MAC(secret []byte, clientFP, serverFP string) []byte {
 	return h.Sum(nil)
 }
 
+// Writes counts writeJSON calls, so a test can show which redemption wrote.
+var Writes atomic.Int64
+
 func writeJSON(path string, v any) error {
+	Writes.Add(1)
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err
