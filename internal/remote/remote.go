@@ -161,9 +161,9 @@ func writeAtomic(path string, data []byte, mode os.FileMode) error {
 	return nil
 }
 
-// lock takes a blocking exclusive flock on dir/name and returns its release.
-// An existing lock file must be a regular 0600 file.
-func lock(dir, name string) (func(), error) {
+// openLockFile opens dir/name for locking. An existing lock file must be a
+// regular 0600 file.
+func openLockFile(dir, name string) (*os.File, error) {
 	path := filepath.Join(dir, name)
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0o600)
 	if err != nil {
@@ -177,6 +177,15 @@ func lock(dir, name string) (func(), error) {
 	if !fi.Mode().IsRegular() || fi.Mode().Perm() != 0o600 {
 		f.Close()
 		return nil, fmt.Errorf("%w: %s is %v, want a regular file with mode 0600", ErrMode, path, fi.Mode())
+	}
+	return f, nil
+}
+
+// lock takes a blocking exclusive flock on dir/name and returns its release.
+func lock(dir, name string) (func(), error) {
+	f, err := openLockFile(dir, name)
+	if err != nil {
+		return nil, err
 	}
 	if err := unix.Flock(int(f.Fd()), unix.LOCK_EX); err != nil {
 		f.Close()
@@ -626,4 +635,20 @@ func (p *Peers) Remove(alias string) error {
 		}
 		return nil, fmt.Errorf("remote: no peer %q", alias)
 	})
+}
+
+// Lookup finds the peer with this fingerprint in the current table.
+func (p *Peers) Lookup(fingerprint string) (Peer, bool, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	ps, err := p.read()
+	if err != nil {
+		return Peer{}, false, err
+	}
+	for _, q := range ps {
+		if q.Fingerprint == fingerprint {
+			return q, true, nil
+		}
+	}
+	return Peer{}, false, nil
 }
