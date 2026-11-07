@@ -31,6 +31,7 @@ commands:
   uninstall  undo install
   reinstall  re-apply every install step
   mcp        run the shim as an MCP server over stdio
+  remote     host identity and config for messaging other machines (planned: pairing, serve)
   send       send a text to an agent by name, for plain scripts
   capture    record raw Codex app-server frames for fixtures
   version    print the version
@@ -46,6 +47,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runMCP(stderr)
 	case "install", "uninstall", "reinstall":
 		return runInstall(args[0], args[1:], os.Stdin, isTerminal(os.Stdin), stdout, stderr)
+	case "remote":
+		return runRemote(args[1:], os.Stdin, isTerminal(os.Stdin), stdout, stderr)
 	case "send":
 		return runSend(args[1:], os.Stdin, stdout, stderr)
 	case "capture":
