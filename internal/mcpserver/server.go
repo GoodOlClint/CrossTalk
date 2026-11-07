@@ -537,7 +537,7 @@ func (s *Server) addTools() {
 
 	boundTool(s, &mcp.Tool{
 		Name:        "reply",
-		Description: "Answer an inbound message; the destination comes from the stored original. Returns {message_id, state}.",
+		Description: "Answer an inbound message, ask or inform; the destination comes from the stored original. One final reply per ask, or per standalone inform: it closes the ask, so send interim notes with send_message. Returns {message_id, state}.",
 		InputSchema: schemaFor[replyIn](nil),
 	}, func(ctx context.Context, a *Agent, in replyIn) (any, error) {
 		return s.backend.Reply(ctx, a, in.MessageID, in.Text)
