@@ -670,3 +670,93 @@ func TestEnsureTokenKeptAcrossRestarts(t *testing.T) {
 		t.Fatalf("0644 token: %v, want ErrMode", err)
 	}
 }
+
+func TestStateDirModeRefused(t *testing.T) {
+	base := t.TempDir()
+	loose := filepath.Join(base, "loose")
+	if err := os.Mkdir(loose, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(loose, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	real := filepath.Join(base, "real")
+	if err := os.Mkdir(real, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(base, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	for name, dir := range map[string]string{"group/world readable": loose, "symlink": link} {
+		if _, err := EnsureToken(dir); !errors.Is(err, ErrMode) {
+			t.Errorf("EnsureToken in a %s state dir: %v, want ErrMode", name, err)
+		}
+		g := newGateway(t, func(c *GatewayConfig) { c.StateDir = dir }).gw
+		if err := g.Serve(context.Background()); !errors.Is(err, ErrMode) {
+			t.Errorf("Serve in a %s state dir: %v, want ErrMode", name, err)
+		}
+	}
+	if entries, _ := os.ReadDir(loose); len(entries) != 0 {
+		t.Errorf("files were created in the refused directory: %v", entries)
+	}
+}
+
+func TestCloseDoesNotWaitForCloseNotify(t *testing.T) {
+	e := newGateway(t, nil)
+	client := e.newClient(false)
+	sp, cp := net.Pipe()
+	defer cp.Close()
+	scfg := e.gw.base.Clone()
+	ccfg := clientTLS(client, 0)
+	errc := make(chan error, 1)
+	go func() { errc <- tls.Client(cp, ccfg).Handshake() }()
+	tc := tls.Server(sp, scfg)
+	if err := tc.Handshake(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-errc; err != nil {
+		t.Fatal(err)
+	}
+	c := &gwConn{Conn: tc, g: e.gw, info: &connInfo{fp: client.Fingerprint}}
+	if !e.gw.admit(c) {
+		t.Fatal("admit refused")
+	}
+	start := time.Now()
+	c.Close()
+	if d := time.Since(start); d > time.Second {
+		t.Fatalf("Close took %v against a peer that is not reading", d)
+	}
+	e.gw.mu.Lock()
+	pinned, tracked := e.gw.pinned, len(e.gw.conns)
+	e.gw.mu.Unlock()
+	if pinned != 0 || tracked != 0 {
+		t.Fatalf("pool after Close: pinned %d tracked %d", pinned, tracked)
+	}
+	cp.SetReadDeadline(time.Now().Add(time.Second))
+	if _, err := cp.Read(make([]byte, 1)); err == nil || errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("the socket was not closed when Close returned: %v", err)
+	}
+}
+
+func TestUnenrolledClosedWhileAdmitting(t *testing.T) {
+	e := startGateway(t, func(c *GatewayConfig) {
+		c.Limits.UnenrolledLife = time.Millisecond
+		c.Limits.PendingPoll = time.Millisecond
+	})
+	writePending(t, e.stateDir, time.Now().Add(10*time.Minute))
+	stranger := e.newClient(false)
+	for i := 0; i < 40; i++ {
+		c, err := e.dial(clientTLS(stranger, 0))
+		if err != nil {
+			continue
+		}
+		roundTrip(c)
+		c.Close()
+	}
+	e.gw.mu.Lock()
+	defer e.gw.mu.Unlock()
+	if e.gw.unen < 0 || e.gw.unen > e.gw.cfg.Limits.MaxUnenrolled {
+		t.Fatalf("unenrolled count %d out of range", e.gw.unen)
+	}
+}

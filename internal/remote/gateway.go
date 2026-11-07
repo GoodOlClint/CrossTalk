@@ -75,20 +75,27 @@ type connInfo struct {
 
 type gwConn struct {
 	*tls.Conn
-	g     *Gateway
-	info  *connInfo
-	once  sync.Once
-	timer *time.Timer
+	g      *Gateway
+	info   *connInfo
+	once   sync.Once
+	closed atomic.Bool
+	timer  *time.Timer
 }
 
+// Close drops the socket at once, with no close-notify (which can block for
+// seconds on a peer that stopped reading), and frees the pool slot only after
+// the socket is closed.
 func (c *gwConn) Close() error {
+	var err error
 	c.once.Do(func() {
 		if c.timer != nil {
 			c.timer.Stop()
 		}
+		c.closed.Store(true)
+		err = c.Conn.NetConn().Close()
 		c.g.forget(c)
 	})
-	return c.Conn.Close()
+	return err
 }
 
 type peerState struct {
@@ -166,7 +173,7 @@ type connKey struct{}
 
 // Serve runs the gateway until ctx ends (nil) or it cannot run (error).
 func (g *Gateway) Serve(ctx context.Context) error {
-	if err := os.MkdirAll(g.cfg.StateDir, 0o700); err != nil {
+	if err := ensureDir(g.cfg.StateDir); err != nil {
 		return err
 	}
 	release, err := acquireGatewayLock(g.cfg.StateDir)
@@ -304,12 +311,12 @@ func (g *Gateway) handshake(raw net.Conn, slots chan struct{}) {
 	}
 	raw.SetDeadline(time.Time{})
 	c := &gwConn{Conn: tc, g: g, info: info}
-	if !g.admit(c) {
-		tc.Close()
-		return
-	}
 	if info.unenrolled {
 		c.timer = time.AfterFunc(g.cfg.Limits.UnenrolledLife, func() { c.Close() })
+	}
+	if !g.admit(c) {
+		c.Close()
+		return
 	}
 	select {
 	case g.accepted <- c:
@@ -325,6 +332,9 @@ func (g *Gateway) admit(c *gwConn) bool {
 	case <-g.quit:
 		return false
 	default:
+	}
+	if c.closed.Load() {
+		return false
 	}
 	if c.info.unenrolled {
 		if g.unen >= g.cfg.Limits.MaxUnenrolled {
@@ -539,7 +549,7 @@ func acquireGatewayLock(stateDir string) (func(), error) {
 // an exclusive create (a temp file hard-linked into place, so the file never
 // exists empty) and keeping it across restarts.
 func EnsureToken(stateDir string) (string, error) {
-	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+	if err := ensureDir(stateDir); err != nil {
 		return "", err
 	}
 	path := filepath.Join(stateDir, "gateway.token")
