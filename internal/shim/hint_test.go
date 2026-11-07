@@ -165,7 +165,7 @@ func TestAcceptedNativeSendWarnsOneWay(t *testing.T) {
 	if res["state"] != "accepted" {
 		t.Fatalf("send %v", res)
 	}
-	if h, _ := res["hint"].(string); !strings.Contains(h, "one way") || !strings.Contains(h, "wait on that session's user") {
+	if h, _ := res["hint"].(string); !strings.Contains(h, "one way") || !strings.Contains(h, "wait on that session's user") || !strings.Contains(h, "cannot answer with reply") || !strings.Contains(h, "agent_id") {
 		t.Fatalf("hint %q", h)
 	}
 }
