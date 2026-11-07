@@ -99,7 +99,7 @@ func (h *Harness) Discover(ctx context.Context) ([]harness.Session, error) {
 func (h *Harness) Notice() string { return Preamble }
 
 func (h *Harness) Render(m msg.Message, from harness.Identity) any {
-	return Render(m, from.Verified, from.Harness)
+	return Render(m, from.Verified, from.Harness, "")
 }
 
 func (h *Harness) NativeReplyAddress(harness.Self) string { return "" }
