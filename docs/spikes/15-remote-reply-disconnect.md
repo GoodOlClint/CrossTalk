@@ -19,7 +19,7 @@ Setup common to all cases: host A and host B each have their own state dir, one 
 |---|---|---|
 | C1 kill after injection, before the response | `TestKillAfterInjectionBeforeResponse` | Bob's fake harness has exactly one write when the gateway is killed, and the gateway never wrote a response to alice's connection |
 | C2 the asker shows `unknown` | `TestAskerShowsUnknown` | Alice's production send path (`wire.SendTask`) returns state `unknown` for the ask, not `accepted`, `unreachable` or `rejected` |
-| C3 the retry injects once | `TestRetryInjectsOnce` | After the gateway restarts, the same message_id is sent again; the answer is accepted as a duplicate and bob's harness still has exactly one write and one dedupe record |
+| C3 the retry injects once | `TestRetryInjectsOnce` | After the gateway restarts, the same message_id is sent again; the answer is accepted as a duplicate and bob's harness still has exactly one write (pre-registered "and one dedupe record" superseded: that count does not discriminate, see C3b in Results) |
 | C4 the reply reaches the original asker | `TestReplyReachesOriginalAsker` | Bob's `reply` returns `accepted`; alice's harness has exactly one write, with `in_reply_to` equal to the ask's message_id; alice's journal has the receipt record |
 | C5a the reply never reaches a name reuser, both sessions live | `TestReplyNeverReachesNameReuser` | A second session named `alice` on host A (another agent_id) has zero harness writes; the original alice has one |
 | C5b the reply never reaches a name reuser, original gone | `TestReplyToGoneAskerNotRedirected` | The original alice is closed and a new `alice` runs; bob's reply is not `accepted`, is not journaled delivered, and the new alice has zero writes |
