@@ -634,6 +634,11 @@ func (h *handler) SendMessage(ctx context.Context, req *sdk.SendMessageRequest) 
 	if req.Message.TaskID != "" {
 		return h.continuation(ctx, snd, m, wire, wait)
 	}
+	if hc, ok := s.cfg.Receiver.(interface {
+		IDHeldByOther(senderKey, messageID string) bool
+	}); ok && hc.IDHeldByOther(snd.Key(), m.MessageID) {
+		return nil, rejection(m.MessageID, receiver.ReasonIDInUse)
+	}
 	if m.ContextID == "" {
 		m.ContextID = m.MessageID
 		wire.ContextID = m.ContextID

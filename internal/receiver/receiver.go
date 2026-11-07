@@ -72,6 +72,9 @@ type Sender struct {
 	HostAlias string
 }
 
+// Key is the dedupe, receipt and route key of the sender.
+func (s Sender) Key() string { return s.key() }
+
 func (s Sender) remote() bool { return s.Host != "" }
 
 // registered reports a sender that is a registered agent of this host. A
@@ -593,6 +596,13 @@ func (r *Receiver) storeMessage(key string, m msg.Message, state string) {
 // journaled, so a successful cancel means no harness write (§5 C5).
 func (r *Receiver) Cancel(messageID string) (bool, error) {
 	return r.j.Cancel(messageID)
+}
+
+// IDHeldByOther reports whether messageID is already held by a sender other
+// than the one whose key is senderKey; the A2A ingress asks before it
+// publishes a task, since reply and task lookups select by message_id.
+func (r *Receiver) IDHeldByOther(senderKey, messageID string) bool {
+	return r.j.IDHeldByOther(senderKey, messageID)
 }
 
 // CancelFrom is Cancel in the namespace of the sender whose key is senderKey.

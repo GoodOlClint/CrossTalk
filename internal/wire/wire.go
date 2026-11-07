@@ -105,6 +105,10 @@ func (r agentReceiver) Cancel(messageID string) (bool, error) {
 	return r.st.Receiver().Cancel(messageID)
 }
 
+func (r agentReceiver) IDHeldByOther(senderKey, messageID string) bool {
+	return r.st.Receiver().IDHeldByOther(senderKey, messageID)
+}
+
 func (r agentReceiver) CancelFrom(senderKey, messageID string) (bool, error) {
 	return r.st.Receiver().CancelFrom(senderKey, messageID)
 }

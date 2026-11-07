@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
-	"fmt"
 	"strings"
 	"testing"
 
@@ -399,25 +398,34 @@ func TestDispatchClaimKeyedBySender(t *testing.T) {
 
 	cl, ctx := e.remote(gwHdrs(hostA, "desk", localID, "alice", registry.RolePrimary))
 	rm := &sdk.Message{ID: m.MessageID, Role: sdk.MessageRoleUser, Parts: sdk.ContentParts{sdk.NewTextPart("remote ask, same message_id")}, Metadata: map[string]any{MetaKey: map[string]any{"kind": "ask"}}}
-	task, err := send(t, cl, ctx, rm, false)
-	if err != nil {
-		t.Fatal(err)
+	paused := make(chan struct{})
+	e.srv.beforeReceive = func(string) { <-paused }
+	defer close(paused)
+	_, err := send(t, cl, ctx, rm, true)
+	var se *sdk.Error
+	if !errors.As(err, &se) {
+		t.Fatalf("remote ask reusing a local message_id: %v, want a JSON-RPC rejection", err)
 	}
-	if _, reason := taskReasonOf(task); task.Status.State != sdk.TaskStateFailed || reason != receiver.ReasonIDInUse {
-		t.Fatalf("remote ask reusing a local message_id: task %s reason %q, want failed/%s (not %s)", task.Status.State, reason, receiver.ReasonIDInUse, receiver.ReasonDuplicateDispatch)
+	if ct, _ := se.Details[MetaKey].(map[string]any); ct["reason"] != receiver.ReasonIDInUse {
+		t.Fatalf("details %v, want reason %s (not %s)", se.Details, receiver.ReasonIDInUse, receiver.ReasonDuplicateDispatch)
+	}
+	if _, _, known := e.srv.AskOpen(m.MessageID); known {
+		t.Fatal("a task was published for the contested message_id")
+	}
+	if err := e.srv.CompleteAsk(m.MessageID, "secret answer"); !errors.Is(err, ErrNoSuchAsk) {
+		t.Fatalf("CompleteAsk of the local message_id found a task: %v", err)
+	}
+	if !e.rcv.RouteOpen(m.MessageID) {
+		t.Fatal("the local message lost its reply route")
 	}
 	if n := writesFor(e.fake, m.MessageID); n != 1 {
 		t.Fatalf("injects %d, want only the local one", n)
-	}
-	e.srv.CompleteAsk(m.MessageID, "secret answer")
-	got, err := cl.GetTask(ctx, &sdk.GetTaskRequest{ID: task.ID})
-	if err != nil || strings.Contains(fmt.Sprintf("%+v", got), "secret answer") {
-		t.Fatalf("remote task after the local reply: %+v %v", got, err)
 	}
 	if got := dedupeSenders(t, e.j, m.MessageID); len(got) != 1 || got[0] != localID {
 		t.Fatalf("dedupe senders %q, want only the local sender", got)
 	}
 
+	e.srv.beforeReceive = nil
 	own := textMsg("remote, own id", nil)
 	first, err := send(t, cl, ctx, own, false)
 	if err != nil || first.Status.State != sdk.TaskStateCompleted {

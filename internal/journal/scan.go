@@ -39,3 +39,16 @@ func (j *Journal) Records() ([]Record, error) {
 	}
 	return rs, err
 }
+
+// IDHeldByOther reports whether a sender other than sender has a dedupe record
+// for messageID.
+func (j *Journal) IDHeldByOther(sender, messageID string) bool {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	for s := range j.idSenders[messageID] {
+		if s != sender {
+			return true
+		}
+	}
+	return false
+}
