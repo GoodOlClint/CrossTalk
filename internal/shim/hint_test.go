@@ -227,3 +227,36 @@ func TestReplyHintSeparatesPreBindFromUnknownID(t *testing.T) {
 		}
 	}
 }
+
+func TestUnreachableCodexWithoutEndpointHintsConfigOverride(t *testing.T) {
+	w := newWorld(t)
+	alice := w.claude(4001, "sess-alice", "alice")
+	w.codex.addThread("T-bob", "bob")
+	w.codex.addThread("T-eve", "eve")
+	w.codex.SetBinding(adapter.Binding{Harness: adapter.Codex, SessionRef: "T-bob"})
+	na := w.node(alice.pid, w.lb, nil)
+	nb := w.node(1, w.lb, nil)
+	ne := w.node(1, w.lb, nil)
+	nb.ok(thread("T-bob"), "receive_message", map[string]any{})
+	ne.ok(thread("T-eve"), "receive_message", map[string]any{})
+	w.codex.SetDefaultInject(adapter.Outcome{State: adapter.Unreachable, Err: errors.New("down")})
+
+	res := na.ok(nil, "send_message", send("bob", "hi"))
+	if res["state"] != "unreachable" {
+		t.Fatalf("send %v", res)
+	}
+	h, _ := res["hint"].(string)
+	for _, want := range []string{"-c", "config.toml", "send but not receive"} {
+		if !strings.Contains(h, want) {
+			t.Fatalf("hint %q lacks %q", h, want)
+		}
+	}
+
+	res = na.ok(nil, "send_message", send("eve", "hi"))
+	if res["state"] != "unreachable" {
+		t.Fatalf("send %v", res)
+	}
+	if h, _ := res["hint"].(string); strings.Contains(h, "config.toml") {
+		t.Fatalf("hint on a bound endpoint %q", h)
+	}
+}
