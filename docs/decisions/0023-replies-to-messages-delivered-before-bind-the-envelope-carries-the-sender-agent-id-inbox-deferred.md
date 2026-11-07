@@ -16,7 +16,7 @@ The first draft of this ADR (PR #58) designed a pre-bind inbox that would make s
 ## Decision
 
 1. When the sender's shim injects a message into a session with no CrossTalk binding (the `tgt.Native` branch of `deliver`), the delivered message carries the sender's agent_id next to its name: in the Claude envelope as a `from-agent-id` attribute, in the Codex rendering as a `from_agent_id` field. Messages delivered through a receiver's own ingress are unchanged; they already have a reply route.
-2. The pre-bind hint that `reply` returns since PR #57 tells the model to `send_message` to the sender's agent_id shown in that message (`from-agent-id` in Claude, `from_agent_id` in Codex), not to the sender's name; the hint reads the same in both harnesses.
+2. The sender's one-way hint on such a delivery says the recipient cannot answer with `reply`, so any answer comes as a new message addressed to the sender's agent_id. The pre-bind hint that `reply` returns since PR #57 tells the model to `send_message` to the sender's agent_id shown in that message (`from-agent-id` in Claude, `from_agent_id` in Codex), not to the sender's name; the hint reads the same in both harnesses.
 3. Nothing else changes: no inbox, no new journal or route records, no routing change, no change to the MCP tool surface (design §8). `reply` to such a message still returns `no_such_message`.
 
 Accepted loss: the answer reaches the sender as a new inform, not threaded as a reply to its message; the sender's ask machinery is not involved anyway, because only informs reach an unbound session.
@@ -32,7 +32,7 @@ Accepted loss: the answer reaches the sender as a new inform, not threaded as a 
 - The agent_id in the envelope is display text, like `from-name`: it is written by the sending shim, and the receiver's shim never reads it as sender identity (ADR 0004). A model that uses it only addresses a `send_message`; the receiving shim authenticates that send from transport as for any other.
 - A sender that is gone by the time the answer is sent makes the `send_message` return `no_such_agent`, as for a name; it never reaches a different session.
 - Design §5 (native delivery) and §12 S5 gain the attribute and the hint wording in the implementing commit.
-- Tests that gate this ADR: a native delivery's Claude envelope and Codex rendering carry the sender's agent_id; a delivery through a receiver's own ingress does not; the pre-bind hint points at the sender's agent_id in the message.
+- Tests that gate this ADR: the Claude envelope and the Codex rendering carry the sender's agent_id when given one and omit it otherwise (`TestEnvelopeCarriesSenderAgentID`, `TestRenderCarriesSenderAgentID`); a native send passes the sender's agent_id to the adapter (`TestSendNativeClaudeThroughSocket`, `TestSendNativeCodexThroughAdapter`); the pre-bind hint points at it and the unbound hint does not (`TestReplyHintSeparatesPreBindFromUnknownID`); the sender's one-way hint says the answer cannot come through `reply` (`TestAcceptedNativeSendWarnsOneWay`). A delivery through a receiver's own ingress leaves the field empty because the receiver builds its `Delivery` without it; no test pins that.
 - Implementation commits carry `Provisional-ADR: 0023`.
 
 ## Deferred: pre-bind inbox
