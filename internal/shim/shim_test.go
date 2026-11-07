@@ -175,6 +175,9 @@ func TestSendNativeClaudeThroughSocket(t *testing.T) {
 	if len(got) != 1 || !strings.Contains(got[0], from) || !strings.Contains(got[0], `from-name="alice"`) || !strings.Contains(got[0], "hello &lt;b>") {
 		t.Fatalf("bob got %q, want envelope %s", got, from)
 	}
+	if !strings.Contains(got[0], `from-agent-id="`+alice.agentID()+`"`) {
+		t.Fatalf("envelope lacks sender agent_id: %q", got[0])
+	}
 	if bob.tokens[0] != bob.token {
 		t.Fatalf("auth token %q", bob.tokens[0])
 	}
@@ -217,6 +220,9 @@ func TestSendNativeCodexThroughAdapter(t *testing.T) {
 	ws := w.codex.Writes()
 	if len(ws) != 1 || ws[0].SessionRef != "T-cx" || ws[0].Delivery.Mode != msg.NextTurn || ws[0].Message.From != "alice" {
 		t.Fatalf("codex writes %+v", ws)
+	}
+	if ws[0].Delivery.SenderAgentID != alice.agentID() {
+		t.Fatalf("SenderAgentID %q, want %q", ws[0].Delivery.SenderAgentID, alice.agentID())
 	}
 }
 

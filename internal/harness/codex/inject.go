@@ -50,7 +50,7 @@ func (a *Adapter) Inject(ctx context.Context, m msg.Message, d adapter.Delivery)
 	if mode == "" {
 		mode = m.Delivery
 	}
-	text := Render(m, d.VerifiedSender, d.SenderHarness)
+	text := Render(m, d.VerifiedSender, d.SenderHarness, d.SenderAgentID)
 	if mode == msg.NextTurn || !d.VerifiedSender {
 		return appendOutput(ctx, c, thread, text)
 	}

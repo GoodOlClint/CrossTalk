@@ -36,9 +36,9 @@ const nudgeText = "You have sent this peer %d messages since this server started
 const (
 	hintNativeReachable   = "This session has no CrossTalk binding yet, so it takes no ask or command. send_message with the default kind reaches it; if CrossTalk is installed there, its first CrossTalk call binds it, and then ask works."
 	hintNativeUnreachable = "This session has no CrossTalk binding yet and its harness reports it unreachable, so nothing can reach it now. Check list_agents later; if CrossTalk is installed there, its first CrossTalk call binds it, and then ask works."
-	hintNativeOneWay      = "Delivered one way to a session with no CrossTalk binding. An answer may never come, or may wait on that session's user."
+	hintNativeOneWay      = "Delivered one way to a session with no CrossTalk binding. It cannot answer with reply, so any answer comes as a new message, addressed to your agent_id, and may never come or may wait on that session's user."
 	hintNoRouteUnbound    = "This session has no message with that id: check the message_id against receive_message. Use send_message to the sender."
-	hintNoRoutePreBind    = "That message_id may predate this session's binding, so it may never have reached this session, or its record may have been trimmed. If unsure, check the message_id against receive_message; if it is right, use send_message to the sender."
+	hintNoRoutePreBind    = "That message_id may predate this session's binding, so it may never have reached this session, or its record may have been trimmed. If unsure, check the message_id against receive_message; if it is right, use send_message to the agent_id the message shows as from-agent-id (Claude) or from_agent_id (Codex), or to the sender's name if it shows none."
 	hintNoRouteExpired    = "That inform has no open reply route: it was not delivered, it was already answered, or it is over an hour old. Use send_message to the sender."
 	hintCodexNoEndpoint   = "This Codex session has no app-server endpoint CrossTalk can reach, usually because it was launched with a -c config override, so it can send but not receive. Tell its user to restart it without -c and put the setting in ~/.codex/config.toml."
 	hintAmbiguousName     = "Several sessions carry this name. Find the one you mean in list_agents and address it by agent_id."
@@ -286,7 +286,7 @@ func (st *AgentState) deliver(ctx context.Context, m msg.Message) mcpserver.Resu
 		res.State, res.Reason = adapter.Unreachable, receiver.ReasonJournal
 		return res
 	}
-	state, err = ad.Inject(ctx, m, adapter.Delivery{Mode: m.Delivery, Target: b, VerifiedSender: true, SenderHarness: string(st.agent.Harness())})
+	state, err = ad.Inject(ctx, m, adapter.Delivery{Mode: m.Delivery, Target: b, VerifiedSender: true, SenderHarness: string(st.agent.Harness()), SenderAgentID: st.agent.ID()})
 	if !state.Injectable() {
 		state = adapter.Unknown
 	}
