@@ -479,6 +479,10 @@ func (g *Gateway) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
+	if r.Method == http.MethodPost && r.URL.Path == "/v1/pair" {
+		g.handlePair(w, r, c)
+		return
+	}
 	done, status := g.enter(c.info.fp)
 	if status != 0 {
 		http.Error(w, http.StatusText(status), status)

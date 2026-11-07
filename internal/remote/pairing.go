@@ -248,13 +248,16 @@ func validPeerAddress(s string) (string, error) {
 // redeemPairing runs under pending.lock from the read of pending.json to the
 // end of the peers.json write (lock order: pending.lock, then peers.lock). It
 // removes the entry before it enrolls the client, so a crash between the two
-// burns the token and enrolls nobody. Any refusal leaves both files alone.
-func redeemPairing(stateDir string, peers *Peers, now time.Time, req pairRequest, clientFP, serverFP string) error {
+// burns the token and enrolls nobody. Any refusal leaves both files alone. The
+// clock is read after pending.lock is held, and the alias check, the entry
+// removal and the peers write all happen under peers.lock.
+func redeemPairing(stateDir string, peers *Peers, clock func() time.Time, req pairRequest, clientFP, serverFP string) error {
 	unlock, err := lockPending(stateDir)
 	if err != nil {
 		return err
 	}
 	defer unlock()
+	now := clock()
 	es, err := loadPendingOrEmpty(stateDir)
 	if err != nil {
 		return err
@@ -291,19 +294,13 @@ func redeemPairing(stateDir string, peers *Peers, now time.Time, req pairRequest
 	if err != nil {
 		return fmt.Errorf("%w: address: %v", errPairBadField, err)
 	}
-	cur, err := peers.List()
-	if err != nil {
-		return err
+	err = peers.UpsertThen(Peer{Alias: alias, Address: addr, Fingerprint: clientFP, PairedAt: now.UTC(), PairingID: e.ID}, func() error {
+		return savePending(stateDir, liveOnly(append(es[:at:at], es[at+1:]...), now))
+	})
+	if errors.Is(err, ErrAliasTaken) {
+		return fmt.Errorf("%w: %q", errPairAlias, alias)
 	}
-	for _, p := range cur {
-		if p.Alias == alias && p.Fingerprint != clientFP {
-			return fmt.Errorf("%w: %q", errPairAlias, alias)
-		}
-	}
-	if err := savePending(stateDir, liveOnly(append(es[:at:at], es[at+1:]...), now)); err != nil {
-		return err
-	}
-	return peers.Upsert(Peer{Alias: alias, Address: addr, Fingerprint: clientFP, PairedAt: now.UTC()})
+	return err
 }
 
 // pairAllowed counts one attempt against the gateway-wide interval. A refused
@@ -331,7 +328,7 @@ func (g *Gateway) handlePair(w http.ResponseWriter, r *http.Request, c *gwConn) 
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	err := redeemPairing(g.cfg.StateDir, g.cfg.Peers, g.cfg.Now(), req, c.info.fp, g.cfg.Host.Fingerprint)
+	err := redeemPairing(g.cfg.StateDir, g.cfg.Peers, g.cfg.Now, req, c.info.fp, g.cfg.Host.Fingerprint)
 	status := http.StatusOK
 	switch {
 	case err == nil:
@@ -468,14 +465,13 @@ type WaitOptions struct {
 	StateDir string
 	Peers    *Peers
 	ID       string
-	Since    time.Time
 	Poll     time.Duration
 	Now      func() time.Time
 }
 
 // WaitPaired waits for the entry to be redeemed, to expire, or for ctx to end;
 // the last two remove the entry. Redemption is seen as the entry leaving
-// pending.json with a peer whose paired_at is not before Since.
+// pending.json with a peer carrying its pairing id.
 func WaitPaired(ctx context.Context, o WaitOptions) (Peer, error) {
 	if o.Poll <= 0 {
 		o.Poll = 500 * time.Millisecond
@@ -506,7 +502,7 @@ func WaitPaired(ctx context.Context, o WaitOptions) (Peer, error) {
 				return Peer{}, err
 			}
 			for _, p := range ps {
-				if !p.PairedAt.Before(o.Since) {
+				if p.PairingID == o.ID {
 					return p, nil
 				}
 			}

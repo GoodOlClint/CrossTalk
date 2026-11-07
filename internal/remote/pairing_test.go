@@ -312,7 +312,7 @@ func TestRedeemChild(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 	req := pairRequest{ID: os.Getenv("RC_ID"), Alias: "peer-" + fp[:6], Address: "127.0.0.1:7746", MAC: pairMAC(os.Getenv("RC_SECRET"), fp, os.Getenv("RC_SERVER"))}
-	if err := redeemPairing(state, NewPeers(cfg), time.Now(), req, fp, os.Getenv("RC_SERVER")); err != nil {
+	if err := redeemPairing(state, NewPeers(cfg), time.Now, req, fp, os.Getenv("RC_SERVER")); err != nil {
 		fmt.Println("refused", err)
 		return
 	}
@@ -421,13 +421,15 @@ func TestUnenrolledOnlyPair(t *testing.T) {
 	q := startPairGateway(t, func(c *GatewayConfig) { c.Handler = nil })
 	pinned := q.newClient(true)
 	pc := q.httpClient(pinned)
-	pending, _ := q.files()
-	if st, _ := q.post(pc, q.good(pinned.Fingerprint, "beta")); st != http.StatusNotFound {
-		t.Fatalf("a pinned peer on /v1/pair: %d, want the existing 404", st)
+	bad := q.good(pinned.Fingerprint, "beta")
+	bad.ID = "AAAAAAAAAAAAAAAAAAAAAA"
+	pending, peers := q.files()
+	if st, _ := q.post(pc, bad); st != http.StatusNotFound {
+		t.Fatalf("a pinned peer on /v1/pair with an unknown id: %d, want 404", st)
 	}
-	np, _ := q.files()
-	if !bytes.Equal(pending, np) {
-		t.Fatal("a pinned peer's /v1/pair changed pending.json")
+	q.mustBeUnchanged(pending, peers, "a pinned peer's unknown id")
+	if st := q.get(pc, "GET", "/v1/pair"); st != http.StatusNotFound {
+		t.Fatalf("a pinned peer on GET /v1/pair: %d, want the handler's 404", st)
 	}
 }
 
@@ -670,21 +672,47 @@ func TestPairAliasOverrideAndRepair(t *testing.T) {
 	if len(first) != 1 || first[0].Alias != "laptop" {
 		t.Fatalf("the pair-side alias must win over the announced one: %+v", first)
 	}
-	p.clk.Advance(time.Hour)
-	again, err := StartPairing(p.stateDir, p.clk.Now(), 10*time.Minute, "")
-	if err != nil {
+}
+
+func joinOpts(p *pairEnv, bhost Host, bpeers *Peers, alias string) JoinOptions {
+	return JoinOptions{
+		Host: bhost, Config: Config{Version: 1, Alias: alias, Bind: "127.0.0.1", Port: 7746}, Peers: bpeers,
+		Token:   PairToken{Address: "127.0.0.1", Port: p.gw.Addr().(*net.TCPAddr).Port, Fingerprint: p.host.Fingerprint, ID: p.entry.ID, Secret: p.entry.Secret},
+		Timeout: 5 * time.Second,
+	}
+}
+
+func TestPairAgainFromPinnedPeerUpdatesAndRepairs(t *testing.T) {
+	p := startPairGateway(t, nil)
+	bdir := newDir(t)
+	bhost, _ := LoadOrCreateHost(bdir)
+	bpeers := NewPeers(bdir)
+	if _, err := JoinGateway(context.Background(), joinOpts(p, bhost, bpeers, "beta")); err != nil {
 		t.Fatal(err)
 	}
-	p.entry = again
-	// x is pinned now; a re-pair of a pinned fingerprint goes straight to the handler, so redeem directly.
-	req := p.good(x.Fingerprint, "renamed")
-	req.Address = "127.0.0.1:9999"
-	if err := redeemPairing(p.stateDir, p.peers, p.clk.Now(), req, x.Fingerprint, p.host.Fingerprint); err != nil {
+	first := p.peerList()
+	if len(first) != 1 {
+		t.Fatalf("%+v", first)
+	}
+
+	// Half-pair: B lost its record of A; A still pins B. Pair and join again.
+	if err := bpeers.Remove("alpha"); err != nil {
 		t.Fatal(err)
+	}
+	p.clk.Advance(time.Hour)
+	var err error
+	if p.entry, err = StartPairing(p.stateDir, p.clk.Now(), 10*time.Minute, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := JoinGateway(context.Background(), joinOpts(p, bhost, bpeers, "beta2")); err != nil {
+		t.Fatalf("second join from a pinned peer: %v\nlogs:\n%s", err, p.logs)
+	}
+	if bl, _ := bpeers.List(); len(bl) != 1 || bl[0].Alias != "alpha" {
+		t.Fatalf("B did not get A back: %+v", bl)
 	}
 	second := p.peerList()
-	if len(second) != 1 || second[0].Alias != "renamed" || second[0].Address != "127.0.0.1:9999" || !second[0].PairedAt.After(first[0].PairedAt) {
-		t.Fatalf("re-pairing must update in place and refresh paired_at: %+v then %+v", first, second)
+	if len(second) != 1 || second[0].Alias != "beta2" || !second[0].PairedAt.After(first[0].PairedAt) || second[0].PairingID != p.entry.ID {
+		t.Fatalf("re-pairing must update in place: %+v then %+v", first, second)
 	}
 }
 
@@ -698,21 +726,28 @@ func TestWaitPaired(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	other, err := StartPairing(state, now, time.Minute, "")
+	if err != nil {
+		t.Fatal(err)
+	}
 	fp := strings.Repeat("cd", 32)
 	go func() {
 		time.Sleep(50 * time.Millisecond)
 		req := pairRequest{ID: e.ID, Alias: "beta", Address: "127.0.0.1:7746", MAC: pairMAC(e.Secret, fp, strings.Repeat("ef", 32))}
-		redeemPairing(state, peers, time.Now(), req, fp, strings.Repeat("ef", 32))
+		ofp := strings.Repeat("12", 32)
+		oreq := pairRequest{ID: other.ID, Alias: "other", Address: "127.0.0.1:7747", MAC: pairMAC(other.Secret, ofp, strings.Repeat("ef", 32))}
+		redeemPairing(state, peers, time.Now, oreq, ofp, strings.Repeat("ef", 32))
+		redeemPairing(state, peers, time.Now, req, fp, strings.Repeat("ef", 32))
 	}()
-	got, err := WaitPaired(context.Background(), WaitOptions{StateDir: state, Peers: peers, ID: e.ID, Since: now, Poll: 10 * time.Millisecond})
+	got, err := WaitPaired(context.Background(), WaitOptions{StateDir: state, Peers: peers, ID: e.ID, Poll: 10 * time.Millisecond})
 	if err != nil || got.Fingerprint != fp {
-		t.Fatalf("redeemed: %+v %v", got, err)
+		t.Fatalf("redeemed: %+v %v (another token's peer was redeemed first and must not be reported)", got, err)
 	}
 
 	e2, _ := StartPairing(state, now, time.Minute, "")
 	clk := &fakeClock{t: now}
 	go func() { time.Sleep(30 * time.Millisecond); clk.Advance(time.Hour) }()
-	if _, err := WaitPaired(context.Background(), WaitOptions{StateDir: state, Peers: peers, ID: e2.ID, Since: now, Poll: 10 * time.Millisecond, Now: clk.Now}); !errors.Is(err, ErrPairingExpired) {
+	if _, err := WaitPaired(context.Background(), WaitOptions{StateDir: state, Peers: peers, ID: e2.ID, Poll: 10 * time.Millisecond, Now: clk.Now}); !errors.Is(err, ErrPairingExpired) {
 		t.Fatalf("expired: %v", err)
 	}
 	if es, _ := loadPending(state); len(es) != 0 {
@@ -722,7 +757,7 @@ func TestWaitPaired(t *testing.T) {
 	e3, _ := StartPairing(state, now, time.Minute, "")
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() { time.Sleep(30 * time.Millisecond); cancel() }()
-	if _, err := WaitPaired(ctx, WaitOptions{StateDir: state, Peers: peers, ID: e3.ID, Since: now, Poll: 10 * time.Millisecond}); !errors.Is(err, context.Canceled) {
+	if _, err := WaitPaired(ctx, WaitOptions{StateDir: state, Peers: peers, ID: e3.ID, Poll: 10 * time.Millisecond}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("interrupted: %v", err)
 	}
 	if es, _ := loadPending(state); len(es) != 0 {
@@ -731,8 +766,8 @@ func TestWaitPaired(t *testing.T) {
 
 	e4, _ := StartPairing(state, now, time.Minute, "")
 	CancelPairing(state, e4.ID, now)
-	if _, err := WaitPaired(context.Background(), WaitOptions{StateDir: state, Peers: peers, ID: e4.ID, Since: now.Add(time.Hour), Poll: 10 * time.Millisecond}); !errors.Is(err, ErrPairingFailed) {
-		t.Fatalf("entry gone with no new peer: %v", err)
+	if _, err := WaitPaired(context.Background(), WaitOptions{StateDir: state, Peers: peers, ID: e4.ID, Poll: 10 * time.Millisecond}); !errors.Is(err, ErrPairingFailed) {
+		t.Fatalf("entry gone with an unrelated recent peer present: %v", err)
 	}
 }
 
@@ -772,5 +807,76 @@ func TestJoinRefusesWrongServerFingerprint(t *testing.T) {
 	}
 	if ps, _ := NewPeers(bdir).List(); len(ps) != 0 {
 		t.Fatalf("peers written: %+v", ps)
+	}
+}
+
+func TestRedeemExpiryReadAfterLock(t *testing.T) {
+	state := filepath.Join(t.TempDir(), "state")
+	cfg := newDir(t)
+	clk := &fakeClock{t: time.Date(2026, 11, 7, 12, 0, 0, 0, time.UTC)}
+	e, err := StartPairing(state, clk.Now(), time.Minute, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, client := strings.Repeat("ef", 32), strings.Repeat("cd", 32)
+	pending, _ := os.ReadFile(pendingPath(state))
+	unlock, err := lock(pendingDir(state), "pending.lock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := make(chan error, 1)
+	go func() {
+		req := pairRequest{ID: e.ID, Alias: "beta", Address: "127.0.0.1:7746", MAC: pairMAC(e.Secret, client, server)}
+		res <- redeemPairing(state, NewPeers(cfg), clk.Now, req, client, server)
+	}()
+	time.Sleep(150 * time.Millisecond)
+	clk.Advance(time.Hour)
+	unlock()
+	if err := <-res; !errors.Is(err, errPairExpired) {
+		t.Fatalf("a redemption queued before expiry and run after it: %v, want expired", err)
+	}
+	after, _ := os.ReadFile(pendingPath(state))
+	if !bytes.Equal(pending, after) {
+		t.Fatal("pending.json changed")
+	}
+	if _, err := os.Stat(filepath.Join(cfg, "peers.json")); err == nil {
+		t.Fatal("peers.json written")
+	}
+}
+
+func TestRedeemAliasRaceKeepsEntry(t *testing.T) {
+	state := filepath.Join(t.TempDir(), "state")
+	cfg := newDir(t)
+	if err := ensureDir(cfg); err != nil {
+		t.Fatal(err)
+	}
+	peers := NewPeers(cfg)
+	e, err := StartPairing(state, time.Now(), time.Minute, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, client := strings.Repeat("ef", 32), strings.Repeat("cd", 32)
+	pending, _ := os.ReadFile(pendingPath(state))
+	unlock, err := lock(cfg, "peers.lock")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res := make(chan error, 1)
+	go func() {
+		req := pairRequest{ID: e.ID, Alias: "beta", Address: "127.0.0.1:7746", MAC: pairMAC(e.Secret, client, server)}
+		res <- redeemPairing(state, peers, time.Now, req, client, server)
+	}()
+	time.Sleep(150 * time.Millisecond)
+	rival := fmt.Sprintf(`{"version":1,"peers":[{"alias":"beta","address":"192.0.2.1:7745","fingerprint":%q,"paired_at":"2026-11-07T12:00:00Z"}]}`, strings.Repeat("99", 32))
+	if err := writeAtomic(filepath.Join(cfg, "peers.json"), []byte(rival), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	unlock()
+	if err := <-res; !errors.Is(err, errPairAlias) {
+		t.Fatalf("alias claimed by a competing writer: %v, want the alias conflict", err)
+	}
+	after, _ := os.ReadFile(pendingPath(state))
+	if !bytes.Equal(pending, after) {
+		t.Fatalf("the token was burnt: %s", after)
 	}
 }

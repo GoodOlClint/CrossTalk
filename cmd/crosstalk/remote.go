@@ -153,8 +153,7 @@ func runRemotePair(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "crosstalk remote pair: no gateway running on this host; start one with: crosstalk remote serve")
 		return 1
 	}
-	start := time.Now()
-	entry, err := remote.StartPairing(state, start, remote.PairTTL, alias)
+	entry, err := remote.StartPairing(state, time.Now(), remote.PairTTL, alias)
 	if err != nil {
 		fmt.Fprintf(stderr, "crosstalk remote pair: %v\n", err)
 		return 1
@@ -163,7 +162,7 @@ func runRemotePair(args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintf(stderr, "run crosstalk remote join on the other host and paste this token; it works once and expires in %d minutes (Ctrl-C cancels)\n", int(remote.PairTTL/time.Minute))
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	p, err := remote.WaitPaired(ctx, remote.WaitOptions{StateDir: state, Peers: remote.NewPeers(dir), ID: entry.ID, Since: start})
+	p, err := remote.WaitPaired(ctx, remote.WaitOptions{StateDir: state, Peers: remote.NewPeers(dir), ID: entry.ID})
 	if err != nil {
 		fmt.Fprintf(stderr, "crosstalk remote pair: %v\n", pairWaitError(err))
 		return 1
