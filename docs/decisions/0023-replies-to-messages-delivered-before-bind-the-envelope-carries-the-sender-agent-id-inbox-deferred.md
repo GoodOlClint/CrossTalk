@@ -31,7 +31,7 @@ Accepted loss: the answer reaches the sender as a new inform, not threaded as a 
 
 - The agent_id in the envelope is display text, like `from-name`: it is written by the sending shim, and the receiver's shim never reads it as sender identity (ADR 0004). A model that uses it only addresses a `send_message`; the receiving shim authenticates that send from transport as for any other.
 - A sender that is gone by the time the answer is sent makes the `send_message` return `no_such_agent`, as for a name; it never reaches a different session.
-- Design §5 (native delivery) and §12 S5 gain the attribute and the hint wording in the implementing commit.
+- Design §12 S5 (native targets) records the attribute. §4 (the normalized message) and §5 (receiver ingress) do not change: the agent_id is added when the sender's shim renders a native delivery, not carried in the message record or read by any ingress.
 - Tests that gate this ADR: the Claude envelope and the Codex rendering carry the sender's agent_id when given one and omit it otherwise (`TestEnvelopeCarriesSenderAgentID`, `TestRenderCarriesSenderAgentID`); a native send passes the sender's agent_id to the adapter (`TestSendNativeClaudeThroughSocket`, `TestSendNativeCodexThroughAdapter`); the pre-bind hint points at it and the unbound hint does not (`TestReplyHintSeparatesPreBindFromUnknownID`); the sender's one-way hint says the answer cannot come through `reply` (`TestAcceptedNativeSendWarnsOneWay`). A delivery through a receiver's own ingress leaves the field empty because the receiver builds its `Delivery` without it; no test pins that.
 - Implementation commits carry `Provisional-ADR: 0023`.
 
