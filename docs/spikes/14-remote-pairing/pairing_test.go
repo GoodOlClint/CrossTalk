@@ -142,6 +142,7 @@ func concurrent(t *testing.T, n int) {
 	var wg sync.WaitGroup
 	start := make(chan struct{})
 	errs := make([]error, n)
+	Writes.Store(0)
 	for i := range n {
 		wg.Add(1)
 		go func() {
@@ -168,6 +169,18 @@ func concurrent(t *testing.T, n int) {
 	if win < 0 || len(p) != 1 || p[0].FP != fpOf(fmt.Sprint("client", win)) {
 		t.Fatalf("winner %d peers %+v", win, p)
 	}
+	if w := Writes.Load(); w != 2 {
+		t.Fatalf("%d file writes in the race; only the winner's two (pending.json, peers.json) are allowed", w)
+	}
+	noPending(t, s)
+}
+
+func noPending(t *testing.T, s *Store) {
+	t.Helper()
+	var pend []Pending
+	if err := readJSON(s.path("pending.json"), &pend); err != nil || len(pend) != 0 {
+		t.Fatalf("the consumed token is back or pending.json is unreadable: %+v %v", pend, err)
+	}
 }
 
 func TestP4_ConcurrentRedemptionOneWinner(t *testing.T)   { concurrent(t, 2) }
@@ -189,20 +202,22 @@ func TestP4_ConcurrentRedemptionAcrossProcesses(t *testing.T) {
 		}
 		cmds[i] = c
 	}
-	won := 0
+	won, winner := 0, -1
 	for i := range n {
 		if err := cmds[i].Wait(); err != nil {
 			t.Fatalf("child %d: %v\n%s", i, err, outs[i].String())
 		}
 		if strings.Contains(outs[i].String(), "RESULT enrolled") {
 			won++
+			winner = i
 		} else if !strings.Contains(outs[i].String(), "RESULT unknown pairing id") {
 			t.Fatalf("child %d: %q", i, outs[i].String())
 		}
 	}
-	if p := s.Peers(); won != 1 || len(p) != 1 {
-		t.Fatalf("winners %d peers %+v", won, p)
+	if p := s.Peers(); won != 1 || len(p) != 1 || p[0].FP != fpOf(fmt.Sprint("proc", winner)) {
+		t.Fatalf("winners %d (process %d) peers %+v", won, winner, p)
 	}
+	noPending(t, s)
 }
 
 func TestHelperChild(t *testing.T) {
@@ -249,9 +264,22 @@ func fpState(cs *tls.ConnectionState) string {
 	return hex.EncodeToString(sum[:])
 }
 
+type verifyRec struct{ resumed, ok bool }
+
 type gw struct {
-	addr    string
-	handled atomic.Int64
+	addr     string
+	handled  atomic.Int64
+	mu       sync.Mutex
+	verified []verifyRec
+}
+
+func (g *gw) lastVerify() (verifyRec, bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if len(g.verified) == 0 {
+		return verifyRec{}, false
+	}
+	return g.verified[len(g.verified)-1], true
 }
 
 // newGateway: section 3.2 rules. recheck=false removes the per-request pin read; tickets=true re-enables session tickets.
@@ -261,7 +289,11 @@ func newGateway(t *testing.T, s *Store, srv host, recheck, tickets bool) *gw {
 	cfg := &tls.Config{Certificates: []tls.Certificate{srv.cert}, MinVersion: tls.VersionTLS13, ClientAuth: tls.RequireAnyClientCert,
 		SessionTicketsDisabled: !tickets, InsecureSkipVerify: true,
 		VerifyConnection: func(cs tls.ConnectionState) error {
-			if !s.Pinned(fpState(&cs)) {
+			ok := s.Pinned(fpState(&cs))
+			g.mu.Lock()
+			g.verified = append(g.verified, verifyRec{cs.DidResume, ok})
+			g.mu.Unlock()
+			if !ok {
 				return errors.New("not pinned")
 			}
 			return nil
@@ -383,6 +415,9 @@ func TestP6_ResumptionWouldStillBeRefusedByVerifyConnection(t *testing.T) {
 	_, _, _, err = get(t, c, g.addr)
 	if err == nil {
 		t.Fatal("resumed connection after unpair was served")
+	}
+	if v, ok := g.lastVerify(); !ok || !v.resumed || v.ok {
+		t.Fatalf("the post-unpair attempt must have reached VerifyConnection as a resumption and failed the pin check: %+v %v", v, ok)
 	}
 	t.Logf("client error: %v", err)
 	if g.handled.Load() != 2 {
