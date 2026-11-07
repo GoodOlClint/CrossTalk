@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -236,14 +237,29 @@ func TestConfigRejectsBadPersistedFiles(t *testing.T) {
 			t.Errorf("%s: err %v, want one naming %s", name, err, path)
 		}
 	}
-	if err := SaveConfig(dir, Config{Alias: "a", Bind: "0.0.0.0", Port: 1}); err == nil {
-		t.Error("SaveConfig accepted a wildcard bind")
-	}
 	if err := os.WriteFile(path, []byte(good), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := LoadConfig(dir); err != nil {
-		t.Errorf("an address not on any interface must stay loadable: %v", err)
+	for _, bind := range []string{"0.0.0.0", "::", "::ffff:0.0.0.0", "224.0.0.1"} {
+		if err := SaveConfig(dir, Config{Alias: "a", Bind: bind, Port: 1}); err == nil {
+			t.Errorf("SaveConfig accepted bind %s", bind)
+		}
+		if b, _ := os.ReadFile(path); string(b) != good {
+			t.Fatalf("a refused SaveConfig(%s) changed remote.json: %s", bind, b)
+		}
+	}
+	old, oldErr := InterfaceAddrs, error(nil)
+	InterfaceAddrs = func() ([]net.Addr, error) { return nil, oldErr }
+	defer func() { InterfaceAddrs = old }()
+	offline := strings.Replace(good, "127.0.0.1", "203.0.113.9", 1)
+	if err := os.WriteFile(path, []byte(offline), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if c, err := LoadConfig(dir); err != nil || c.Bind != "203.0.113.9" {
+		t.Errorf("an address on no interface must stay loadable: %+v, %v", c, err)
+	}
+	if _, err := ValidateBind("203.0.113.9", false); err == nil {
+		t.Error("ValidateBind accepted an off-interface address without force")
 	}
 }
 
