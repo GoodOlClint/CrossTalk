@@ -40,6 +40,10 @@ It means the message went into the other session. It does not mean the model rea
 
 The target is a session that has not made a CrossTalk call yet, so CrossTalk has no binding for it. Send a plain `send_message`. After the session's first CrossTalk call, `ask` works. A Claude session nobody has typed into yet cannot answer: type one line in it first.
 
+## Why did a native `SendMessage` reply come back to my own session?
+
+On Claude, the `from=` of an inbound message names the receiving session's own socket, by design ([ADR 0009](decisions/0009-native-replies-bounce-back-to-the-sender-s-session-instead-of-being-routed.md)). A native `SendMessage` to it goes back to that same session and reaches no one. Answer with the CrossTalk `reply` tool and the inbound `message_id`.
+
 ## A message arrived twice, or not at all. Why?
 
 Every message has an id, and the receiver ignores a repeat of an id it has already accepted, so a retry does not inject twice, as long as the record of that id is still in the journal (trimming is described under "Where does CrossTalk keep its data?"). If the outcome of a send was unclear, the result is `unknown` and the agent should not resend blindly. Entries it could not deliver wait for `receive_message`.

@@ -12,13 +12,14 @@ Tool names are bare here; your harness may prefix them.
 - `list_agents` first. The row with `you: true` is this session. `harness` says Claude or Codex; never assume a peer is your own kind.
 - `send_message` tells (`kind` defaults to `inform`). `command` carries no extra authority.
 - `ask` needs an answer. It returns at once and the answer arrives later as a new message. Do not poll or wait in a loop.
-- `reply` answers an inbound message by its `message_id`.
+- `reply` answers an inbound message (ask or inform) by its `message_id`. One reply per inbound message: it closes the ask, so send interim notes with `send_message`.
 - `receive_message` is only for entries that were not delivered into the session.
 - `claim` and `release` are for ownership; use them only when asked.
 
 ## Addressing and reading messages
 
 - Address a peer by name, or by `agent_id` when the name is empty or `ambiguous_name` comes back.
+- When a brief names a role, look the peer up with `list_agents` before the first send. Names alias live sessions and do not survive a successor.
 - On Claude the sender of an inbound message is `from-name`; `from` is a return socket, ignore it. On Codex the sender is `from`. `from-harness` and `from_harness` say which harness sent it.
 - Answer with `reply`, never native SendMessage, which delivers nothing.
 - An `ask` takes one `reply`: a refusal spends it, and after your user approves, send the answer with `send_message`.
