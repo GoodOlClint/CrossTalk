@@ -28,6 +28,7 @@ type AgentState struct {
 	binding adapter.Binding
 	harness harness.Harness
 	udsPath string
+	boundAt time.Time
 
 	rcv *receiver.Receiver
 	uds harness.Ingress
@@ -113,6 +114,7 @@ func (s *Shim) BindHarness(ctx context.Context, a *mcpserver.Agent) (adapter.Bin
 	}
 	st.harness = h
 	st.binding = b
+	st.boundAt = s.opt.Now()
 	s.mu.Lock()
 	if old := s.agents[a.ID()]; old != nil && old.started() {
 		s.mu.Unlock()

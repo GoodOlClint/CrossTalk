@@ -65,3 +65,19 @@ func NewUUIDv7() string {
 }
 
 func IsUUIDv7(s string) bool { return uuidV7RE.MatchString(s) }
+
+// UUIDv7Time returns the millisecond timestamp encoded in a version 7 UUID.
+func UUIDv7Time(s string) (time.Time, bool) {
+	if !IsUUIDv7(s) {
+		return time.Time{}, false
+	}
+	b, err := hex.DecodeString(s[0:8] + s[9:13])
+	if err != nil {
+		return time.Time{}, false
+	}
+	var ms int64
+	for _, c := range b {
+		ms = ms<<8 | int64(c)
+	}
+	return time.UnixMilli(ms), true
+}

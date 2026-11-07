@@ -2,6 +2,7 @@ package shim
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"sync"
@@ -187,5 +188,42 @@ func TestPulledMessageCarriesHarnessNotice(t *testing.T) {
 	e := es[0].(map[string]any)
 	if e["notice"] != codex.Preamble || !strings.Contains(e["text"].(string), "README") {
 		t.Fatalf("entry %v", e)
+	}
+}
+
+func uuidV7At(ts time.Time) string {
+	ms := uint64(ts.UnixMilli())
+	return fmt.Sprintf("%08x-%04x-7abc-8def-0123456789ab", ms>>16, ms&0xffff)
+}
+
+func TestReplyHintSeparatesPreBindFromUnknownID(t *testing.T) {
+	w := newWorld(t)
+	w.codex.addThread("T-bob", "bob")
+	t0 := time.Date(2026, 11, 3, 13, 0, 0, 0, time.UTC)
+	nb := w.node(1, w.lb, func(o *Options) { o.Now = func() time.Time { return t0.Add(500 * time.Microsecond) } })
+	nb.ok(thread("T-bob"), "receive_message", map[string]any{})
+	hint := func(id string) string {
+		_, out := nb.call(thread("T-bob"), "reply", map[string]any{"message_id": id, "text": "x"})
+		if out["reason"] != ReasonNoSuchMessage {
+			t.Fatalf("reply %v: %v", id, out)
+		}
+		h, _ := out["hint"].(string)
+		return h
+	}
+
+	pre := hint(uuidV7At(t0.Add(-time.Hour)))
+	if !strings.Contains(pre, "may predate this session's binding") || !strings.Contains(pre, "check the message_id") || !strings.Contains(pre, "send_message") {
+		t.Fatalf("pre-bind hint %q", pre)
+	}
+	for name, id := range map[string]string{
+		"newer":     uuidV7At(t0.Add(time.Hour)),
+		"same-ms":   uuidV7At(t0),
+		"malformed": "nope",
+		"v4":        "3f2b8c1e-5d4a-4b6f-9a7e-0123456789ab",
+	} {
+		h := hint(id)
+		if strings.Contains(h, "predate") || !strings.Contains(h, "check the message_id") || !strings.Contains(h, "send_message") {
+			t.Fatalf("%s hint %q", name, h)
+		}
 	}
 }
