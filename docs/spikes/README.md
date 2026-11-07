@@ -25,3 +25,4 @@ Status of captured frames: to be committed before `go mod init`. Until then the 
 
 - [11 harness landscape](11-harness-landscape.md) — which other harnesses can take in-session delivery; recommended early set OpenCode, Gemini CLI (+Qwen Code), Pi; ACP is not an attach surface.
 - [12 Antigravity CLI](12-antigravity-cli.md) — measured MCP identity, hook payloads, injection forms and Stop re-entry on agy 1.5.0; backs ADR 0012.
+- [15 remote reply across a disconnect (S4)](15-remote-reply-disconnect.md) — v0.2.0 spike: kill the target gateway after injection and before the response; the asker shows `unknown`, the retry injects once, the reply reaches the original asker and never a name reuser; backs plan section 8 and slice R8.
