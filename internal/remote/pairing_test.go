@@ -617,3 +617,160 @@ func TestPairRateLimited(t *testing.T) {
 		t.Fatalf("attempt one second after the first: %d %s, want 200", st, body)
 	}
 }
+
+func TestPairTokenRoundTrip(t *testing.T) {
+	fp := strings.Repeat("ab", 32)
+	id, _ := randB64(16)
+	sec, _ := randB64(32)
+	for _, addr := range []string{"192.168.1.20", "100.64.0.7", "fd7a:115c:a1e0::1"} {
+		in := PairToken{Address: addr, Port: 7745, Fingerprint: fp, ID: id, Secret: sec}
+		got, err := ParsePairToken(" " + in.String() + "\n")
+		if err != nil || got != in {
+			t.Fatalf("%s: %+v %v", addr, got, err)
+		}
+	}
+	good := PairToken{Address: "10.0.0.1", Port: 7745, Fingerprint: fp, ID: id, Secret: sec}.String()
+	for _, bad := range []string{
+		"", "hello", strings.Replace(good, "v1", "v2", 1), strings.Replace(good, ":7745:", ":0:", 1),
+		strings.Replace(good, "10.0.0.1", "0.0.0.0", 1), strings.Replace(good, fp, "xyz", 1),
+		good[:len(good)-3], strings.Replace(good, id, "short", 1),
+	} {
+		if _, err := ParsePairToken(bad); err == nil {
+			t.Errorf("accepted %q", bad)
+		}
+	}
+}
+
+func TestPairAliasCollisionKeepsEntry(t *testing.T) {
+	p := startPairGateway(t, nil)
+	other := p.newClient(true)
+	if err := p.peers.Upsert(Peer{Alias: "beta", Address: "192.0.2.9:7745", Fingerprint: other.Fingerprint}); err != nil {
+		t.Fatal(err)
+	}
+	x, c := p.open()
+	pending, peers := p.files()
+	if st, _ := p.post(c, p.good(x.Fingerprint, "beta")); st != http.StatusConflict {
+		t.Fatalf("alias held by another fingerprint: %d, want 409", st)
+	}
+	p.mustBeUnchanged(pending, peers, "an alias collision")
+	p.step()
+	if st, body := p.post(c, p.good(x.Fingerprint, "gamma")); st != http.StatusOK {
+		t.Fatalf("retry with another alias: %d %s", st, body)
+	}
+}
+
+func TestPairAliasOverrideAndRepair(t *testing.T) {
+	p := startPairGateway(t, nil)
+	p.entry, _ = StartPairing(p.stateDir, p.clk.Now(), 10*time.Minute, "laptop")
+	x, c := p.open()
+	if st, body := p.post(c, p.good(x.Fingerprint, "announced")); st != http.StatusOK {
+		t.Fatalf("%d %s", st, body)
+	}
+	first := p.peerList()
+	if len(first) != 1 || first[0].Alias != "laptop" {
+		t.Fatalf("the pair-side alias must win over the announced one: %+v", first)
+	}
+	p.clk.Advance(time.Hour)
+	again, err := StartPairing(p.stateDir, p.clk.Now(), 10*time.Minute, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.entry = again
+	// x is pinned now; a re-pair of a pinned fingerprint goes straight to the handler, so redeem directly.
+	req := p.good(x.Fingerprint, "renamed")
+	req.Address = "127.0.0.1:9999"
+	if err := redeemPairing(p.stateDir, p.peers, p.clk.Now(), req, x.Fingerprint, p.host.Fingerprint); err != nil {
+		t.Fatal(err)
+	}
+	second := p.peerList()
+	if len(second) != 1 || second[0].Alias != "renamed" || second[0].Address != "127.0.0.1:9999" || !second[0].PairedAt.After(first[0].PairedAt) {
+		t.Fatalf("re-pairing must update in place and refresh paired_at: %+v then %+v", first, second)
+	}
+}
+
+func TestWaitPaired(t *testing.T) {
+	state := filepath.Join(t.TempDir(), "state")
+	cfg := newDir(t)
+	peers := NewPeers(cfg)
+	now := time.Now()
+
+	e, err := StartPairing(state, now, time.Minute, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fp := strings.Repeat("cd", 32)
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		req := pairRequest{ID: e.ID, Alias: "beta", Address: "127.0.0.1:7746", MAC: pairMAC(e.Secret, fp, strings.Repeat("ef", 32))}
+		redeemPairing(state, peers, time.Now(), req, fp, strings.Repeat("ef", 32))
+	}()
+	got, err := WaitPaired(context.Background(), WaitOptions{StateDir: state, Peers: peers, ID: e.ID, Since: now, Poll: 10 * time.Millisecond})
+	if err != nil || got.Fingerprint != fp {
+		t.Fatalf("redeemed: %+v %v", got, err)
+	}
+
+	e2, _ := StartPairing(state, now, time.Minute, "")
+	clk := &fakeClock{t: now}
+	go func() { time.Sleep(30 * time.Millisecond); clk.Advance(time.Hour) }()
+	if _, err := WaitPaired(context.Background(), WaitOptions{StateDir: state, Peers: peers, ID: e2.ID, Since: now, Poll: 10 * time.Millisecond, Now: clk.Now}); !errors.Is(err, ErrPairingExpired) {
+		t.Fatalf("expired: %v", err)
+	}
+	if es, _ := loadPending(state); len(es) != 0 {
+		t.Fatalf("expired entry left behind: %+v", es)
+	}
+
+	e3, _ := StartPairing(state, now, time.Minute, "")
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { time.Sleep(30 * time.Millisecond); cancel() }()
+	if _, err := WaitPaired(ctx, WaitOptions{StateDir: state, Peers: peers, ID: e3.ID, Since: now, Poll: 10 * time.Millisecond}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("interrupted: %v", err)
+	}
+	if es, _ := loadPending(state); len(es) != 0 {
+		t.Fatalf("interrupted entry left behind: %+v", es)
+	}
+
+	e4, _ := StartPairing(state, now, time.Minute, "")
+	CancelPairing(state, e4.ID, now)
+	if _, err := WaitPaired(context.Background(), WaitOptions{StateDir: state, Peers: peers, ID: e4.ID, Since: now.Add(time.Hour), Poll: 10 * time.Millisecond}); !errors.Is(err, ErrPairingFailed) {
+		t.Fatalf("entry gone with no new peer: %v", err)
+	}
+}
+
+func TestGatewayRunning(t *testing.T) {
+	state := filepath.Join(t.TempDir(), "state")
+	if r, err := GatewayRunning(state); r || err != nil {
+		t.Fatalf("no state dir: %v %v", r, err)
+	}
+	e := startGateway(t, nil)
+	if r, err := GatewayRunning(e.stateDir); !r || err != nil {
+		t.Fatalf("running gateway: %v %v", r, err)
+	}
+	b, _ := os.ReadFile(filepath.Join(e.stateDir, "gateway.lock"))
+	if strings.TrimSpace(string(b)) != fmt.Sprint(os.Getpid()) {
+		t.Fatalf("the probe changed the recorded holder: %q", b)
+	}
+	e.stop()
+	if r, err := GatewayRunning(e.stateDir); r || err != nil {
+		t.Fatalf("stopped gateway: %v %v", r, err)
+	}
+}
+
+func TestJoinRefusesWrongServerFingerprint(t *testing.T) {
+	p := startPairGateway(t, nil)
+	bdir := newDir(t)
+	bhost, _ := LoadOrCreateHost(bdir)
+	_, err := JoinGateway(context.Background(), JoinOptions{
+		Host: bhost, Config: Config{Version: 1, Alias: "beta", Bind: "127.0.0.1", Port: 7746}, Peers: NewPeers(bdir),
+		Token:   PairToken{Address: "127.0.0.1", Port: p.gw.Addr().(*net.TCPAddr).Port, Fingerprint: strings.Repeat("00", 32), ID: p.entry.ID, Secret: p.entry.Secret},
+		Timeout: 5 * time.Second,
+	})
+	if err == nil || !strings.Contains(err.Error(), "fingerprint") {
+		t.Fatalf("join against a server that is not the token's: %v", err)
+	}
+	if es, _ := loadPending(p.stateDir); len(es) != 1 {
+		t.Fatalf("the secret was spent on a server that failed the pin: %+v", es)
+	}
+	if ps, _ := NewPeers(bdir).List(); len(ps) != 0 {
+		t.Fatalf("peers written: %+v", ps)
+	}
+}

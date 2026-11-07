@@ -41,3 +41,15 @@ func TestUpgradeFromBundledServerDocumented(t *testing.T) {
 		}
 	}
 }
+
+func TestSetupDocCoversPairing(t *testing.T) {
+	doc := repoFile(t, "docs/setup.md")
+	for _, want := range []string{
+		"crosstalk remote pair", "crosstalk remote join", "crosstalk-pair:v1:",
+		"Paste the token from the other host:", "stdin only", "expires after 10 minutes", "one pairing attempt per second",
+	} {
+		if !strings.Contains(doc, want) {
+			t.Errorf("setup.md lacks %q", want)
+		}
+	}
+}
