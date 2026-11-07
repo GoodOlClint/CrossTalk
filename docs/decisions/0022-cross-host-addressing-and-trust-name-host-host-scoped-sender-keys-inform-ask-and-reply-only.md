@@ -1,0 +1,44 @@
+# ADR 0022 — Cross-host addressing and trust: name@host, host-scoped sender keys, inform ask and reply only
+
+- **Status:** Provisional (operator 2026-11-06); planned for v0.2.0, not built
+- **Date:** 2026-11-06
+- **Deciders:** operator + council (Claude Opus 5.5 chair, two Codex advisors) + Claude (Opus 5.5)
+- **Context source:** council decision 2026-11-06 (`~/.claude/coordinators/archive/council-decision.md`); operator clarification 2026-11-06 on discovery; change plan [`docs/plans/release-0.2.0.md`](https://github.com/GoodOlClint/CrossTalk/blob/main/docs/plans/release-0.2.0.md)
+
+## Context
+
+With a gateway per host ([ADR 0021](0021-remote-transport-and-enrollment-a-user-started-per-host-gateway-with-pinned-mtls-and-two-sided-pairing.md)), messages cross machines, and today's identity rules do not separate machines. Names are unique per host only (`internal/registry/registry.go:59`), so two hosts may each have a `crosstalk-coordinator`. The receiver keys a sender by AgentID before Principal (`internal/receiver/receiver.go:61-68`, `internal/a2a/server.go:422-427`), and receipts and reply routes record the bare AgentID (`receiver.go:267`, `:291`), so a principal `remote:<host>` alone would let a paired host speak as a local agent or as an agent of a third host. The descriptor directory prunes any descriptor whose pid is not alive here (`registry.go:378`, `:411-427`), so remote agents cannot be written into it. The operator clarified that once two hosts are paired, `list_agents` must show the agent sessions on the other host, so a model can find them without knowing names in advance; only host discovery (suggesting machines to pair) is deferred.
+
+## Decision
+
+- **Addressing.** `to` accepts `name@host` or `agent_id@host`, `host` being a peer alias from this host's `peers.json` (default the short hostname, overridable at pairing). A bare name never leaves the host; when it matches nothing locally, the hint lists matching `name@host` rows. Local names may contain `@`, so an exact local match wins, a value is remote only when the part after its last `@` is a paired alias, both matching is `ambiguous_name`, and aliases may not contain `@`. A sender resolves a remote name to its agent_id before sending and then addresses, polls and keys everything by agent_id. Names stay any UTF-8, as locally. A remote sender appears to the receiving session as `name@alias`, the alias taken from the receiver's own pairing record.
+- **Principal and keys.** The principal of a remote request is the host, `remote:<fingerprint>`, from the TLS handshake, never from a header. `receiver.Sender` gains `Host` and `HostAlias`; for a remote sender `key()` and the SDK principal are `remote:<fingerprint>/<agent_id>`. Dedupe, receipts, routes and reply obligations record that key, so reply routes are keyed by (fingerprint, agent_id), survive gateway restart and alias change, and never reach a new session that reuses the name. Which agent of a host sent a message is attested by that host, not proven, the same same-user strength design §5 accepts locally.
+- **Kinds.** `inform`, `ask` and `reply` cross hosts. `command`, `claim` and `release` from a remote sender are refused (reason `remote_kind`), in the receiver policy and the claim handler, with the gateway refusing claim metadata and methods other than `SendMessage` and `GetTask` as well.
+- **Targets.** Only CrossTalk-bound agents on a peer host are messageable. A name or agent_id that is a native session there is `rejected/remote_native_unsupported` with a hint, nothing injected; a name matching nothing is `rejected/no_such_agent`.
+- **Remote agent discovery.** `list_agents` shows every session of every paired host, CrossTalk and native, fetched live on each call from the peer's authenticated `GET /v1/agents`, all peers in parallel with the local listing, waiting at most 1.5 s, no cache. Each remote row: `name` as `name@alias`, `host`, `harness`, `agent_id`, `crosstalk`, `messageable`, `reachable`, `status`, and `role` on a CrossTalk row; no cwd, path, pid, session_ref or endpoint. A native row (operator ruling 2026-11-06) has `crosstalk: false`, `messageable: false` and a note that it cannot be messaged from another host. The output adds `hosts`: per paired host `reachable`, the agent count, and an error (`gateway_not_running`, `timeout`, `tls_pin_mismatch`, `unpaired_by_peer`, `unreachable`). A host that does not answer contributes no rows and never delays local rows beyond the bound. Remote rows are never written to the local descriptor directory.
+- **Clocks.** No cross-host clock comparison: ask deadlines run on the asker's clock; a reply obligation's retry limit runs on the replier's clock from its own receipt time.
+
+## Rejected alternatives
+
+- **Principal `remote:<host>` with AgentID-first keys.** A paired host could pose as a local agent or a third host's agent (council advisor A).
+- **Bare names resolving across hosts.** A model sending to `x` meaning `x@desktop` would message the wrong session; a name collision would route off the machine by surprise.
+- **Remote rows in the descriptor directory.** Its liveness check would prune them, and syncing descriptors across hosts would make every remote one look dead.
+- **cwd and paths in remote rows.** Metadata minimization (ADR 0011); a remote model has no use for a local path.
+- **Cross-host `command` in v0.2.0.** Needs a ruling on remote primaries. Its absence narrows scope only: it does not stop a compromised paired host sending prompt-injection text as `inform` or `ask`.
+- **A cached remote listing.** Staleness for a gain the live run has not shown; a 30 s negative cache per host is the upgrade if a sleeping peer's 1.5 s costs too much.
+- **Leaving remote native sessions out of the listing.** A model could not find a session it might ask the user to start CrossTalk in; the operator ruled to list them, marked `messageable: false`.
+
+## Consequences
+
+- Prompt-injection reach: a stolen host key or a compromised paired host can put text into every CrossTalk session on every peer. The peer-text notice and each harness's own permissions stay the defence; `unpair` limits it.
+- `list_agents` may take up to 1.5 s longer when a peer is asleep or slow.
+- The model-facing surface changes: `to` grammar, a `host` field on rows, a `hosts` list, new reasons (`remote_kind`, `remote_native_unsupported`, `remote_reply_pending`, `unpaired`, `gateway_not_running`) and a `messageable` row field. Design §3, §4, §7 and §8 change in the implementing slices.
+- ADR 0003 (hosts from pairing, remote agents live), ADR 0004 (new principal, host-scoped key) and ADR 0011 (remote rows from the gateway, no cwd) are amended.
+- The ADR 0014 nudge counts per peer key, which is host-scoped for a remote peer; no change to its rules.
+
+## Trial record
+
+- Council verdict: as ADR 0021. Operator clarification 2026-11-06: remote agent discovery required in v0.2.0.
+- Rests on: ADR 0021.
+- Commits: none yet; implementing commits carry `Provisional-ADR: 0022`.
+- Pinning tests (planned): `TestRemoteSenderKeyIsHostScoped`, `TestRemoteCannotPoseAsLocalAgent`, `TestRemoteCannotPoseAsThirdHost`, `TestRemoteCommandRejected`, `TestBareNameNeverLeavesHost`, `TestListAgentsShowsPairedHostAgents`, `TestListAgentsGatewayDown`, `TestListAgentsTimeoutBound`, `TestRemoteNativeListedUnmessageable`, `TestReplyNeverReachesNameReuser` (change plan section 11).

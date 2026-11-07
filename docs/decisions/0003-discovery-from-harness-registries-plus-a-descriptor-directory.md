@@ -13,12 +13,14 @@ Agents must find each other by name. Both harnesses already publish a live regis
 
 Discovery has no daemon. Each shim writes one descriptor per agent it serves to `~/.local/state/crosstalk/agents/<agent_id>.json` (agent_id, name, harness, role, owner, pid, harness_pid, harness_started_at, instance_id, cwd, session_ref, harness_endpoint, harness_version, a2a_url, uds_path, credential_ref, installed, started_at, protocol) after its listeners are up, atomically, and removes only its own instance's file on exit. `agent_id` is a stable hash of harness and session_ref; the name is an alias set from the harness-provided session name. `list_agents` enumerates every Claude session from `~/.claude/sessions` and every loaded Codex thread from `thread/loaded/list` and `thread/read` on the known app-server endpoints (the default control socket, `CROSSTALK_CODEX_ENDPOINTS`, and the `harness_endpoint` of live Codex descriptors; a daemon on none of those is not discovered), merges them with the descriptor directory, and prunes descriptors whose pid is dead or reused.
 
+Planned for v0.2.0, not built ([ADR 0022](0022-cross-host-addressing-and-trust-name-host-host-scoped-sender-keys-inform-ask-and-reply-only.md)): hosts are known only by pairing (`crosstalk remote pair` / `join`, [ADR 0021](0021-remote-transport-and-enrollment-a-user-started-per-host-gateway-with-pinned-mtls-and-two-sided-pairing.md)), never discovered. The agents on a paired host are listed live in `list_agents` from that host's gateway (`GET /v1/agents`, bounded at 1.5 s, CrossTalk and native sessions, native ones marked `messageable: false`, no cwd) and are never written into the local descriptor directory, whose liveness check (`registry.go` `Live`, `List`) would prune them. Host discovery (mDNS or tailnet suggestions of machines to pair) is deferred to v0.2.x.
+
 A shim publishes no Claude-visible record in `~/.claude/sessions/` in v1: a reply address travels in the envelope, and a pooled shim has no single pid to publish under. Claude sessions see other agents through `list_agents`.
 
 ## Rejected alternatives
 
 - **herdr session snapshot as the directory.** Headless or non-herdr agents become invisible; herdr becomes a hard dependency of messaging.
-- **A directory daemon.** Another process to keep alive and restart; only worth it for cross-machine discovery, which is out of scope.
+- **A directory daemon.** Another process to keep alive and restart. For cross-machine use the planned v0.2.0 gateway lists its own host's agents on request; a daemon that discovers hosts by default stays rejected (operator ruling 2026-11-06).
 - **mDNS on loopback.** Overkill for one machine.
 
 ## Consequences
