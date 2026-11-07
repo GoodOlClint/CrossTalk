@@ -225,9 +225,11 @@ func (r *Receiver) Recover(rp journal.Replay) error {
 		if !d.Binding.SameConversation(cur) {
 			st = adapter.Unreachable
 		}
-		errs = append(errs, r.j.Resolve(d.MessageID, string(st)))
+		errs = append(errs, r.j.ResolveFor(d.Sender, d.MessageID, string(st)))
 		for _, s := range senders[d.MessageID] {
-			errs = append(errs, r.j.SetDedupeState(s, d.MessageID, string(st)))
+			if scopeOfKey(s) == d.Sender {
+				errs = append(errs, r.j.SetDedupeState(s, d.MessageID, string(st)))
+			}
 		}
 	}
 	for _, u := range rp.Unresolved {
@@ -242,7 +244,7 @@ func (r *Receiver) Recover(rp journal.Replay) error {
 			}
 			errs = append(errs, r.j.Append(journal.Record{Type: journal.TypeRoute, Session: u.Session, MessageID: u.MessageID, Sender: u.Sender, To: u.To, Kind: u.Kind, State: journal.StateClosed}))
 		case u.Type == journal.TypeDedupe && u.State == journal.StateSubmitted:
-			if _, claimed := r.j.DispatchState(u.MessageID); claimed {
+			if _, claimed := r.j.DispatchStateFor(scopeOfKey(u.Sender), u.MessageID); claimed {
 				continue
 			}
 			if st := r.strandedState(u, u.Binding.SameConversation(cur), tasked[u.MessageID], self); st != "" {

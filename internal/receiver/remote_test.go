@@ -103,3 +103,45 @@ func TestRemoteNeverPassesLocalOnlyPaths(t *testing.T) {
 		t.Fatalf("remote command %+v", res)
 	}
 }
+
+func TestRemoteHostsHaveSeparateNamespaces(t *testing.T) {
+	e := newEnv(t)
+	m := newMsg(msg.Inform, "same id")
+	for _, s := range []Sender{alice, remoteAl, remoteAlOn} {
+		if res := e.recv(A2A, s, m); res.State != adapter.Accepted || res.Duplicate {
+			t.Fatalf("%s: %+v", s.key(), res)
+		}
+	}
+	if n := e.writes(); n != 3 {
+		t.Fatalf("injects %d, want 3", n)
+	}
+	if res := e.recv(A2A, remoteAl, m); !res.Duplicate || e.writes() != 3 {
+		t.Fatalf("a true duplicate from the same remote sender: %+v writes %d", res, e.writes())
+	}
+}
+
+func TestRecoverScopesRemoteDispatch(t *testing.T) {
+	e := newEnv(t)
+	id := msg.NewUUIDv7()
+	key := RemoteKey(fpA, alice.AgentID)
+	if _, _, err := e.j.Accept(key, id, journal.StateSubmitted); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := e.j.ClaimFor(key, id); !ok || err != nil {
+		t.Fatalf("claim %v %v", ok, err)
+	}
+	e.j.Close()
+	rp := e.open(selfBinding, "inst-2")
+	if err := e.r.Recover(rp); err != nil {
+		t.Fatal(err)
+	}
+	if l, ok := e.j.DispatchStateFor(key, id); !ok || l.Type != journal.TypeOutcome || l.State != string(adapter.Unknown) {
+		t.Fatalf("remote dispatch %+v %v", l, ok)
+	}
+	if st, _ := e.j.Dedupe(key, id); st != string(adapter.Unknown) {
+		t.Fatalf("remote dedupe state %q", st)
+	}
+	if _, claimed := e.j.DispatchState(id); claimed {
+		t.Fatal("the remote claim leaked into the local namespace")
+	}
+}

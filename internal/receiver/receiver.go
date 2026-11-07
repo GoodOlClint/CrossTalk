@@ -71,16 +71,36 @@ type Sender struct {
 	HostAlias string
 }
 
-func (s Sender) registered() bool { return s.Verified && s.AgentID != "" }
+func (s Sender) remote() bool { return s.Host != "" }
+
+// registered reports a sender that is a registered agent of this host. A
+// remote sender never is: it cannot satisfy a path that compares AgentID with
+// a local agent.
+func (s Sender) registered() bool { return s.Verified && s.AgentID != "" && !s.remote() }
+
+// routable reports a sender a reply can be addressed to: a local registered
+// agent or an agent on a paired host.
+func (s Sender) routable() bool { return s.Verified && s.AgentID != "" }
 
 func (s Sender) key() string {
 	switch {
 	case !s.Verified:
 		return unverifiedKey
+	case s.remote():
+		return RemoteKey(s.Host, s.AgentID)
 	case s.AgentID != "":
 		return s.AgentID
 	}
 	return s.Principal
+}
+
+// dispatchScope is the namespace of the sender's dispatch claims: empty for a
+// local sender, the host-scoped key for a remote one.
+func (s Sender) dispatchScope() string {
+	if s.remote() {
+		return s.key()
+	}
+	return ""
 }
 
 func (s Sender) label() string {
@@ -243,6 +263,7 @@ func (r *Receiver) receive(ctx context.Context, in Inbound, resume bool) Result 
 	}
 
 	key := in.Sender.key()
+	scope := in.Sender.dispatchScope()
 	body, err := json.Marshal(m)
 	if err != nil {
 		return rejected(m.MessageID, ReasonInvalid)
@@ -255,7 +276,7 @@ func (r *Receiver) receive(ctx context.Context, in Inbound, resume bool) Result 
 		if !resume || prior != journal.StateSubmitted {
 			return Result{MessageID: m.MessageID, State: adapter.State(prior), Duplicate: true}
 		}
-		if l, claimed := r.j.DispatchState(m.MessageID); claimed {
+		if l, claimed := r.j.DispatchStateFor(scope, m.MessageID); claimed {
 			switch l.Type {
 			case journal.TypeCancel:
 				return rejected(m.MessageID, ReasonCanceled)
@@ -278,8 +299,8 @@ func (r *Receiver) receive(ctx context.Context, in Inbound, resume bool) Result 
 	}
 	defer r.unreserve()
 
-	if !in.Native && in.Sender.registered() && m.InReplyTo != nil && r.askedPeer(*m.InReplyTo, in.Sender.AgentID, m.ContextID) {
-		if err := r.j.Append(journal.Record{Type: journal.TypeReceipt, MessageID: m.MessageID, InReplyTo: *m.InReplyTo, Sender: in.Sender.AgentID, ContextID: m.ContextID}); err != nil {
+	if !in.Native && in.Sender.routable() && m.InReplyTo != nil && r.askedPeer(*m.InReplyTo, key, m.ContextID) {
+		if err := r.j.Append(journal.Record{Type: journal.TypeReceipt, MessageID: m.MessageID, InReplyTo: *m.InReplyTo, Sender: key, ContextID: m.ContextID}); err != nil {
 			return reject(ReasonJournal)
 		}
 	}
@@ -291,23 +312,23 @@ func (r *Receiver) receive(ctx context.Context, in Inbound, resume bool) Result 
 	if r.beforeClaim != nil {
 		r.beforeClaim(m.MessageID)
 	}
-	ok, err := r.j.Claim(m.MessageID)
+	ok, err := r.j.ClaimFor(scope, m.MessageID)
 	if err != nil {
 		return reject(ReasonJournal)
 	}
 	if !ok {
-		if l, _ := r.j.DispatchState(m.MessageID); l.Type == journal.TypeCancel {
+		if l, _ := r.j.DispatchStateFor(scope, m.MessageID); l.Type == journal.TypeCancel {
 			r.j.SetDedupeState(key, m.MessageID, journal.StateCanceled)
 			return rejected(m.MessageID, ReasonCanceled)
 		}
 		return reject(ReasonDuplicateDispatch)
 	}
 
-	rt := route{Session: self.Binding.SessionRef, MessageID: m.MessageID, Sender: in.Sender.AgentID, Name: in.Sender.Name, Kind: m.Kind}
-	routed := in.Sender.registered()
+	rt := route{Session: self.Binding.SessionRef, MessageID: m.MessageID, Sender: key, Name: in.Sender.Name, Kind: m.Kind}
+	routed := in.Sender.routable()
 	if routed {
 		if err := r.openRoute(rt); err != nil {
-			r.j.Resolve(m.MessageID, string(adapter.Rejected))
+			r.j.ResolveFor(scope, m.MessageID, string(adapter.Rejected))
 			return reject(ReasonJournal)
 		}
 	}
@@ -315,7 +336,7 @@ func (r *Receiver) receive(ctx context.Context, in Inbound, resume bool) Result 
 	if !st.Injectable() {
 		st = adapter.Unknown
 	}
-	resolveErr := r.j.Resolve(m.MessageID, string(st))
+	resolveErr := r.j.ResolveFor(scope, m.MessageID, string(st))
 	dedupeErr := r.j.SetDedupeState(key, m.MessageID, string(st))
 	if resolveErr != nil || dedupeErr != nil {
 		r.j.SetDedupeState(key, m.MessageID, string(adapter.Unknown))
@@ -398,6 +419,9 @@ func policy(ing Ingress, k msg.Kind, s Sender, to Recipient) string {
 	}
 	if k == msg.Ask {
 		return ""
+	}
+	if s.remote() {
+		return ReasonRemoteKind
 	}
 	if !s.registered() {
 		return ReasonPolicy
@@ -565,4 +589,17 @@ func (r *Receiver) storeMessage(key string, m msg.Message, state string) {
 // journaled, so a successful cancel means no harness write (§5 C5).
 func (r *Receiver) Cancel(messageID string) (bool, error) {
 	return r.j.Cancel(messageID)
+}
+
+// CancelFrom is Cancel in the namespace of the sender whose key is senderKey.
+func (r *Receiver) CancelFrom(senderKey, messageID string) (bool, error) {
+	return r.j.CancelFor(scopeOfKey(senderKey), messageID)
+}
+
+// scopeOfKey maps a dedupe sender key to its dispatch scope.
+func scopeOfKey(k string) string {
+	if IsRemoteKey(k) {
+		return k
+	}
+	return ""
 }

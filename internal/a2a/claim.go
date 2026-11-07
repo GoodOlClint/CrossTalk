@@ -63,6 +63,9 @@ func claimFailure(state adapter.State, reason string) error {
 
 // claim never creates a task or reaches the receiver chain.
 func (s *Server) claim(ctx context.Context, snd receiver.Sender, c claimRequest) (sdk.SendMessageResult, error) {
+	if snd.Host != "" {
+		return nil, claimFailure(adapter.Rejected, receiver.ReasonRemoteKind)
+	}
 	if s.cfg.Claim == nil {
 		return nil, sdk.ErrUnsupportedOperation
 	}

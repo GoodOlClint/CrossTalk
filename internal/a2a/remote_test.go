@@ -168,8 +168,8 @@ func TestRemoteCannotPoseAsLocalAgent(t *testing.T) {
 
 func TestRemoteCannotPoseAsThirdHost(t *testing.T) {
 	e := newEnv(t, receiver.Limits{}, Limits{}, nil)
-	m := textMsg("same id from two hosts", nil)
-	m2 := *m
+	m := textMsg("from host A", nil)
+	m2 := textMsg("from host B", nil)
 
 	forged := goodRemote().with("X-CrossTalk-Remote-Host", hostC).with("X-CrossTalk-Remote-Alias", "third")
 	ca, actx := e.remote(forged)
@@ -177,17 +177,20 @@ func TestRemoteCannotPoseAsThirdHost(t *testing.T) {
 		t.Fatal(err)
 	}
 	cb, bctx := e.remote(gwHdrs(hostB, "lab", remoteID, "Remote Alice", registry.RolePrimary))
-	if _, err := send(t, cb, bctx, &m2, false); err != nil {
-		t.Fatalf("second host with the same agent_id and message_id: %v", err)
+	if _, err := send(t, cb, bctx, m2, false); err != nil {
+		t.Fatalf("second host with the same agent_id: %v", err)
 	}
-	got := dedupeSenders(t, e.j, m.ID)
 	wantA, wantB := receiver.RemoteKey(hostA, remoteID), receiver.RemoteKey(hostB, remoteID)
-	if len(got) != 2 || !(got[0] == wantA && got[1] == wantB) {
-		t.Fatalf("dedupe senders %q, want [%s %s]", got, wantA, wantB)
+	if got := dedupeSenders(t, e.j, m.ID); len(got) != 1 || got[0] != wantA {
+		t.Fatalf("host A message dedupe senders %q, want [%s]", got, wantA)
 	}
-	for _, s := range got {
-		if strings.Contains(s, hostC) {
-			t.Fatalf("forged third-host header reached the key: %q", s)
+	if got := dedupeSenders(t, e.j, m2.ID); len(got) != 1 || got[0] != wantB {
+		t.Fatalf("host B message dedupe senders %q, want [%s]", got, wantB)
+	}
+	rs, _ := e.j.Records()
+	for _, r := range rs {
+		if strings.Contains(r.Sender, hostC) {
+			t.Fatalf("forged third-host header reached a record: %+v", r)
 		}
 	}
 	if n := len(e.fake.Writes()); n != 2 {
@@ -214,6 +217,7 @@ func TestGatewayHeadersWithoutCredentialIgnored(t *testing.T) {
 		{"gateway token with the local agent header", e.gwTok, "x", "", "", true},
 		{"gateway token without host headers", e.gwTok, "", "", "", true},
 	}
+	rejectedCase := "gateway token without host headers"
 	for _, c := range cases {
 		hh := h
 		if c.name == "gateway token without host headers" {
@@ -230,7 +234,12 @@ func TestGatewayHeadersWithoutCredentialIgnored(t *testing.T) {
 		m := textMsg("hi "+c.name, nil)
 		task, err := send(t, cl, ctx, m, false)
 		if c.fail {
-			if !errors.Is(err, sdk.ErrUnauthenticated) {
+			var se *sdk.Error
+			if c.name == rejectedCase {
+				if !errors.As(err, &se) || se.Details[MetaKey] == nil {
+					t.Errorf("%s: err %v, want a JSON-RPC rejection", c.name, err)
+				}
+			} else if !errors.Is(err, sdk.ErrUnauthenticated) {
 				t.Errorf("%s: err %v, want unauthenticated", c.name, err)
 			}
 			if writesFor(e.fake, m.ID) != 0 {
@@ -265,7 +274,7 @@ func TestMalformedRemoteFieldsRefused(t *testing.T) {
 		{"agent_id 17 digits", goodRemote().with(GWAgentIDHeader, remoteID+"1")},
 		{"agent_id non-hex", goodRemote().with(GWAgentIDHeader, "g1e1e1e1e1e1e1e1")},
 		{"agent_id absent", goodRemote().with(GWAgentIDHeader)},
-		{"agent_id twice", goodRemote().with(GWAgentIDHeader, remoteID, remoteID)},
+		{"agent_id twice", goodRemote().with(GWAgentIDHeader, remoteID, "f2f2f2f2f2f2f2f2")},
 		{"name not base64url", goodRemote().with(GWNameHeader, "not base64!")},
 		{"name over 256 bytes", goodRemote().with(GWNameHeader, b64(long))},
 		{"name with control character", goodRemote().with(GWNameHeader, b64("bad\x07name"))},
@@ -417,5 +426,19 @@ func TestDispatchClaimKeyedBySender(t *testing.T) {
 	}
 	if len(scopes) != 2 || scopes[0] != "" || scopes[1] != receiver.RemoteKey(hostA, localID) {
 		t.Fatalf("dispatch records scoped %q, want [\"\" %s]", scopes, receiver.RemoteKey(hostA, localID))
+	}
+}
+
+func TestRemoteTaskResumeKeepsHostScope(t *testing.T) {
+	st := &store{}
+	key := receiver.RemoteKey(hostA, remoteID)
+	m := textMsg("replayed", nil)
+	tk := &task{principal: key, state: sdk.TaskStateSubmitted, history: []*sdk.Message{m}}
+	in, ok := st.resumeInbound(tk, nil)
+	if !ok || in == nil {
+		t.Fatal("remote task not rebuilt")
+	}
+	if in.Sender.Host != hostA || in.Sender.AgentID != remoteID || principal(in.Sender) != key || in.Sender.Principal != key {
+		t.Fatalf("sender %+v", in.Sender)
 	}
 }

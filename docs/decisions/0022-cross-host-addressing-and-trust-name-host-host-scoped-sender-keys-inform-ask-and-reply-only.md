@@ -1,6 +1,6 @@
 # ADR 0022 — Cross-host addressing and trust: name@host, host-scoped sender keys, inform ask and reply only
 
-- **Status:** Provisional (operator 2026-11-06); planned for v0.2.0, not built
+- **Status:** Provisional (operator 2026-11-06); planned for v0.2.0; the receiving side's identity model is built (slice R4), addressing, discovery and cross-host sending are not
 - **Date:** 2026-11-06
 - **Deciders:** operator + council (Claude Opus 5.5 chair, two Codex advisors) + Claude (Opus 5.5)
 - **Context source:** council decision 2026-11-06 (`~/.claude/coordinators/archive/council-decision.md`); operator clarification 2026-11-06 on discovery; change plan [`docs/plans/release-0.2.0.md`](https://github.com/GoodOlClint/CrossTalk/blob/main/docs/plans/release-0.2.0.md)
@@ -40,5 +40,6 @@ With a gateway per host ([ADR 0021](0021-remote-transport-and-enrollment-a-user-
 
 - Council verdict: as ADR 0021. Operator clarification 2026-11-06: remote agent discovery required in v0.2.0.
 - Rests on: ADR 0021.
-- Commits: none yet; implementing commits carry `Provisional-ADR: 0022`.
-- Pinning tests (planned): `TestRemoteSenderKeyIsHostScoped`, `TestRemoteCannotPoseAsLocalAgent`, `TestRemoteCannotPoseAsThirdHost`, `TestRemoteCommandRejected`, `TestBareNameNeverLeavesHost`, `TestListAgentsShowsPairedHostAgents`, `TestListAgentsGatewayDown`, `TestListAgentsTimeoutBound`, `TestRemoteNativeListedUnmessageable`, `TestReplyNeverReachesNameReuser` (change plan section 11).
+- Commits: slice R4 (remote principal), branch `impl-020-r4`; implementing commits carry `Provisional-ADR: 0022`.
+- Built (R4): `receiver.Sender.Host` and `HostAlias`; `key()`, the SDK principal and `label()` host-scoped and never `registered()`; receipts, routes and dedupe on the host-scoped key; `command`, `claim` and `release` refused `remote_kind`; the gateway-credential case in `a2a.authenticate` with the `X-CrossTalk-GW-*` headers (design §5); `completeReply` keeps a remote reply pending (`unreachable/remote_reply_pending`) until R8; the dispatch claim scoped by sender key for a remote sender only (journal `dispatch`, `outcome` and `cancel` records carry `sender`; a local record is unchanged, so existing journals replay as before). Open: the A2A task store still keys a task by message_id alone, so a second principal reusing a pending task's message_id is refused (UUIDv7 makes a collision a non-event).
+- Pinning tests: `TestRemoteSenderKeyIsHostScoped`, `TestRemoteCannotPoseAsLocalAgent`, `TestRemoteCannotPoseAsThirdHost`, `TestGatewayHeadersWithoutCredentialIgnored`, `TestRemotePrimaryCannotCommand`, `TestMalformedRemoteFieldsRefused`, `TestRemoteCommandRejected`, `TestRemoteClaimRefused`, `TestRemoteReplyNeverMarkedDeliveredLocally`, `TestRemoteInformRouteExpires`, `TestDispatchClaimKeyedBySender`. Planned (later slices): `TestBareNameNeverLeavesHost`, `TestListAgentsShowsPairedHostAgents`, `TestListAgentsGatewayDown`, `TestListAgentsTimeoutBound`, `TestRemoteNativeListedUnmessageable`, `TestReplyNeverReachesNameReuser` (change plan section 11).

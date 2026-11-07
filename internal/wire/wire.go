@@ -105,6 +105,10 @@ func (r agentReceiver) Cancel(messageID string) (bool, error) {
 	return r.st.Receiver().Cancel(messageID)
 }
 
+func (r agentReceiver) CancelFrom(senderKey, messageID string) (bool, error) {
+	return r.st.Receiver().CancelFrom(senderKey, messageID)
+}
+
 func (w *Wire) startA2A(_ context.Context, st *shim.AgentState) (shim.A2AListener, error) {
 	a := st.Agent()
 	id := a.ID()
@@ -127,10 +131,11 @@ func (w *Wire) startA2A(_ context.Context, st *shim.AgentState) (shim.A2AListene
 			}
 			return a2a.Profile{Name: a.Name(), Harness: string(a.Harness()), Role: role}
 		},
-		Version:       mcpserver.Version,
-		PeerTokenPath: w.PeerTokenPath(),
-		ResolvePeer:   w.resolvePeer,
-		ResolveSender: w.resolveSender,
+		Version:          mcpserver.Version,
+		PeerTokenPath:    w.PeerTokenPath(),
+		GatewayTokenPath: filepath.Join(w.stateDir, "gateway.token"),
+		ResolvePeer:      w.resolvePeer,
+		ResolveSender:    w.resolveSender,
 		Claim: func(ctx context.Context, snd receiver.Sender, claimed bool) error {
 			return claimError(w.shim.ApplyClaim(ctx, registry.Descriptor{AgentID: snd.AgentID, Name: snd.Name}, id, claimed))
 		},
@@ -178,13 +183,13 @@ func (w *Wire) startA2A(_ context.Context, st *shim.AgentState) (shim.A2AListene
 // outcome into unknown. A later outcome change has no receiver hook yet; the
 // code that records one must call Server.Resolve for that message_id.
 func reconcile(srv *a2a.Server, j *journal.Journal, log *slog.Logger) {
-	for _, id := range srv.PendingMessageIDs() {
-		r, ok := j.DispatchState(id)
+	for _, p := range srv.PendingMessages() {
+		r, ok := j.DispatchStateFor(p.Scope, p.MessageID)
 		if !ok || r.Type != journal.TypeOutcome {
 			continue
 		}
-		if err := srv.Resolve(id, adapter.State(r.State), ""); err != nil {
-			log.Warn("wire: task reconcile", "message_id", id, "err", err)
+		if err := srv.Resolve(p.MessageID, adapter.State(r.State), ""); err != nil {
+			log.Warn("wire: task reconcile", "message_id", p.MessageID, "err", err)
 		}
 	}
 }
