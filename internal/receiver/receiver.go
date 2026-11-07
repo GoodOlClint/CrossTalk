@@ -41,7 +41,18 @@ const (
 	ReasonCanceled          = "canceled"
 	ReasonDuplicateDispatch = "duplicate_dispatch"
 	ReasonJournal           = "journal"
+	ReasonRemoteKind        = "remote_kind"
 )
+
+// RemoteKeyPrefix starts every host-scoped sender key; no local key (an
+// agent_id, a principal, "unverified") begins with it.
+const RemoteKeyPrefix = "remote:"
+
+// RemoteKey is the host-scoped key of an agent on a paired host.
+func RemoteKey(host, agentID string) string { return RemoteKeyPrefix + host + "/" + agentID }
+
+// IsRemoteKey reports whether k is a host-scoped sender key.
+func IsRemoteKey(k string) bool { return strings.HasPrefix(k, RemoteKeyPrefix) }
 
 // Sender is the identity an ingress resolved from transport evidence.
 // AgentID is set only for a registered agent; Principal is set for an
@@ -54,6 +65,10 @@ type Sender struct {
 	Role      string
 	Harness   string
 	PID       int
+	// Host is the paired host's certificate fingerprint and HostAlias the
+	// receiver's own name for it; both are set only for a remote sender.
+	Host      string
+	HostAlias string
 }
 
 func (s Sender) registered() bool { return s.Verified && s.AgentID != "" }

@@ -32,8 +32,18 @@ const (
 	// SenderHeader names the registered agent whose own token the bearer
 	// credential is; absent means the bearer is the peer token.
 	SenderHeader = "X-CrossTalk-Agent"
-	SchemeBearer = sdk.SecuritySchemeName("bearer")
-	MetaKey      = "crosstalk"
+
+	// Gateway-set headers: the gateway writes these on the loopback hop after
+	// it stripped every inbound X-CrossTalk-* header; they are distinct from
+	// the X-CrossTalk-Remote-* names a sending host puts on the wire.
+	GWHostHeader    = "X-CrossTalk-GW-Host"
+	GWAliasHeader   = "X-CrossTalk-GW-Alias"
+	GWAgentIDHeader = "X-CrossTalk-GW-Agent-ID"
+	GWNameHeader    = "X-CrossTalk-GW-Name"
+	GWHarnessHeader = "X-CrossTalk-GW-Harness"
+	GWRoleHeader    = "X-CrossTalk-GW-Role"
+	SchemeBearer    = sdk.SecuritySchemeName("bearer")
+	MetaKey         = "crosstalk"
 
 	CompletionDelivered = "delivered"
 	ReasonDeadline      = "deadline"
@@ -89,7 +99,10 @@ type Config struct {
 	Profile       func() Profile
 	Version       string
 	PeerTokenPath string
-	ResolvePeer   func(name string) (Peer, bool)
+	// GatewayTokenPath is the gateway credential file; empty disables the
+	// remote-sender case in authenticate.
+	GatewayTokenPath string
+	ResolvePeer      func(name string) (Peer, bool)
 	// Claim, when set, serves metadata.crosstalk.claim requests; nil refuses
 	// them as unsupported.
 	Claim  ClaimFunc

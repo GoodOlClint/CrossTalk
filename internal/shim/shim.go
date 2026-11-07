@@ -20,17 +20,18 @@ import (
 )
 
 const (
-	ReasonNoTransport       = "no_transport"
-	ReasonNoSuchAgent       = "no_such_agent"
-	ReasonAmbiguousName     = "ambiguous_name"
-	ReasonSelf              = "self"
-	ReasonNativeInformOnly  = "native_inform_only"
-	ReasonNoSuchMessage     = "no_such_message"
-	ReasonSenderUnverified  = "sender_unverified"
-	ReasonNoReplyHook       = "no_reply_hook"
-	ReasonNotPrimary        = "owner_not_primary"
-	ReasonNotServedHere     = "not_served_here"
-	DefaultDiscoveryTimeout = 3 * time.Second
+	ReasonNoTransport        = "no_transport"
+	ReasonNoSuchAgent        = "no_such_agent"
+	ReasonAmbiguousName      = "ambiguous_name"
+	ReasonSelf               = "self"
+	ReasonNativeInformOnly   = "native_inform_only"
+	ReasonNoSuchMessage      = "no_such_message"
+	ReasonSenderUnverified   = "sender_unverified"
+	ReasonNoReplyHook        = "no_reply_hook"
+	ReasonRemoteReplyPending = "remote_reply_pending"
+	ReasonNotPrimary         = "owner_not_primary"
+	ReasonNotServedHere      = "not_served_here"
+	DefaultDiscoveryTimeout  = 3 * time.Second
 )
 
 // Transport carries a message to an agent served by a shim (A2A in

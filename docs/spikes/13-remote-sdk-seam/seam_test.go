@@ -339,15 +339,15 @@ func TestC4_SameMessageIDAsLocalIsRefusedNotInjected(t *testing.T) {
 	}
 }
 
-func TestC4_PlanShapedSenderCollidesToday(t *testing.T) {
+func TestC4_PlanShapedSenderNoLongerCollides(t *testing.T) {
 	r := newRig(t, PlanShaped)
 	x := msg.NewUUIDv7()
 	if res := r.local(localPrimary, msg.Inform, x); res.State != adapter.Accepted {
 		t.Fatalf("local %+v", res)
 	}
 	o := r.mustSend(good(localAlice), "", x)
-	if !o.duplicate || len(r.fake.Writes()) != 1 {
-		t.Fatalf("expected today's key() to treat the remote message as local alice's duplicate: %+v writes %d", o, len(r.fake.Writes()))
+	if o.duplicate || o.reason == receiver.ReasonDuplicateDispatch || len(r.fake.Writes()) != 2 {
+		t.Fatalf("the remote message is a different sender's message and must be injected: %+v writes %d", o, len(r.fake.Writes()))
 	}
 }
 
@@ -366,10 +366,10 @@ func TestC5_RemotePrimaryCannotCommand(t *testing.T) {
 	}
 }
 
-func TestC5_PlanShapedSenderCanCommandToday(t *testing.T) {
+func TestC5_PlanShapedSenderCannotCommandNow(t *testing.T) {
 	r := newRig(t, PlanShaped)
 	o := r.mustSend(good(remoteBob), "command", msg.NewUUIDv7())
-	if o.state != "accepted" || len(r.fake.Writes()) != 1 {
-		t.Fatalf("expected today's policy to let a plan-shaped remote primary command: %+v", o)
+	if o.state != "rejected" || o.reason != receiver.ReasonRemoteKind || len(r.fake.Writes()) != 0 {
+		t.Fatalf("a plan-shaped remote primary must be refused remote_kind: %+v writes %d", o, len(r.fake.Writes()))
 	}
 }
