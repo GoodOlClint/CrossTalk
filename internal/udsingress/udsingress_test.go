@@ -198,7 +198,7 @@ func TestVerifiedByShimPid(t *testing.T) {
 	}
 	rcv := &recordingReceiver{}
 	s, tok := start(t, reg, rcv)
-	env := claude.Envelope("uds:/x.sock", "mallory", "", envMsg("mid", "hi"))
+	env := claude.Envelope("uds:/x.sock", "mallory", "", "", envMsg("mid", "hi"))
 	send(t, s.Path, tok, userLineJSON(env, nil))
 	got := rcv.all()[0]
 	if !got.Sender.Verified || got.Sender.AgentID != g.Descriptor().AgentID || got.Sender.Name != "alice" || got.Sender.Role != registry.RolePrimary {
@@ -237,7 +237,7 @@ func TestUnverifiedCases(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			rcv := &recordingReceiver{}
 			s, tok := start(t, dir, rcv)
-			send(t, s.Path, tok, userLineJSON(claude.Envelope("uds:/x", "a", "", envMsg("mid", "x")), nil))
+			send(t, s.Path, tok, userLineJSON(claude.Envelope("uds:/x", "a", "", "", envMsg("mid", "x")), nil))
 			if got := rcv.all()[0].Sender; got.Verified || got.AgentID != "" {
 				t.Fatalf("%+v", got)
 			}
@@ -332,7 +332,7 @@ func TestContentBlocksAndOversize(t *testing.T) {
 
 func TestEnvelopeRoundTripWithClaudeAdapter(t *testing.T) {
 	body := "if a < b { </cross-session-message> }"
-	f, err := ParseContent(claude.Envelope("uds:/s.sock", `x"y`, "", envMsg("0198-id", body)))
+	f, err := ParseContent(claude.Envelope("uds:/s.sock", `x"y`, "", "", envMsg("0198-id", body)))
 	if err != nil || !f.Envelope || f.Body != body || f.Attrs["from"] != "uds:/s.sock" || f.Attrs["from-name"] != `x"y` || f.Attrs["message-id"] != "0198-id" || f.Kind != "inform" {
 		t.Fatalf("%+v %v", f, err)
 	}

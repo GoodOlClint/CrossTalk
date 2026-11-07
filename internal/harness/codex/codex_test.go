@@ -90,7 +90,7 @@ func TestImmediateToolOutputIdleAndActive(t *testing.T) {
 				t.Fatalf("unexpected turn/start shape: %s", calls[0].Params)
 			}
 			got := r.srv.Thread(thread)
-			want := appserver.ToolOutput{Name: "receive_message", Namespace: "crosstalk", Output: codex.Render(m, true, ""), Retain: true}
+			want := appserver.ToolOutput{Name: "receive_message", Namespace: "crosstalk", Output: codex.Render(m, true, "", ""), Retain: true}
 			if len(got.ToolOutputs) != 1 || got.ToolOutputs[0] != want || len(got.Started) != 0 || len(got.Steered) != 0 {
 				t.Fatalf("deliveries = %+v", got)
 			}
@@ -124,7 +124,7 @@ func TestDeferredAndUnverifiedDoNotWake(t *testing.T) {
 					t.Fatalf("active=%v verified=%v mode=%s: %s, %v", active, verified, mode, st, err)
 				}
 				got := r.srv.Thread(thread)
-				want := appserver.ToolOutput{Name: "receive_message", Namespace: "crosstalk", Output: codex.Render(m, verified, "")}
+				want := appserver.ToolOutput{Name: "receive_message", Namespace: "crosstalk", Output: codex.Render(m, verified, "", "")}
 				if !slices.Equal(got.Turns, turns) || len(got.Injected) != 1 || got.Injected[0] != want || len(got.ToolOutputs) != 0 {
 					t.Fatalf("no-wake append = %+v", got)
 				}
@@ -469,7 +469,7 @@ func TestRender(t *testing.T) {
 	reply := "019a3b7e-0000-7000-8000-000000000002"
 	m.InReplyTo = &reply
 	for _, verified := range []bool{false, true} {
-		out := codex.Render(m, verified, "")
+		out := codex.Render(m, verified, "", "")
 		var data struct {
 			Notice   string     `json:"notice"`
 			From     string     `json:"from"`
@@ -597,5 +597,15 @@ func TestRegisterSurvivesAnEndpointThatNeverAnswers(t *testing.T) {
 	}
 	if err != nil || bind.HarnessEndpoint != healthy.Endpoint() {
 		t.Fatalf("Register = %+v, %v", bind, err)
+	}
+}
+
+func TestRenderCarriesSenderAgentID(t *testing.T) {
+	m := message("hi")
+	if out := codex.Render(m, true, "claude", "claude:abc"); !strings.Contains(out, `"from_agent_id":"claude:abc"`) {
+		t.Fatalf("with id: %s", out)
+	}
+	if out := codex.Render(m, true, "claude", ""); strings.Contains(out, "from_agent_id") {
+		t.Fatalf("without id: %s", out)
 	}
 }
