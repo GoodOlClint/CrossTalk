@@ -10,7 +10,7 @@ No. Both sessions must run on the same machine, as the same user. Messages go ov
 
 ## Do I have to start my agents a special way?
 
-No. `crosstalk install` registers the CrossTalk server with each harness once. After that, start `claude` and `codex` as you always do and restart any session that was already running. Two limits apply to Codex: a tab started with `codex --no-daemon` can send but not receive, and any `-c` override on the command line makes Codex start its own app server, which CrossTalk cannot reach. Put settings in `~/.codex/config.toml` instead. Details are in [setup](setup.md).
+No. `crosstalk install` registers the CrossTalk server with each harness once. After that, start `claude` and `codex` as you always do and restart any session that was already running. Two limits apply to Codex: a tab started with `codex --no-daemon` can send but not receive, and any `-c` override on the command line makes Codex start its own app server, which CrossTalk cannot reach, so that session is send-only (`-s`, `-a` and `--add-dir` do not). Put settings in `~/.codex/config.toml` instead. Details are in [setup](setup.md).
 
 ## Is there a limit on messages?
 
