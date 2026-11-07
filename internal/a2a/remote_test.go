@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -397,35 +398,34 @@ func TestDispatchClaimKeyedBySender(t *testing.T) {
 	}
 
 	cl, ctx := e.remote(gwHdrs(hostA, "desk", localID, "alice", registry.RolePrimary))
-	rm := &sdk.Message{ID: m.MessageID, Role: sdk.MessageRoleUser, Parts: sdk.ContentParts{sdk.NewTextPart("remote, same message_id")}}
+	rm := &sdk.Message{ID: m.MessageID, Role: sdk.MessageRoleUser, Parts: sdk.ContentParts{sdk.NewTextPart("remote ask, same message_id")}, Metadata: map[string]any{MetaKey: map[string]any{"kind": "ask"}}}
 	task, err := send(t, cl, ctx, rm, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if task.Status.State != sdk.TaskStateCompleted {
-		_, reason := taskReasonOf(task)
-		t.Fatalf("remote message with a local message_id: task %s reason %q", task.Status.State, reason)
+	if _, reason := taskReasonOf(task); task.Status.State != sdk.TaskStateFailed || reason != receiver.ReasonIDInUse {
+		t.Fatalf("remote ask reusing a local message_id: task %s reason %q, want failed/%s (not %s)", task.Status.State, reason, receiver.ReasonIDInUse, receiver.ReasonDuplicateDispatch)
 	}
-	if n := writesFor(e.fake, m.MessageID); n != 2 {
-		t.Fatalf("injects %d, want 2 (one per sender)", n)
+	if n := writesFor(e.fake, m.MessageID); n != 1 {
+		t.Fatalf("injects %d, want only the local one", n)
+	}
+	e.srv.CompleteAsk(m.MessageID, "secret answer")
+	got, err := cl.GetTask(ctx, &sdk.GetTaskRequest{ID: task.ID})
+	if err != nil || strings.Contains(fmt.Sprintf("%+v", got), "secret answer") {
+		t.Fatalf("remote task after the local reply: %+v %v", got, err)
+	}
+	if got := dedupeSenders(t, e.j, m.MessageID); len(got) != 1 || got[0] != localID {
+		t.Fatalf("dedupe senders %q, want only the local sender", got)
 	}
 
-	again, err := send(t, cl, ctx, rm, false)
-	if err != nil || again.ID != task.ID {
-		t.Fatalf("true duplicate from the same sender: %v %v", again, err)
+	own := textMsg("remote, own id", nil)
+	first, err := send(t, cl, ctx, own, false)
+	if err != nil || first.Status.State != sdk.TaskStateCompleted {
+		t.Fatalf("remote with its own id: %v %v", first, err)
 	}
-	if n := writesFor(e.fake, m.MessageID); n != 2 {
-		t.Fatalf("duplicate was injected: %d writes", n)
-	}
-	var scopes []string
-	rs, _ := e.j.Records()
-	for _, r := range rs {
-		if r.Type == journal.TypeDispatch && r.MessageID == m.MessageID {
-			scopes = append(scopes, r.Sender)
-		}
-	}
-	if len(scopes) != 2 || scopes[0] != "" || scopes[1] != receiver.RemoteKey(hostA, localID) {
-		t.Fatalf("dispatch records scoped %q, want [\"\" %s]", scopes, receiver.RemoteKey(hostA, localID))
+	again, err := send(t, cl, ctx, own, false)
+	if err != nil || again.ID != first.ID || writesFor(e.fake, own.ID) != 1 {
+		t.Fatalf("true duplicate from the same sender: %v %v writes %d", again, err, writesFor(e.fake, own.ID))
 	}
 }
 

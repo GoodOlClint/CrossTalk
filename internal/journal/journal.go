@@ -258,13 +258,15 @@ type Replay struct {
 }
 
 type Journal struct {
-	mu       sync.Mutex
-	f        *os.File
-	path     string
-	binding  Binding
-	now      func() time.Time
-	latest   map[string]Record
-	dispatch map[string]*dispatchState
+	mu      sync.Mutex
+	f       *os.File
+	path    string
+	binding Binding
+	now     func() time.Time
+	latest  map[string]Record
+	// idSenders lists, per message_id, the sender keys holding a dedupe record.
+	idSenders map[string]map[string]bool
+	dispatch  map[string]*dispatchState
 	// repairTo is the file size to truncate back to before the next append, or -1.
 	repairTo int64
 }
@@ -318,7 +320,7 @@ func Open(stateDir, agentID string, binding Binding, opt Options) (*Journal, Rep
 	if err != nil {
 		return nil, Replay{}, err
 	}
-	j := &Journal{f: f, path: path, binding: binding, now: opt.Now, latest: map[string]Record{}, dispatch: map[string]*dispatchState{}, repairTo: -1}
+	j := &Journal{f: f, path: path, binding: binding, now: opt.Now, latest: map[string]Record{}, idSenders: map[string]map[string]bool{}, dispatch: map[string]*dispatchState{}, repairTo: -1}
 	for _, r := range kept {
 		j.index(r)
 	}
@@ -406,6 +408,12 @@ func (j *Journal) index(r Record) {
 	j.latest[r.key()] = r
 	if r.MessageID == "" {
 		return
+	}
+	if r.Type == TypeDedupe {
+		if j.idSenders[r.MessageID] == nil {
+			j.idSenders[r.MessageID] = map[string]bool{}
+		}
+		j.idSenders[r.MessageID][r.Sender] = true
 	}
 	switch r.Type {
 	case TypeDispatch, TypeOutcome, TypeCancel:

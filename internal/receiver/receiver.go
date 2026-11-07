@@ -42,6 +42,7 @@ const (
 	ReasonDuplicateDispatch = "duplicate_dispatch"
 	ReasonJournal           = "journal"
 	ReasonRemoteKind        = "remote_kind"
+	ReasonIDInUse           = "message_id_in_use"
 )
 
 // RemoteKeyPrefix starts every host-scoped sender key; no local key (an
@@ -269,6 +270,9 @@ func (r *Receiver) receive(ctx context.Context, in Inbound, resume bool) Result 
 		return rejected(m.MessageID, ReasonInvalid)
 	}
 	prior, dup, err := r.j.AcceptRecord(journal.Record{Sender: key, MessageID: m.MessageID, State: journal.StateSubmitted, Message: body})
+	if errors.Is(err, journal.ErrIDInUse) {
+		return rejected(m.MessageID, ReasonIDInUse)
+	}
 	if err != nil {
 		return rejected(m.MessageID, ReasonJournal)
 	}

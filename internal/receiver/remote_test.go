@@ -106,17 +106,32 @@ func TestRemoteNeverPassesLocalOnlyPaths(t *testing.T) {
 
 func TestRemoteHostsHaveSeparateNamespaces(t *testing.T) {
 	e := newEnv(t)
-	m := newMsg(msg.Inform, "same id")
-	for _, s := range []Sender{alice, remoteAl, remoteAlOn} {
+	for i, s := range []Sender{alice, remoteAl, remoteAlOn} {
+		m := newMsg(msg.Inform, "own id")
 		if res := e.recv(A2A, s, m); res.State != adapter.Accepted || res.Duplicate {
 			t.Fatalf("%s: %+v", s.key(), res)
 		}
+		if st, ok := e.j.Dedupe(s.key(), m.MessageID); !ok || st != "accepted" {
+			t.Fatalf("%d: record under %s: %q %v", i, s.key(), st, ok)
+		}
 	}
-	if n := e.writes(); n != 3 {
-		t.Fatalf("injects %d, want 3", n)
+	m := newMsg(msg.Inform, "contested id")
+	if res := e.recv(A2A, alice, m); res.State != adapter.Accepted {
+		t.Fatalf("%+v", res)
 	}
-	if res := e.recv(A2A, remoteAl, m); !res.Duplicate || e.writes() != 3 {
-		t.Fatalf("a true duplicate from the same remote sender: %+v writes %d", res, e.writes())
+	for _, s := range []Sender{remoteAl, remoteAlOn} {
+		if res := e.recv(A2A, s, m); res.State != adapter.Rejected || res.Reason != ReasonIDInUse {
+			t.Fatalf("%s reusing a message_id held by another sender: %+v", s.key(), res)
+		}
+		if _, ok := e.j.Dedupe(s.key(), m.MessageID); ok {
+			t.Fatalf("a refused message left a record under %s", s.key())
+		}
+	}
+	if res := e.recv(A2A, alice, m); !res.Duplicate {
+		t.Fatalf("a true duplicate from the same sender: %+v", res)
+	}
+	if n := e.writes(); n != 4 {
+		t.Fatalf("injects %d, want 4", n)
 	}
 }
 

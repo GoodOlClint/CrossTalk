@@ -1,6 +1,12 @@
 package journal
 
-import "os"
+import (
+	"errors"
+	"os"
+)
+
+// ErrIDInUse: another sender already holds the message_id.
+var ErrIDInUse = errors.New("journal: message_id is held by another sender")
 
 // AcceptRecord is Accept for a full dedupe record, so the acceptance and the
 // message it carries are one fsynced line.
@@ -10,6 +16,11 @@ func (j *Journal) AcceptRecord(r Record) (prior string, dup bool, err error) {
 	defer j.mu.Unlock()
 	if l, ok := j.latest[r.key()]; ok {
 		return l.State, true, nil
+	}
+	for s := range j.idSenders[r.MessageID] {
+		if s != r.Sender {
+			return "", false, ErrIDInUse
+		}
 	}
 	_, err = j.appendLocked(r)
 	return r.State, false, err
