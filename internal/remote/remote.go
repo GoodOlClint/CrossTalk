@@ -39,7 +39,8 @@ const (
 	maxFile     = 1 << 20
 	// A file modified this recently may be rewritten again within the same
 	// filesystem timestamp tick, so the cache does not trust its stat.
-	racyWindow = 2 * time.Second
+	racyWindow    = 2 * time.Second
+	maxPairingIDs = 8
 )
 
 var (
@@ -72,6 +73,9 @@ type Peer struct {
 	Address     string    `json:"address"`
 	Fingerprint string    `json:"fingerprint"`
 	PairedAt    time.Time `json:"paired_at"`
+	// PairingIDs are the last few pairings that redeemed a token for this
+	// peer, so a waiting `remote pair` still finds its own after later updates.
+	PairingIDs []string `json:"pairing_ids,omitempty"`
 }
 
 // ConfigDir is ~/.config/crosstalk.
@@ -599,7 +603,11 @@ func (p *Peers) modify(fn func([]Peer) ([]Peer, error)) error {
 }
 
 // Upsert adds the peer, or updates the entry with the same fingerprint.
-func (p *Peers) Upsert(q Peer) error {
+func (p *Peers) Upsert(q Peer) error { return p.UpsertThen(q, nil) }
+
+// UpsertThen is Upsert with commit run under peers.lock after the alias check
+// and before the table is written; a commit error writes nothing.
+func (p *Peers) UpsertThen(q Peer, commit func() error) error {
 	if err := validatePeer(q); err != nil {
 		return err
 	}
@@ -616,13 +624,23 @@ func (p *Peers) Upsert(q Peer) error {
 			if q.PairedAt.IsZero() {
 				q.PairedAt = ps[at].PairedAt
 			}
+			q.PairingIDs = append(append([]string(nil), ps[at].PairingIDs...), q.PairingIDs...)
+			if n := len(q.PairingIDs); n > maxPairingIDs {
+				q.PairingIDs = q.PairingIDs[n-maxPairingIDs:]
+			}
 			ps[at] = q
-			return ps, nil
+		} else {
+			if q.PairedAt.IsZero() {
+				q.PairedAt = time.Now().UTC()
+			}
+			ps = append(ps, q)
 		}
-		if q.PairedAt.IsZero() {
-			q.PairedAt = time.Now().UTC()
+		if commit != nil {
+			if err := commit(); err != nil {
+				return nil, err
+			}
 		}
-		return append(ps, q), nil
+		return ps, nil
 	})
 }
 

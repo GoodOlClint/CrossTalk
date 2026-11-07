@@ -110,6 +110,18 @@ Then follow steps 3 to 7 above. What differs from macOS:
 - **Codex settings.** Put settings in `~/.codex/config.toml`, never on the command line: any `-c` override starts Codex's own embedded app server, which CrossTalk cannot reach (troubleshooting below). For example `model_reasoning_effort = "low"` is the lowest effort the default model accepts.
 - **Sandbox.** Codex on Linux warns when bubblewrap (`bwrap`, the tool Codex uses to confine its commands) is not installed; install your distribution's `bubblewrap` package. Without a working bubblewrap, Codex fails to sandbox and asks approval to read the plugin's `SKILL.md`: approve that first skill read. CrossTalk does not depend on bubblewrap. Both harnesses also show a folder-trust dialog the first time they run in a new directory.
 
+## Remote (draft, not in 0.1.x)
+
+Planned for 0.2.0 and not released: messaging between your own machines over a LAN or a tailnet (a Tailscale private network). Nothing here runs unless you start it. Pairing is built; sending and listing across hosts are not yet.
+
+1. On each host, give it one address of its own to listen on and dial: `crosstalk remote config --bind 192.168.1.20` (a wildcard such as `0.0.0.0` is refused; the address must stay the same, since a peer dials the address it was given when you paired).
+2. On the first host, start the gateway in a terminal and leave it running: `crosstalk remote serve`.
+3. On the same host, in a second terminal: `crosstalk remote pair`. It prints one line starting `crosstalk-pair:v1:` and waits. The token works once and expires after 10 minutes. Ctrl-C cancels it and removes it.
+4. On the other host, run `crosstalk remote join`, paste the token at the prompt `Paste the token from the other host:` and press Return. The token is read from stdin only; `join` refuses it as an argument, so it stays out of your shell history. Each host then lists the other under the alias it announced. `--alias NAME` on `pair` or `join` sets the name this host uses for the other one; an alias already held by a different host is refused and nothing is written on that side.
+5. Both commands end with `paired with <alias> (<fingerprint>)`. Re-pairing the same host updates its alias and address.
+
+What the token is: the address and port of the first host, its fingerprint (the SHA-256 of its certificate's public key, which the joining host checks before it sends anything), a one-time id and a 256-bit secret. Treat it as a password until it is used or expired. If the second host is not the one that holds the secret, its proof fails and nothing is written. The gateway accepts at most one pairing attempt per second, and a failed attempt never cancels a pending pairing.
+
 ## If something is wrong
 
 | You see | Cause and fix |

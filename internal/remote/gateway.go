@@ -5,7 +5,6 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"encoding/base64"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -39,6 +38,8 @@ type Limits struct {
 	MaxPinnedConns, MaxPeerConcurrent, MaxPeerPerMinute                     int
 	MaxHandshaking, MaxUnenrolled                                           int
 	UnenrolledLife, PendingPoll, BindRetry, BindGiveUp                      time.Duration
+	// PairInterval is the gateway-wide gap between pairing attempts; negative disables it.
+	PairInterval time.Duration
 }
 
 func DefaultLimits() Limits {
@@ -50,6 +51,7 @@ func DefaultLimits() Limits {
 		MaxHandshaking: 16, MaxUnenrolled: 4,
 		UnenrolledLife: 15 * time.Second, PendingPoll: time.Second,
 		BindRetry: 10 * time.Second, BindGiveUp: 60 * time.Second,
+		PairInterval: time.Second,
 	}
 }
 
@@ -58,7 +60,9 @@ type GatewayConfig struct {
 	Host     Host
 	Bind     string
 	Port     int
-	Peers    *Peers
+	// Alias is the name this host announces to a host that pairs with it.
+	Alias string
+	Peers *Peers
 	// Handler serves requests from pinned peers; nil answers 404.
 	Handler http.Handler
 	// Limits zero value means DefaultLimits.
@@ -122,6 +126,7 @@ type Gateway struct {
 	unen     int
 	peerSt   map[string]*peerState
 	accepted chan *gwConn
+	lastPair time.Time
 }
 
 func NewGateway(c GatewayConfig) *Gateway {
@@ -139,6 +144,9 @@ func NewGateway(c GatewayConfig) *Gateway {
 	}
 	if c.Handler == nil {
 		c.Handler = http.NotFoundHandler()
+	}
+	if c.Alias == "" {
+		c.Alias = DefaultAlias()
 	}
 	g := &Gateway{
 		cfg: c, ready: make(chan struct{}), quit: make(chan struct{}),
@@ -436,31 +444,19 @@ func (g *Gateway) tlsConfig(info *connInfo) *tls.Config {
 	return c
 }
 
-type pendingEntry struct {
-	ID        string    `json:"id"`
-	Secret    string    `json:"secret"`
-	ExpiresAt time.Time `json:"expires_at"`
-}
-
-// pairingPending reads pending.json only; a file that is missing, has the
-// wrong mode or does not parse admits no unenrolled client.
+// pairingPending reads pending.json through loadPending; a file that is
+// missing, has the wrong mode or does not parse admits no unenrolled client.
 func (g *Gateway) pairingPending() bool {
-	path := filepath.Join(g.cfg.StateDir, "remote", "pending.json")
-	b, err := readChecked(path, 0o600)
+	es, err := loadPending(g.cfg.StateDir)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
 			g.cfg.Log("pending.json refused: %v", err)
 		}
 		return false
 	}
-	var es []pendingEntry
-	if err := json.Unmarshal(b, &es); err != nil {
-		g.cfg.Log("pending.json refused: %v", err)
-		return false
-	}
 	now := g.cfg.Now()
 	for _, e := range es {
-		if e.ExpiresAt.After(now) {
+		if e.live(now) {
 			return true
 		}
 	}
@@ -470,6 +466,10 @@ func (g *Gateway) pairingPending() bool {
 func (g *Gateway) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	c := r.Context().Value(connKey{}).(*gwConn)
 	if c.info.unenrolled {
+		if r.Method == http.MethodPost && r.URL.Path == "/v1/pair" {
+			g.handlePair(w, r, c)
+			return
+		}
 		http.Error(w, "forbidden", http.StatusForbidden)
 		return
 	}
@@ -491,6 +491,10 @@ func (g *Gateway) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, lim)
+	if r.Method == http.MethodPost && r.URL.Path == "/v1/pair" {
+		g.handlePair(w, r, c)
+		return
+	}
 	g.cfg.Handler.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), peerKey{}, p)))
 }
 

@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/GoodOlClint/crosstalk/internal/registry"
 	"github.com/GoodOlClint/crosstalk/internal/remote"
@@ -23,6 +24,10 @@ commands:
   config [--bind IP] [--port N] [--alias NAME] [--force] [--yes]
              print this host's remote config, or write it
   serve      run the gateway in the foreground until SIGINT or SIGTERM
+  pair [--alias NAME]
+             print a one-time token for another host and wait for it to join
+  join [--alias NAME]
+             read a token from stdin and pair with the host that printed it
 `
 
 func runRemote(args []string, in io.Reader, tty bool, stdout, stderr io.Writer) int {
@@ -32,6 +37,10 @@ func runRemote(args []string, in io.Reader, tty bool, stdout, stderr io.Writer) 
 			return runRemoteConfig(args[1:], in, tty, stdout, stderr)
 		case "serve":
 			return runRemoteServe(args[1:], stdout, stderr)
+		case "pair":
+			return runRemotePair(args[1:], stdout, stderr)
+		case "join":
+			return runRemoteJoin(args[1:], in, stdout, stderr)
 		}
 		fmt.Fprintf(stderr, "crosstalk remote: unknown command %q\n", args[0])
 	}
@@ -69,7 +78,7 @@ func runRemoteServe(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	g := remote.NewGateway(remote.GatewayConfig{
-		StateDir: state, Host: host, Bind: cfg.Bind, Port: cfg.Port, Peers: remote.NewPeers(dir),
+		StateDir: state, Host: host, Bind: cfg.Bind, Port: cfg.Port, Alias: cfg.Alias, Peers: remote.NewPeers(dir),
 		Log: func(format string, a ...any) { fmt.Fprintf(stdout, format+"\n", a...) },
 	})
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -78,6 +87,131 @@ func runRemoteServe(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "crosstalk remote serve: %v\n", err)
 		return 1
 	}
+	return 0
+}
+
+func parseAliasFlag(name string, args []string, stderr io.Writer) (string, bool) {
+	fs := flag.NewFlagSet("remote "+name, flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	alias := fs.String("alias", "", "")
+	err := fs.Parse(args)
+	if err == nil && fs.NArg() > 0 {
+		err = fmt.Errorf("unexpected argument %q", fs.Arg(0))
+		if name == "join" {
+			err = errors.New("takes no arguments; the token is read from stdin so it stays out of shell history")
+		}
+	}
+	if err == nil && *alias != "" {
+		err = remote.ValidAlias(*alias)
+	}
+	if err != nil {
+		fmt.Fprintf(stderr, "crosstalk remote %s: %v\n%s", name, err, remoteUsage)
+		return "", false
+	}
+	return *alias, true
+}
+
+func loadRemoteHost(name string, stderr io.Writer) (dir string, cfg remote.Config, host remote.Host, code int) {
+	dir, err := remote.ConfigDir()
+	if err == nil {
+		cfg, err = remote.LoadConfig(dir)
+	}
+	if err == nil {
+		host, err = remote.LoadHost(dir)
+	}
+	switch {
+	case err == nil:
+		return dir, cfg, host, 0
+	case errors.Is(err, remote.ErrNotConfigured):
+		fmt.Fprintf(stderr, "crosstalk remote %s: not configured; run: crosstalk remote config --bind IP\n", name)
+		return "", cfg, host, 2
+	}
+	fmt.Fprintf(stderr, "crosstalk remote %s: %v\n", name, err)
+	return "", cfg, host, 1
+}
+
+func runRemotePair(args []string, stdout, stderr io.Writer) int {
+	alias, ok := parseAliasFlag("pair", args, stderr)
+	if !ok {
+		return 2
+	}
+	dir, cfg, host, code := loadRemoteHost("pair", stderr)
+	if code != 0 {
+		return code
+	}
+	state, err := registry.DefaultDir()
+	if err != nil {
+		fmt.Fprintf(stderr, "crosstalk remote pair: %v\n", err)
+		return 1
+	}
+	running, err := remote.GatewayRunning(state)
+	if err != nil {
+		fmt.Fprintf(stderr, "crosstalk remote pair: %v\n", err)
+		return 1
+	}
+	if !running {
+		fmt.Fprintln(stderr, "crosstalk remote pair: no gateway running on this host; start one with: crosstalk remote serve")
+		return 1
+	}
+	entry, err := remote.StartPairing(state, time.Now(), remote.PairTTL, alias)
+	if err != nil {
+		fmt.Fprintf(stderr, "crosstalk remote pair: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(stdout, remote.PairToken{Address: cfg.Bind, Port: cfg.Port, Fingerprint: host.Fingerprint, ID: entry.ID, Secret: entry.Secret})
+	fmt.Fprintf(stderr, "run crosstalk remote join on the other host and paste this token; it works once and expires in %d minutes (Ctrl-C cancels)\n", int(remote.PairTTL/time.Minute))
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	p, err := remote.WaitPaired(ctx, remote.WaitOptions{StateDir: state, Peers: remote.NewPeers(dir), ID: entry.ID})
+	if err != nil {
+		fmt.Fprintf(stderr, "crosstalk remote pair: %v\n", pairWaitError(err))
+		return 1
+	}
+	fmt.Fprintf(stdout, "paired with %s (%s)\n", p.Alias, p.Fingerprint)
+	return 0
+}
+
+func pairWaitError(err error) string {
+	switch {
+	case errors.Is(err, context.Canceled):
+		return "interrupted; the token is cancelled"
+	case errors.Is(err, remote.ErrPairingExpired):
+		return "the token expired after 10 minutes; nothing was paired"
+	case errors.Is(err, remote.ErrPairingFailed):
+		return "the token was used up but no peer was recorded; nothing was paired"
+	}
+	return err.Error()
+}
+
+func runRemoteJoin(args []string, in io.Reader, stdout, stderr io.Writer) int {
+	alias, ok := parseAliasFlag("join", args, stderr)
+	if !ok {
+		return 2
+	}
+	dir, cfg, host, code := loadRemoteHost("join", stderr)
+	if code != 0 {
+		return code
+	}
+	fmt.Fprint(stdout, "Paste the token from the other host: ")
+	line, err := bufio.NewReaderSize(io.LimitReader(in, 4096), 4096).ReadString('\n')
+	fmt.Fprintln(stdout)
+	if err != nil && line == "" {
+		fmt.Fprintln(stderr, "crosstalk remote join: no token on stdin")
+		return 1
+	}
+	tok, err := remote.ParsePairToken(line)
+	if err != nil {
+		fmt.Fprintf(stderr, "crosstalk remote join: %v\n", err)
+		return 1
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	p, err := remote.JoinGateway(ctx, remote.JoinOptions{Host: host, Config: cfg, Peers: remote.NewPeers(dir), Token: tok, Alias: alias})
+	if err != nil {
+		fmt.Fprintf(stderr, "crosstalk remote join: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "paired with %s (%s) at %s\n", p.Alias, p.Fingerprint, p.Address)
 	return 0
 }
 

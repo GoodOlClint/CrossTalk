@@ -2,10 +2,14 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/GoodOlClint/crosstalk/internal/remote"
 )
@@ -145,5 +149,172 @@ func TestRemoteServeCLI(t *testing.T) {
 	}
 	if code, _, _ := remoteRun(t, false, "bogus"); code != 2 {
 		t.Fatalf("unknown command: %d, want 2", code)
+	}
+}
+
+func TestJoinReadsStdinOnly(t *testing.T) {
+	adir := filepath.Join(t.TempDir(), "crosstalk")
+	ahost, err := remote.LoadOrCreateHost(adir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := filepath.Join(t.TempDir(), "state")
+	apeers := remote.NewPeers(adir)
+	gw := remote.NewGateway(remote.GatewayConfig{StateDir: state, Host: ahost, Bind: "127.0.0.1", Alias: "alpha", Peers: apeers})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- gw.Serve(ctx) }()
+	t.Cleanup(func() { cancel(); <-done })
+	select {
+	case <-gw.Ready():
+	case err := <-done:
+		t.Fatal(err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("gateway not ready")
+	}
+	entry, err := remote.StartPairing(state, time.Now(), 10*time.Minute, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok := remote.PairToken{Address: "127.0.0.1", Port: gw.Addr().(*net.TCPAddr).Port, Fingerprint: ahost.Fingerprint, ID: entry.ID, Secret: entry.Secret}.String()
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	run := func(stdin string, args ...string) (int, string, string) {
+		var out, errb bytes.Buffer
+		code := runRemote(args, strings.NewReader(stdin), false, &out, &errb)
+		return code, out.String(), errb.String()
+	}
+	if code, _, errb := run(tok+"\n", "join"); code != 2 || !strings.Contains(errb, "remote config") {
+		t.Fatalf("join with no config: %d %q, want 2 naming remote config", code, errb)
+	}
+	if code, _, _ := run("", "config", "--bind", "127.0.0.1", "--alias", "beta", "--yes"); code != 0 {
+		t.Fatalf("config: %d", code)
+	}
+	bdir := filepath.Join(home, ".config", "crosstalk")
+
+	code, out, errb := run("", "join", tok)
+	if code != 2 {
+		t.Fatalf("join with the token as an argument: %d, want 2", code)
+	}
+	if strings.Contains(out+errb, entry.Secret) {
+		t.Fatal("the secret was echoed back")
+	}
+	if ps, _ := remote.NewPeers(bdir).List(); len(ps) != 0 {
+		t.Fatalf("an argument token paired: %+v", ps)
+	}
+	if ps, _ := apeers.List(); len(ps) != 0 {
+		t.Fatalf("an argument token enrolled a peer on the other host: %+v", ps)
+	}
+
+	code, out, errb = run(tok+"\nsecond line is never read\n", "join")
+	if code != 0 {
+		t.Fatalf("join from stdin: %d\nstdout %q\nstderr %q", code, out, errb)
+	}
+	if !strings.Contains(out, "Paste the token from the other host:") || !strings.Contains(out, "paired with alpha ("+ahost.Fingerprint+")") {
+		t.Fatalf("join output: %q", out)
+	}
+	if strings.Contains(out+errb, entry.Secret) {
+		t.Fatal("the secret was echoed back")
+	}
+	bp, _ := remote.NewPeers(bdir).List()
+	if len(bp) != 1 || bp[0].Alias != "alpha" || bp[0].Fingerprint != ahost.Fingerprint || bp[0].Address != gw.Addr().String() {
+		t.Fatalf("joiner peers: %+v", bp)
+	}
+	if ap, _ := apeers.List(); len(ap) != 1 || ap[0].Alias != "beta" {
+		t.Fatalf("host A peers: %+v", ap)
+	}
+}
+
+type syncBuf struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuf) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+
+func (s *syncBuf) String() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.String()
+}
+
+func TestRemotePairCLI(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if code, _, errb := remoteRun(t, false, "pair"); code != 2 || !strings.Contains(errb, "not configured") {
+		t.Fatalf("pair with no config: %d %q, want 2", code, errb)
+	}
+	if code, _, _ := remoteRun(t, false, "config", "--bind", "127.0.0.1", "--alias", "alpha", "--yes"); code != 0 {
+		t.Fatal("config failed")
+	}
+	if code, _, errb := remoteRun(t, false, "pair"); code != 1 || !strings.Contains(errb, "no gateway running") {
+		t.Fatalf("pair with no gateway: %d %q, want 1", code, errb)
+	}
+	if code, _, _ := remoteRun(t, false, "pair", "extra"); code != 2 {
+		t.Fatalf("pair with an argument: %d, want 2", code)
+	}
+
+	dir := filepath.Join(home, ".config", "crosstalk")
+	state := filepath.Join(home, ".local", "state", "crosstalk")
+	host, err := remote.LoadHost(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peers := remote.NewPeers(dir)
+	gw := remote.NewGateway(remote.GatewayConfig{StateDir: state, Host: host, Bind: "127.0.0.1", Alias: "alpha", Peers: peers})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- gw.Serve(ctx) }()
+	t.Cleanup(func() { cancel(); <-done })
+	select {
+	case <-gw.Ready():
+	case err := <-done:
+		t.Fatal(err)
+	}
+
+	var out, errb syncBuf
+	exit := make(chan int, 1)
+	go func() {
+		exit <- runRemote([]string{"pair", "--alias", "laptop"}, strings.NewReader(""), false, &out, &errb)
+	}()
+	var tok remote.PairToken
+	for deadline := time.Now().Add(5 * time.Second); ; {
+		line, _, _ := strings.Cut(out.String(), "\n")
+		if t2, err := remote.ParsePairToken(line); err == nil {
+			tok = t2
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no token printed: out %q err %q", out.String(), errb.String())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if tok.Fingerprint != host.Fingerprint || tok.Address != "127.0.0.1" || tok.Port != 7745 {
+		t.Fatalf("token %+v", tok)
+	}
+	tok.Port = gw.Addr().(*net.TCPAddr).Port
+
+	bdir := filepath.Join(t.TempDir(), "crosstalk")
+	bhost, err := remote.LoadOrCreateHost(bdir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := remote.JoinGateway(context.Background(), remote.JoinOptions{
+		Host: bhost, Config: remote.Config{Version: 1, Alias: "beta", Bind: "127.0.0.1", Port: 7746}, Peers: remote.NewPeers(bdir), Token: tok, Timeout: 5 * time.Second,
+	}); err != nil {
+		t.Fatalf("join: %v", err)
+	}
+	select {
+	case code := <-exit:
+		if code != 0 || !strings.Contains(out.String(), "paired with laptop ("+bhost.Fingerprint+")") {
+			t.Fatalf("pair: %d out %q err %q", code, out.String(), errb.String())
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("remote pair did not notice the redemption")
 	}
 }
