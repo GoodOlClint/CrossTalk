@@ -25,3 +25,8 @@ Status of captured frames: to be committed before `go mod init`. Until then the 
 
 - [11 harness landscape](11-harness-landscape.md) — which other harnesses can take in-session delivery; recommended early set OpenCode, Gemini CLI (+Qwen Code), Pi; ACP is not an attach surface.
 - [12 Antigravity CLI](12-antigravity-cli.md) — measured MCP identity, hook payloads, injection forms and Stop re-entry on agy 1.5.0; backs ADR 0012.
+
+## v0.2.0 remote spikes (2026-11-07)
+
+- [13 remote SDK seam](13-remote-sdk-seam.md) — S1: a pinned-mTLS gateway in front of an a2a-go v2.7.0 loopback server keeps the host fingerprint from the connection, refuses malformed agent fields before the receiver chain and gives a remote primary no `command`; PASS, with R4 findings. Code in `13-remote-sdk-seam/`.
+- [14 remote pairing](14-remote-pairing.md) — S3: wrong, expired, second and concurrent redemptions write nothing or enroll exactly one; an open and a resumed connection are refused after `unpair`; PASS. Code in `14-remote-pairing/`.
