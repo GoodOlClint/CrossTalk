@@ -39,6 +39,8 @@ type Limits struct {
 	MaxPinnedConns, MaxPeerConcurrent, MaxPeerPerMinute                     int
 	MaxHandshaking, MaxUnenrolled                                           int
 	UnenrolledLife, PendingPoll, BindRetry, BindGiveUp                      time.Duration
+	// PairInterval is the gateway-wide gap between pairing attempts; negative disables it.
+	PairInterval time.Duration
 }
 
 func DefaultLimits() Limits {
@@ -50,6 +52,7 @@ func DefaultLimits() Limits {
 		MaxHandshaking: 16, MaxUnenrolled: 4,
 		UnenrolledLife: 15 * time.Second, PendingPoll: time.Second,
 		BindRetry: 10 * time.Second, BindGiveUp: 60 * time.Second,
+		PairInterval: time.Second,
 	}
 }
 
@@ -58,7 +61,9 @@ type GatewayConfig struct {
 	Host     Host
 	Bind     string
 	Port     int
-	Peers    *Peers
+	// Alias is the name this host announces to a host that pairs with it.
+	Alias string
+	Peers *Peers
 	// Handler serves requests from pinned peers; nil answers 404.
 	Handler http.Handler
 	// Limits zero value means DefaultLimits.
@@ -436,12 +441,6 @@ func (g *Gateway) tlsConfig(info *connInfo) *tls.Config {
 	return c
 }
 
-type pendingEntry struct {
-	ID        string    `json:"id"`
-	Secret    string    `json:"secret"`
-	ExpiresAt time.Time `json:"expires_at"`
-}
-
 // pairingPending reads pending.json only; a file that is missing, has the
 // wrong mode or does not parse admits no unenrolled client.
 func (g *Gateway) pairingPending() bool {
@@ -453,7 +452,7 @@ func (g *Gateway) pairingPending() bool {
 		}
 		return false
 	}
-	var es []pendingEntry
+	var es []Pairing
 	if err := json.Unmarshal(b, &es); err != nil {
 		g.cfg.Log("pending.json refused: %v", err)
 		return false

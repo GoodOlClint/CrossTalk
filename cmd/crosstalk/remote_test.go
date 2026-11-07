@@ -2,10 +2,13 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/GoodOlClint/crosstalk/internal/remote"
 )
@@ -145,5 +148,79 @@ func TestRemoteServeCLI(t *testing.T) {
 	}
 	if code, _, _ := remoteRun(t, false, "bogus"); code != 2 {
 		t.Fatalf("unknown command: %d, want 2", code)
+	}
+}
+
+func TestJoinReadsStdinOnly(t *testing.T) {
+	adir := filepath.Join(t.TempDir(), "crosstalk")
+	ahost, err := remote.LoadOrCreateHost(adir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := filepath.Join(t.TempDir(), "state")
+	apeers := remote.NewPeers(adir)
+	gw := remote.NewGateway(remote.GatewayConfig{StateDir: state, Host: ahost, Bind: "127.0.0.1", Alias: "alpha", Peers: apeers})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- gw.Serve(ctx) }()
+	t.Cleanup(func() { cancel(); <-done })
+	select {
+	case <-gw.Ready():
+	case err := <-done:
+		t.Fatal(err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("gateway not ready")
+	}
+	entry, err := remote.StartPairing(state, time.Now(), 10*time.Minute, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tok := remote.PairToken{Address: "127.0.0.1", Port: gw.Addr().(*net.TCPAddr).Port, Fingerprint: ahost.Fingerprint, ID: entry.ID, Secret: entry.Secret}.String()
+
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	run := func(stdin string, args ...string) (int, string, string) {
+		var out, errb bytes.Buffer
+		code := runRemote(args, strings.NewReader(stdin), false, &out, &errb)
+		return code, out.String(), errb.String()
+	}
+	if code, _, errb := run(tok+"\n", "join"); code != 2 || !strings.Contains(errb, "remote config") {
+		t.Fatalf("join with no config: %d %q, want 2 naming remote config", code, errb)
+	}
+	if code, _, _ := run("", "config", "--bind", "127.0.0.1", "--alias", "beta", "--yes"); code != 0 {
+		t.Fatalf("config: %d", code)
+	}
+	bdir := filepath.Join(home, ".config", "crosstalk")
+
+	code, out, errb := run("", "join", tok)
+	if code != 2 {
+		t.Fatalf("join with the token as an argument: %d, want 2", code)
+	}
+	if strings.Contains(out+errb, entry.Secret) {
+		t.Fatal("the secret was echoed back")
+	}
+	if ps, _ := remote.NewPeers(bdir).List(); len(ps) != 0 {
+		t.Fatalf("an argument token paired: %+v", ps)
+	}
+	if ps, _ := apeers.List(); len(ps) != 0 {
+		t.Fatalf("an argument token enrolled a peer on the other host: %+v", ps)
+	}
+
+	code, out, errb = run(tok+"\nsecond line is never read\n", "join")
+	if code != 0 {
+		t.Fatalf("join from stdin: %d\nstdout %q\nstderr %q", code, out, errb)
+	}
+	if !strings.Contains(out, "Paste the token from the other host:") || !strings.Contains(out, "paired with alpha ("+ahost.Fingerprint+")") {
+		t.Fatalf("join output: %q", out)
+	}
+	if strings.Contains(out+errb, entry.Secret) {
+		t.Fatal("the secret was echoed back")
+	}
+	bp, _ := remote.NewPeers(bdir).List()
+	if len(bp) != 1 || bp[0].Alias != "alpha" || bp[0].Fingerprint != ahost.Fingerprint || bp[0].Address != gw.Addr().String() {
+		t.Fatalf("joiner peers: %+v", bp)
+	}
+	if ap, _ := apeers.List(); len(ap) != 1 || ap[0].Alias != "beta" {
+		t.Fatalf("host A peers: %+v", ap)
 	}
 }
