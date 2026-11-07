@@ -2,13 +2,18 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
+	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 
+	"github.com/GoodOlClint/crosstalk/internal/registry"
 	"github.com/GoodOlClint/crosstalk/internal/remote"
 )
 
@@ -17,17 +22,63 @@ const remoteUsage = `usage: crosstalk remote <command>
 commands:
   config [--bind IP] [--port N] [--alias NAME] [--force] [--yes]
              print this host's remote config, or write it
+  serve      run the gateway in the foreground until SIGINT or SIGTERM
 `
 
 func runRemote(args []string, in io.Reader, tty bool, stdout, stderr io.Writer) int {
-	if len(args) == 0 || args[0] != "config" {
-		if len(args) > 0 {
-			fmt.Fprintf(stderr, "crosstalk remote: unknown command %q\n", args[0])
+	if len(args) > 0 {
+		switch args[0] {
+		case "config":
+			return runRemoteConfig(args[1:], in, tty, stdout, stderr)
+		case "serve":
+			return runRemoteServe(args[1:], stdout, stderr)
 		}
-		fmt.Fprint(stderr, remoteUsage)
+		fmt.Fprintf(stderr, "crosstalk remote: unknown command %q\n", args[0])
+	}
+	fmt.Fprint(stderr, remoteUsage)
+	return 2
+}
+
+func runRemoteServe(args []string, stdout, stderr io.Writer) int {
+	if len(args) > 0 {
+		fmt.Fprintf(stderr, "crosstalk remote serve: takes no arguments\n%s", remoteUsage)
 		return 2
 	}
-	return runRemoteConfig(args[1:], in, tty, stdout, stderr)
+	dir, err := remote.ConfigDir()
+	if err != nil {
+		fmt.Fprintf(stderr, "crosstalk remote serve: %v\n", err)
+		return 1
+	}
+	cfg, err := remote.LoadConfig(dir)
+	if errors.Is(err, remote.ErrNotConfigured) {
+		fmt.Fprintln(stderr, "crosstalk remote serve: not configured; run: crosstalk remote config --bind IP")
+		return 1
+	}
+	if err != nil {
+		fmt.Fprintf(stderr, "crosstalk remote serve: %v\n", err)
+		return 1
+	}
+	host, err := remote.LoadHost(dir)
+	if err != nil {
+		fmt.Fprintf(stderr, "crosstalk remote serve: %v\n", err)
+		return 1
+	}
+	state, err := registry.DefaultDir()
+	if err != nil {
+		fmt.Fprintf(stderr, "crosstalk remote serve: %v\n", err)
+		return 1
+	}
+	g := remote.NewGateway(remote.GatewayConfig{
+		StateDir: state, Host: host, Bind: cfg.Bind, Port: cfg.Port, Peers: remote.NewPeers(dir),
+		Log: func(format string, a ...any) { fmt.Fprintf(stdout, format+"\n", a...) },
+	})
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := g.Serve(ctx); err != nil {
+		fmt.Fprintf(stderr, "crosstalk remote serve: %v\n", err)
+		return 1
+	}
+	return 0
 }
 
 func runRemoteConfig(args []string, in io.Reader, tty bool, stdout, stderr io.Writer) int {

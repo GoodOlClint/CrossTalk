@@ -133,3 +133,17 @@ func TestRemoteConfigOverlappingUpdatesMerge(t *testing.T) {
 		t.Fatalf("config after overlapping updates = %+v, %v; want alias tower and port 7800", c, err)
 	}
 }
+
+func TestRemoteServeCLI(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	if code, _, errb := remoteRun(t, false, "serve"); code != 1 || !strings.Contains(errb, "not configured") {
+		t.Fatalf("serve with no config: %d %q", code, errb)
+	}
+	if code, _, _ := remoteRun(t, false, "serve", "extra"); code != 2 {
+		t.Fatalf("serve with an argument: %d, want 2", code)
+	}
+	if code, _, _ := remoteRun(t, false, "bogus"); code != 2 {
+		t.Fatalf("unknown command: %d, want 2", code)
+	}
+}

@@ -161,9 +161,9 @@ func writeAtomic(path string, data []byte, mode os.FileMode) error {
 	return nil
 }
 
-// lock takes a blocking exclusive flock on dir/name and returns its release.
-// An existing lock file must be a regular 0600 file.
-func lock(dir, name string) (func(), error) {
+// openLockFile opens dir/name for locking. An existing lock file must be a
+// regular 0600 file.
+func openLockFile(dir, name string) (*os.File, error) {
 	path := filepath.Join(dir, name)
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0o600)
 	if err != nil {
@@ -177,6 +177,15 @@ func lock(dir, name string) (func(), error) {
 	if !fi.Mode().IsRegular() || fi.Mode().Perm() != 0o600 {
 		f.Close()
 		return nil, fmt.Errorf("%w: %s is %v, want a regular file with mode 0600", ErrMode, path, fi.Mode())
+	}
+	return f, nil
+}
+
+// lock takes a blocking exclusive flock on dir/name and returns its release.
+func lock(dir, name string) (func(), error) {
+	f, err := openLockFile(dir, name)
+	if err != nil {
+		return nil, err
 	}
 	if err := unix.Flock(int(f.Fd()), unix.LOCK_EX); err != nil {
 		f.Close()

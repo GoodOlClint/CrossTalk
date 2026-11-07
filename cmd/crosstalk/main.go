@@ -31,7 +31,7 @@ commands:
   uninstall  undo install
   reinstall  re-apply every install step
   mcp        run the shim as an MCP server over stdio
-  remote     host identity and config for messaging other machines (planned: pairing, serve)
+  remote     host identity and config for messaging other machines (planned: pairing)
   send       send a text to an agent by name, for plain scripts
   capture    record raw Codex app-server frames for fixtures
   version    print the version
