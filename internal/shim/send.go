@@ -38,7 +38,7 @@ const (
 	hintNativeUnreachable = "This session has no CrossTalk binding yet and its harness reports it unreachable, so nothing can reach it now. Check list_agents later; if CrossTalk is installed there, its first CrossTalk call binds it, and then ask works."
 	hintNativeOneWay      = "Delivered one way to a session with no CrossTalk binding. An answer may never come, or may wait on that session's user."
 	hintNoRouteUnbound    = "This session has no message with that id: check the message_id against receive_message. Use send_message to the sender."
-	hintNoRoutePreBind    = "That message_id predates this session's binding, so this session never received it. Use send_message to the sender."
+	hintNoRoutePreBind    = "That message_id may predate this session's binding, so it may never have reached this session, or its record may have been trimmed. Check the message_id against receive_message; if it is right, use send_message to the sender."
 	hintNoRouteExpired    = "That inform has no open reply route: it was not delivered, it was already answered, or it is over an hour old. Use send_message to the sender."
 	hintAmbiguousName     = "Several sessions carry this name. Find the one you mean in list_agents and address it by agent_id."
 )
@@ -499,7 +499,7 @@ func (s *Shim) Reply(ctx context.Context, from *mcpserver.Agent, messageID, text
 	orig, key, ok := st.inbound(messageID)
 	if !ok {
 		hint := hintNoRouteUnbound
-		if ts, ok := msg.UUIDv7Time(messageID); ok && ts.Before(st.boundAt) {
+		if ts, ok := msg.UUIDv7Time(messageID); ok && ts.Before(st.boundAt.Truncate(time.Millisecond)) {
 			hint = hintNoRoutePreBind
 		}
 		return mcpserver.Result{}, &mcpserver.Error{Code: mcpserver.CodeInvalid, Reason: ReasonNoSuchMessage, Hint: hint}
