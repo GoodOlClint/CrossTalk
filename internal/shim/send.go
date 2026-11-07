@@ -40,6 +40,7 @@ const (
 	hintNoRouteUnbound    = "This session has no message with that id: check the message_id against receive_message. Use send_message to the sender."
 	hintNoRoutePreBind    = "That message_id may predate this session's binding, so it may never have reached this session, or its record may have been trimmed. If unsure, check the message_id against receive_message; if it is right, use send_message to the sender."
 	hintNoRouteExpired    = "That inform has no open reply route: it was not delivered, it was already answered, or it is over an hour old. Use send_message to the sender."
+	hintCodexNoEndpoint   = "This Codex session has no app-server endpoint CrossTalk can reach, usually because it was launched with a -c config override, so it can send but not receive. Tell its user to restart it without -c and put the setting in ~/.codex/config.toml."
 	hintAmbiguousName     = "Several sessions carry this name. Find the one you mean in list_agents and address it by agent_id."
 )
 
@@ -255,7 +256,10 @@ func (st *AgentState) deliver(ctx context.Context, m msg.Message) mcpserver.Resu
 		state, reason, taskID := st.viaTransport(ctx, d, m)
 		st.outboundTask(m, d.AgentID, state, reason, false, taskID)
 		res.State, res.Reason = state, reason
-		res.Hint = st.countSend(d.AgentID, state)
+		if state == adapter.Unreachable && d.Harness == string(adapter.Codex) && d.HarnessEndpoint == nil {
+			res.Hint = hintCodexNoEndpoint
+		}
+		res.Hint = joinHint(res.Hint, st.countSend(d.AgentID, state))
 		return res
 	}
 	if m.Kind != msg.Inform {
