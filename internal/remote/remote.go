@@ -627,3 +627,19 @@ func (p *Peers) Remove(alias string) error {
 		return nil, fmt.Errorf("remote: no peer %q", alias)
 	})
 }
+
+// Lookup finds the peer with this fingerprint in the current table.
+func (p *Peers) Lookup(fingerprint string) (Peer, bool, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	ps, err := p.read()
+	if err != nil {
+		return Peer{}, false, err
+	}
+	for _, q := range ps {
+		if q.Fingerprint == fingerprint {
+			return q, true, nil
+		}
+	}
+	return Peer{}, false, nil
+}
