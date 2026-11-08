@@ -123,6 +123,9 @@ func ProbePeer(h Host, p Peer) string {
 	c := tls.Client(raw, pinnedTLSConfig(h, p, nil))
 	raw.SetDeadline(deadline)
 	if err := c.HandshakeContext(ctx); err != nil {
+		if handshakeCut(err) {
+			return ReasonTimeout
+		}
 		return probeClass(err)
 	}
 	// TLS 1.3 finishes the client side before the server judges our

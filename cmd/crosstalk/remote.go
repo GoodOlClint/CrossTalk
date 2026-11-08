@@ -234,6 +234,7 @@ func runRemotePair(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprintln(stdout, remote.PairToken{Address: cfg.Bind, Port: cfg.Port, Fingerprint: host.Fingerprint, ID: entry.ID, Secret: entry.Secret})
 	fmt.Fprintf(stderr, "run crosstalk remote join on the other host and paste this token; it works once and expires in %d minutes (Ctrl-C cancels)\n", int(remote.PairTTL/time.Minute))
+	fmt.Fprintf(stderr, "pair waits up to %d minutes; if crosstalk remote join on the other host reports a handshake timeout, check firewalls or network filters on this host\n", int(remote.PairTTL/time.Minute))
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	p, err := remote.WaitPaired(ctx, remote.WaitOptions{StateDir: state, Peers: remote.NewPeers(dir), ID: entry.ID})

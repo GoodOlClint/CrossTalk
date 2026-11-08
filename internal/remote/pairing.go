@@ -367,6 +367,8 @@ type JoinOptions struct {
 	Token   PairToken
 	Alias   string
 	Timeout time.Duration
+	// HandshakeTimeout bounds the TLS handshake alone; zero means 5 seconds.
+	HandshakeTimeout time.Duration
 }
 
 // JoinGateway is `remote join`: it redeems the token on the other host's
@@ -400,9 +402,13 @@ func JoinGateway(ctx context.Context, o JoinOptions) (Peer, error) {
 	if timeout <= 0 {
 		timeout = 15 * time.Second
 	}
+	hsTimeout := o.HandshakeTimeout
+	if hsTimeout <= 0 {
+		hsTimeout = 5 * time.Second
+	}
 	tr := &http.Transport{
 		DisableKeepAlives:   true,
-		TLSHandshakeTimeout: timeout,
+		TLSHandshakeTimeout: hsTimeout,
 		TLSClientConfig: &tls.Config{
 			Certificates:       []tls.Certificate{o.Host.Certificate},
 			MinVersion:         tls.VersionTLS13,
@@ -425,6 +431,7 @@ func JoinGateway(ctx context.Context, o JoinOptions) (Peer, error) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	ctx, stalled := traceHandshake(ctx, addr)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://"+addr+"/v1/pair", strings.NewReader(string(body)))
 	if err != nil {
 		return Peer{}, err
@@ -432,6 +439,9 @@ func JoinGateway(ctx context.Context, o JoinOptions) (Peer, error) {
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := (&http.Client{Transport: tr}).Do(req)
 	if err != nil {
+		if he := stalled(err); he != nil {
+			return Peer{}, fmt.Errorf("remote: %w", he)
+		}
 		if strings.Contains(err.Error(), "bad certificate") {
 			return Peer{}, fmt.Errorf("remote: %s is not waiting for a pairing; run crosstalk remote pair there first", addr)
 		}
