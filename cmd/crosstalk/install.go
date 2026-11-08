@@ -536,6 +536,9 @@ func installChecks(ctx context.Context, w io.Writer, targets []installTarget, en
 	if installReport(w, "crosstalk", []harness.CheckResult{installPathCheck(env.Bin)}) {
 		failed = true
 	}
+	if installReport(w, "crosstalk", installRemoteChecks(env.Home)) {
+		failed = true
+	}
 	return failed
 }
 
