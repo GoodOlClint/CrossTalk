@@ -1,11 +1,16 @@
 package wire
 
 import (
+	"context"
+	"errors"
 	"io"
 	"net"
 	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/GoodOlClint/crosstalk/internal/a2a"
+	"github.com/GoodOlClint/crosstalk/internal/adapter"
 	"github.com/GoodOlClint/crosstalk/internal/remote"
 )
 
@@ -91,7 +96,26 @@ func TestRemoteReplyStallCarriesHint(t *testing.T) {
 	addr := silentListener(t, "", false)
 	repoint(t, h2, "desk", addr, h1.host.Fingerprint)
 	out := bob.ok("reply", replyArgs(askID))
+	if str(out, "state") != "unreachable" || str(out, "reason") != "remote_reply_pending" {
+		t.Fatalf("reply %v, want unreachable/remote_reply_pending", out)
+	}
 	if got := str(out, "hint"); got != stallText(addr) {
 		t.Fatalf("reply %v, hint %q, want %q", out, got, stallText(addr))
+	}
+}
+
+func TestPollSettledStallKeepsPendingAndCause(t *testing.T) {
+	h1, h2, alice, _ := twoHosts(t)
+	_ = alice
+	addr := silentListener(t, "", false)
+	peer := remote.Peer{Alias: "lab", Address: addr, Fingerprint: h2.host.Fingerprint}
+	c := &a2a.Client{HTTP: remote.NewClient(h1.host, peer).HTTPClient()}
+	_, state, err := pollSettled(context.Background(), c, "https://"+addr+"/v1/a2a/x", "", "m", 1*time.Second)
+	var he *remote.HandshakeError
+	if state != adapter.Unknown || err == nil || err.Error() != ReasonPending || !errors.As(err, &he) {
+		t.Fatalf("state %v err %v, want unknown, pending, carrying a HandshakeError", state, err)
+	}
+	if he.Error() != stallText(addr) {
+		t.Fatalf("cause %q, want %q", he.Error(), stallText(addr))
 	}
 }

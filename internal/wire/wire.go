@@ -23,6 +23,7 @@ import (
 	"github.com/GoodOlClint/crosstalk/internal/msg"
 	"github.com/GoodOlClint/crosstalk/internal/receiver"
 	"github.com/GoodOlClint/crosstalk/internal/registry"
+	"github.com/GoodOlClint/crosstalk/internal/remote"
 	"github.com/GoodOlClint/crosstalk/internal/shim"
 	"github.com/GoodOlClint/crosstalk/internal/udsingress"
 )
@@ -340,6 +341,7 @@ func (w *Wire) SendTask(ctx context.Context, from, to registry.Descriptor, m msg
 func pollSettled(ctx context.Context, c *a2a.Client, url, tok, id string, bound time.Duration) (string, adapter.State, error) {
 	deadline := time.Now().Add(bound)
 	wait := 10 * time.Millisecond
+	var stall error
 	for time.Now().Before(deadline) {
 		select {
 		case <-ctx.Done():
@@ -349,6 +351,10 @@ func pollSettled(ctx context.Context, c *a2a.Client, url, tok, id string, bound 
 		pctx, cancel := context.WithDeadline(ctx, deadline)
 		t, err := c.GetTask(pctx, url, tok, id)
 		cancel()
+		var he *remote.HandshakeError
+		if errors.As(err, &he) {
+			stall = he
+		}
 		if err == nil && !settling(t.State) {
 			if t.Reason != "" && t.State != adapter.Accepted && t.State != adapter.Queued {
 				return id, t.State, errors.New(t.Reason)
@@ -356,6 +362,9 @@ func pollSettled(ctx context.Context, c *a2a.Client, url, tok, id string, bound 
 			return id, t.State, nil
 		}
 		wait = min(wait*2, 200*time.Millisecond)
+	}
+	if stall != nil {
+		return id, adapter.Unknown, &reasonErr{ReasonPending, stall}
 	}
 	return id, adapter.Unknown, errors.New(ReasonPending)
 }
