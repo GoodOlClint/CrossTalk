@@ -160,9 +160,7 @@ func TestTwoHostReplyAcrossDisconnect(t *testing.T) {
 		t.Fatalf("ask across a dropped response: %v, want unknown", out)
 	}
 	askID := str(out, "message_id")
-	if n := len(bob.codex.Writes()); n != 1 {
-		t.Fatalf("host 2 injected %d times before the retry, want 1", n)
-	}
+	waitFor(t, "the dropped ask's inject on host 2", func() bool { return len(bob.codex.Writes()) == 1 })
 	if state, err := resendAsk(t, h1, h2, alice, bob, askID); state != adapter.Accepted {
 		t.Fatalf("retry of the same message_id: %v %v", state, err)
 	}
@@ -185,29 +183,41 @@ func TestTwoHostReplyAcrossDisconnect(t *testing.T) {
 }
 
 func TestRemoteReplyPendingWhileGatewayDown(t *testing.T) {
-	h1, h2, alice, bob := twoHosts(t)
-	_ = h2
-	askID := askBob(t, alice, nil)
-	h1.stop()
-	waitFor(t, "gateway 1 stopped", func() bool { return !dials(h1.addr()) })
-	out := bob.ok("reply", replyArgs(askID))
-	if s := str(out, "state"); s == "accepted" || s == "queued" || str(out, "reason") != shim.ReasonRemoteReplyPending {
-		t.Fatalf("reply with the asker's gateway down: %v, want not delivered, reason %s", out, shim.ReasonRemoteReplyPending)
+	modes := map[string]struct {
+		down  func(h1 *rhost)
+		state adapter.State
+	}{
+		"stopped": {func(h1 *rhost) {
+			h1.stop()
+			waitFor(t, "gateway 1 stopped", func() bool { return !dials(h1.addr()) })
+		}, adapter.Unreachable},
+		"dropped": {func(h1 *rhost) { h1.setHook(abortPosts) }, adapter.Unknown},
 	}
-	if st, _, _ := obligation(t, h2.state, bob.id(), askID); st == journal.StateDelivered || st == journal.StateClosed || st == "" {
-		t.Fatalf("obligation %q, want pending", st)
-	}
-	var sent bool
-	for _, r := range journalOf(t, h2.state, bob.id()) {
-		if r.Type == journal.TypeOutbound && r.MessageID == str(out, "message_id") && r.State == string(adapter.Unreachable) && r.To == receiver.RemoteKey(h1.host.Fingerprint, alice.id()) {
-			sent = true
-		}
-	}
-	if !sent {
-		t.Fatalf("no outbound record keyed %s for the attempt", receiver.RemoteKey(h1.host.Fingerprint, alice.id()))
-	}
-	if n := len(alice.codex.Writes()); n != 0 {
-		t.Fatalf("host 1 injected %d times, want 0", n)
+	for name, m := range modes {
+		t.Run(name, func(t *testing.T) {
+			h1, h2, alice, bob := twoHosts(t)
+			askID := askBob(t, alice, nil)
+			m.down(h1)
+			out := bob.ok("reply", replyArgs(askID))
+			if str(out, "state") != string(m.state) || str(out, "reason") != shim.ReasonRemoteReplyPending {
+				t.Fatalf("reply with the asker's gateway down: %v, want %s/%s", out, m.state, shim.ReasonRemoteReplyPending)
+			}
+			if st, _, _ := obligation(t, h2.state, bob.id(), askID); st == journal.StateDelivered || st == journal.StateClosed || st == "" {
+				t.Fatalf("obligation %q, want pending", st)
+			}
+			var sent bool
+			for _, r := range journalOf(t, h2.state, bob.id()) {
+				if r.Type == journal.TypeOutbound && r.MessageID == str(out, "message_id") && r.State == string(m.state) && r.To == receiver.RemoteKey(h1.host.Fingerprint, alice.id()) {
+					sent = true
+				}
+			}
+			if !sent {
+				t.Fatalf("no %s outbound record keyed %s for the attempt", m.state, receiver.RemoteKey(h1.host.Fingerprint, alice.id()))
+			}
+			if n := len(alice.codex.Writes()); n != 0 {
+				t.Fatalf("host 1 injected %d times, want 0", n)
+			}
+		})
 	}
 }
 
@@ -236,7 +246,7 @@ func TestRemoteReplyResumesAfterRestart(t *testing.T) {
 	})
 	got := 0
 	for _, r := range journalOf(t, h1.state, alice.id()) {
-		if r.Type == journal.TypeDedupe && r.MessageID == replyID {
+		if r.Type == journal.TypeDedupe && r.MessageID == replyID && len(r.Message) > 0 {
 			got++
 		}
 	}
