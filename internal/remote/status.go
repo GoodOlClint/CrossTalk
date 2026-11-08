@@ -106,8 +106,7 @@ func listenerIsOurs(addr, fingerprint string) bool {
 			return nil
 		},
 	})
-	c.HandshakeContext(ctx)
-	return ours
+	return c.HandshakeContext(ctx) == nil && ours
 }
 
 // ProbePeer completes a pinned TLS 1.3 handshake with p using this host's

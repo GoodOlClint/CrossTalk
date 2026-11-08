@@ -64,6 +64,7 @@ func TestGatewayStatusForeignListener(t *testing.T) {
 	}{
 		{"service up, plain TCP listener holds the port", true, nil, StateNoPort},
 		{"service up, TLS listener with another certificate holds the port", true, &tls.Config{Certificates: []tls.Certificate{other.Certificate}, MinVersion: tls.VersionTLS13}, StateNoPort},
+		{"service up, listener presents this host's certificate without its key", true, &tls.Config{Certificates: []tls.Certificate{{Certificate: host.Certificate.Certificate, PrivateKey: other.Certificate.PrivateKey}}, MinVersion: tls.VersionTLS13}, StateNoPort},
 		{"no lock, plain TCP listener holds the port", false, nil, StateNotRunning},
 		{"no lock, TLS listener with another certificate", false, &tls.Config{Certificates: []tls.Certificate{other.Certificate}, MinVersion: tls.VersionTLS13}, StateNotRunning},
 	}

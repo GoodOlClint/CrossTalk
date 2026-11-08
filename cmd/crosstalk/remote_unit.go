@@ -146,10 +146,17 @@ func checkUnitBin(ctx context.Context, bin string) error {
 // that its hash is the one remote.json recorded.
 func unitOwnership(home, dir string) (path string, content []byte, present, owned bool, err error) {
 	path = remoteUnitPath(home)
-	content, err = os.ReadFile(path)
+	fi, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return path, nil, false, false, nil
 	}
+	if err != nil {
+		return path, nil, false, false, err
+	}
+	if !fi.Mode().IsRegular() {
+		return path, nil, true, false, nil
+	}
+	content, err = os.ReadFile(path)
 	if err != nil {
 		return path, nil, false, false, err
 	}
@@ -258,7 +265,15 @@ func unitInstallApply(ctx context.Context, home, dir, bin string, stdout io.Writ
 	}
 	want := unitContent(remoteGOOS, bin, home)
 	if present && bytes.Equal(cur, want) {
-		fmt.Fprintf(stdout, "    %s is already installed and identical; nothing written\n", path)
+		if gatewayAnswering(dir) {
+			fmt.Fprintf(stdout, "    %s is already installed and identical; nothing written\n", path)
+			return nil
+		}
+		if err := unitStart(ctx, path, true); err != nil {
+			return fmt.Errorf("the gateway is not answering on the configured address and restarting the unit failed: %w", err)
+		}
+		fmt.Fprintf(stdout, "    %s is identical; restarted it because the gateway was not answering on the configured address\n", path)
+		unitWaitAnswering(ctx, dir, stdout)
 		return nil
 	}
 	if err := writeUnitFile(path, want); err != nil {
@@ -276,6 +291,23 @@ func unitInstallApply(ctx context.Context, home, dir, bin string, stdout io.Writ
 		fmt.Fprintf(stdout, "    Linger is off, so the gateway starts at login and stops at logout.\n    %s\n", lingerHint())
 	}
 	return nil
+}
+
+func gatewayAnswering(dir string) bool {
+	cfg, err := remote.LoadConfig(dir)
+	if err != nil {
+		return false
+	}
+	host, err := remote.LoadHost(dir)
+	if err != nil {
+		return false
+	}
+	state, err := registry.DefaultDir()
+	if err != nil {
+		return false
+	}
+	st, err := remote.GatewayStatus(state, cfg, host.Fingerprint)
+	return err == nil && st == remote.StateRunning
 }
 
 func unitWaitAnswering(ctx context.Context, dir string, stdout io.Writer) {
@@ -324,7 +356,14 @@ func unitRemoveApply(ctx context.Context, home, dir string, stdout io.Writer) er
 		return fmt.Errorf("%s is not the unit CrossTalk wrote (it was edited or is not CrossTalk's); left in place", path)
 	}
 	if err := unitStop(ctx); err != nil {
-		fmt.Fprintf(stdout, "    stop: %v\n", err)
+		state, serr := registry.DefaultDir()
+		if serr != nil {
+			return serr
+		}
+		if held, lerr := remote.GatewayLockHeld(state); lerr != nil || held {
+			return fmt.Errorf("could not stop the gateway (%v); %s and its hash are kept", err, path)
+		}
+		fmt.Fprintf(stdout, "    stop: %v (no gateway is running)\n", err)
 	}
 	if err := os.Remove(path); err != nil {
 		return err

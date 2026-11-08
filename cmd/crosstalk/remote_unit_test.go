@@ -33,6 +33,7 @@ type runLog struct {
 	calls  []string
 	linger string
 	hook   func(call string)
+	failOn string
 }
 
 func (r *runLog) run(_ context.Context, name string, args ...string) ([]byte, error) {
@@ -40,7 +41,11 @@ func (r *runLog) run(_ context.Context, name string, args ...string) ([]byte, er
 	r.mu.Lock()
 	r.calls = append(r.calls, call)
 	hook := r.hook
+	failOn := r.failOn
 	r.mu.Unlock()
+	if failOn != "" && strings.Contains(call, failOn) {
+		return nil, errors.New("forced failure")
+	}
 	if hook != nil {
 		hook(call)
 	}
@@ -853,4 +858,60 @@ func TestK8UnitChecks(t *testing.T) {
 	if n := rec.count("enable-linger"); n != 0 {
 		t.Errorf("K8 ran enable-linger: %v", rec.all())
 	}
+}
+
+func TestDisableKeepsUnitWhenStopFails(t *testing.T) {
+	eachOS(t, func(t *testing.T, goos string) {
+		home, rec := unitSandbox(t, goos)
+		mustEnable(t, freePort(t))
+		unit := remoteUnitPath(home)
+		rec.failOn = map[string]string{"darwin": "launchctl bootout", "linux": "disable --now"}[goos]
+		code, out := disableCmd(t, "--yes")
+		if code != 1 {
+			t.Errorf("disable with a failing stop and a live gateway: exit %d, want 1\n%s", code, out)
+		}
+		cfg, err := remote.LoadConfig(filepath.Join(home, ".config", "crosstalk"))
+		if _, serr := os.Stat(unit); serr != nil || err != nil || cfg.UnitSHA256 != fileSHA(t, unit) {
+			t.Errorf("unit or hash lost while the gateway still runs: %v %v %+v", serr, err, cfg)
+		}
+	})
+}
+
+func TestEnablePortChangeRestartsUnit(t *testing.T) {
+	eachOS(t, func(t *testing.T, goos string) {
+		home, rec := unitSandbox(t, goos)
+		mustEnable(t, freePort(t))
+		next := freePort(t)
+		if code, out := enableCmd(t, "--port", strconv.Itoa(next), "--yes"); code != 0 {
+			t.Fatalf("enable --port: exit %d\n%s", code, out)
+		}
+		cfg, _ := remote.LoadConfig(filepath.Join(home, ".config", "crosstalk"))
+		if cfg.Port != next {
+			t.Fatalf("port = %d, want %d", cfg.Port, next)
+		}
+		if n := rec.count("launchctl bootstrap") + rec.count("enable --now"); n != 2 {
+			t.Errorf("start commands = %d, want 2 (the running gateway kept the old port): %v", n, rec.all())
+		}
+	})
+}
+
+func TestEnableRefusesDanglingUnitSymlink(t *testing.T) {
+	eachOS(t, func(t *testing.T, goos string) {
+		home, rec := unitSandbox(t, goos)
+		unit := remoteUnitPath(home)
+		os.MkdirAll(filepath.Dir(unit), 0o755)
+		if err := os.Symlink(filepath.Join(home, "nowhere"), unit); err != nil {
+			t.Fatal(err)
+		}
+		code, out := enableCmd(t, "--bind", "127.0.0.1", "--yes")
+		if code != 1 || !strings.Contains(out, unit) {
+			t.Errorf("enable over a dangling symlink: exit %d, want 1 naming the path\n%s", code, out)
+		}
+		if fi, err := os.Lstat(unit); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+			t.Errorf("symlink replaced: %v %v", fi, err)
+		}
+		if c := rec.all(); len(c) != 0 {
+			t.Errorf("commands ran: %v", c)
+		}
+	})
 }
