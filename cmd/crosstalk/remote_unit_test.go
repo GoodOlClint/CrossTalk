@@ -1024,3 +1024,45 @@ func TestPurgeStopIsConfirmedAndFirst(t *testing.T) {
 		}
 	})
 }
+
+type editOnPrompt struct {
+	out  *bytes.Buffer
+	unit string
+	done bool
+}
+
+func (e *editOnPrompt) Read(p []byte) (int, error) {
+	if !e.done && strings.HasSuffix(e.out.String(), "apply? [y/N] ") {
+		e.done = true
+		os.WriteFile(e.unit, []byte(readFileString(e.unit)+"\n# edited while the prompt was open\n"), 0o644)
+	}
+	return copy(p, "y\n"), nil
+}
+
+func readFileString(path string) string {
+	b, _ := os.ReadFile(path)
+	return string(b)
+}
+
+func TestPurgeStopRechecksOwnershipAfterPrompt(t *testing.T) {
+	hostOS(t, func(t *testing.T, goos string) {
+		home, rec := unitSandbox(t, goos, "claude")
+		bin := filepath.Join(home, "bin")
+		if code, out := installRemote(t, bin); code != 0 {
+			t.Fatalf("install --remote: exit %d\n%s", code, out)
+		}
+		ran := len(rec.all())
+		var out bytes.Buffer
+		in := &editOnPrompt{out: &out, unit: remoteUnitPath(home)}
+		code := runInstall("uninstall", []string{"--purge", "--bin-dir", bin}, in, true, &out, &out)
+		if code != 1 || !in.done {
+			t.Errorf("uninstall --purge with the unit edited at the prompt: exit %d, edited=%v, want 1\n%s", code, in.done, out.String())
+		}
+		if n := len(rec.all()); n != ran {
+			t.Errorf("service-manager commands ran for an edited unit: %v", rec.all()[ran:])
+		}
+		if _, err := os.Stat(filepath.Join(bin, "crosstalk")); err != nil {
+			t.Errorf("binary removed: %v", err)
+		}
+	})
+}

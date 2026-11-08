@@ -238,6 +238,12 @@ func runInstall(mode string, args []string, in io.Reader, tty bool, stdout, stde
 			Title:  "stop the gateway",
 			Change: "stop the login unit that runs it; purge is refused if a gateway still holds gateway.lock afterwards",
 			Apply: func(ctx context.Context) error {
+				if _, _, _, owned, _ := unitOwnership(home, cfgDir); !owned {
+					return errors.New(gatewayRunningMsg(stateDir) + "; the login unit changed meanwhile and is not CrossTalk's to stop")
+				}
+				if why := installKeep(all, targets, env, false); why != "" {
+					return fmt.Errorf("%s; the login unit stays because %s", gatewayRunningMsg(stateDir), why)
+				}
 				unitStop(ctx)
 				if held, err := remote.GatewayLockHeld(stateDir); err != nil {
 					return err
