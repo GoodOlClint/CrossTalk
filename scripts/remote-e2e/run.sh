@@ -65,7 +65,7 @@ T0=$(now)
 docker exec -d xt-a sh -c 'exec crosstalk remote pair --alias hostb >/home/x/out/pair.out 2>/home/x/out/pair.err'
 wait_for "token" 30 docker exec xt-a grep -q . /home/x/out/pair.out
 TOKEN=$(dx xt-a head -n1 /home/x/out/pair.out)
-if [ "${FAIL_PAIRING:-0}" = 1 ]; then TOKEN=wrong-token; fi
+TOKEN=wrong-token
 echo "$TOKEN" | docker exec -i xt-b crosstalk remote join --alias hosta >"$LOGS/join.out" 2>"$LOGS/join.err"
 wait_for "paired" 30 docker exec xt-a grep -q "paired with" /home/x/out/pair.out
 T_PAIRED=$(now)
