@@ -4,7 +4,7 @@ One file per decision: `NNNN-title.md` (e.g. `0001-per-session-mcp-server-is-the
 
 Every ADR in this repo is provisional. An ADR is edited in place when the design or the code moves, so it states the current position; the Rejected alternatives and Context sections stay as history. An ADR replaced by another decision is marked `Superseded by ADR NNNN` (today only ADR 0005, replaced by ADR 0006 and kept as a short historical stub).
 
-Planned, not built: [ADR 0021](0021-remote-transport-and-enrollment-a-user-started-per-host-gateway-with-pinned-mtls-and-two-sided-pairing.md) (remote transport and enrollment) and [ADR 0022](0022-cross-host-addressing-and-trust-name-host-host-scoped-sender-keys-inform-ask-and-reply-only.md) (cross-host addressing and trust) record the v0.2.0 remote design. The paragraphs marked "Planned for v0.2.0, not built" in ADRs 0001, 0003, 0004, 0006 and 0011 describe the same design; each becomes current text as its slice merges.
+Built in main, arrives in 0.2.0 and is not yet released: [ADR 0021](0021-remote-transport-and-enrollment-a-user-started-per-host-gateway-with-pinned-mtls-and-two-sided-pairing.md) (remote transport and enrollment) and [ADR 0022](0022-cross-host-addressing-and-trust-name-host-host-scoped-sender-keys-inform-ask-and-reply-only.md) (cross-host addressing and trust) record the v0.2.0 remote design. The paragraphs marked "Built in main, arrives in 0.2.0 and is not yet released" in ADRs 0001, 0003, 0004, 0006 and 0011 describe the same design as built; the live two-machine run has not been run.
 
 Each ADR should answer:
 - **Context** — what prompted the decision
