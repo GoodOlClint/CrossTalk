@@ -77,7 +77,7 @@ N=$(dx xt-b spike17 writes | grep -o '"message_id"' | wc -l)
 [ "$N" -eq 1 ] || { echo "receiver has $N injects after settle, want 1" >&2; exit 1; }
 
 REPLY_S=blocked
-if [ "${REPLY_LEG:-0}" = 1 ]; then
+if [ "${REPLY_LEG:-1}" = 1 ]; then
 	dx xt-a spike17 call ask '{"to":"bob@hostb","text":"question","deadline_seconds":120}' | tee "$LOGS/ask.json"
 	wait_for "ask injected on b" 30 sh -c "docker exec xt-b spike17 writes | grep -q question"
 	ASK_ID=$(dx xt-b spike17 writes | jq -r '.[] | select(.text=="question") | .message_id')
@@ -95,3 +95,7 @@ fi
 
 echo "pair_seconds=$(echo "$T_PAIRED - $T0" | bc)"
 echo "S6_E2E inform_seconds=$(echo "$T_INFORM - $T0" | bc) reply_seconds=$REPLY_S"
+if [ "${REPLY_LEG:-1}" = 1 ] && [ "$(echo "$REPLY_S < 180" | bc)" != 1 ]; then
+	echo "ask and reply took $REPLY_S s, pass line is under 180 s" >&2
+	exit 1
+fi

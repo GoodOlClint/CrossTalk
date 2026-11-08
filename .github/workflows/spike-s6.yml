@@ -6,9 +6,9 @@ on:
   workflow_dispatch:
     inputs:
       reply_leg:
-        description: "Run the ask and reply leg (needs the cross-host reply slice on the branch)"
+        description: "Run the ask and reply leg"
         type: boolean
-        default: false
+        default: true
 
 permissions:
   contents: read
@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
-      REPLY_LEG: ${{ (inputs.reply_leg && '1') || '0' }}
+      REPLY_LEG: ${{ github.event_name == 'workflow_dispatch' && !inputs.reply_leg && '0' || '1' }}
     steps:
       - uses: actions/checkout@v7
         with:
