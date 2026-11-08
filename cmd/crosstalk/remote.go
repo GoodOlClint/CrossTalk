@@ -90,11 +90,7 @@ func runRemoteUnpair(args []string, stdout, stderr io.Writer) int {
 		}
 		return 1
 	}
-	self := "<this alias>"
-	if cfg, err := remote.LoadConfig(dir); err == nil && cfg.Alias != "" {
-		self = cfg.Alias
-	}
-	fmt.Fprintf(stdout, "unpaired %s; run crosstalk remote unpair %s on %s too\n", alias, self, alias)
+	fmt.Fprintf(stdout, "unpaired %s; on %s, unpair the name that host lists for this host (see crosstalk remote status there)\n", alias, alias)
 	return 0
 }
 
