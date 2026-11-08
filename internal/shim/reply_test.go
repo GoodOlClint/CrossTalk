@@ -2,6 +2,7 @@ package shim
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -83,6 +84,26 @@ func TestReplyToExpiredInformIsNoSuchMessage(t *testing.T) {
 	nb.fails(thread("T-bob"), "reply", map[string]any{"message_id": old, "text": "late"}, mcpserver.CodeInvalid, ReasonNoSuchMessage)
 	if rep := nb.ok(thread("T-bob"), "reply", map[string]any{"message_id": fresh, "text": "thanks"}); rep["state"] != "accepted" {
 		t.Fatalf("reply to fresh inform %v", rep)
+	}
+	if len(alice.got()) != 1 {
+		t.Fatalf("alice got %q", alice.got())
+	}
+}
+
+func TestAlreadyRepliedSaysNotDeliveredAndNamesSendMessage(t *testing.T) {
+	w := newWorld(t)
+	alice := w.claude(4001, "sess-alice", "alice")
+	w.codex.addThread("T-bob", "bob")
+	na := w.node(alice.pid, w.lb, nil)
+	nb := w.node(1, w.lb, nil)
+	nb.ok(thread("T-bob"), "receive_message", map[string]any{})
+	askID := na.ok(nil, "ask", send("bob", "question?"))["message_id"]
+	nb.ok(thread("T-bob"), "reply", map[string]any{"message_id": askID, "text": "first"})
+
+	isErr, out := nb.call(thread("T-bob"), "reply", map[string]any{"message_id": askID, "text": "second"})
+	hint, _ := out["hint"].(string)
+	if !isErr || out["reason"] != ReasonAlreadyReplied || !strings.Contains(hint, "NOT delivered") || !strings.Contains(hint, `send_message with to "alice"`) {
+		t.Fatalf("already_replied result %v %v", isErr, out)
 	}
 	if len(alice.got()) != 1 {
 		t.Fatalf("alice got %q", alice.got())
