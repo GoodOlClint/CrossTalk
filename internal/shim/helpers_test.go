@@ -279,3 +279,5 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 		time.Sleep(10 * time.Millisecond)
 	}
 }
+
+func (w *world) claudeAgentID(sessionID string) string { return identity.AgentID("claude", sessionID) }

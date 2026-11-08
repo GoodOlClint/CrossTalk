@@ -23,6 +23,41 @@ type Row struct {
 	You       bool    `json:"you,omitempty"`
 }
 
+// RemoteRow is a paired host's agent as list_agents shows it. It has no cwd.
+type RemoteRow struct {
+	Name        string `json:"name"`
+	Host        string `json:"host"`
+	Harness     string `json:"harness"`
+	AgentID     string `json:"agent_id"`
+	CrossTalk   bool   `json:"crosstalk"`
+	Messageable bool   `json:"messageable"`
+	Reachable   bool   `json:"reachable"`
+	Status      string `json:"status"`
+	Role        string `json:"role,omitempty"`
+	Note        string `json:"note,omitempty"`
+}
+
+// HostEntry is one paired host in the `hosts` output.
+type HostEntry struct {
+	Host      string `json:"host"`
+	Reachable bool   `json:"reachable"`
+	Agents    int    `json:"agents"`
+	Error     string `json:"error,omitempty"`
+	Warning   string `json:"warning,omitempty"`
+}
+
+type RemoteListing struct {
+	Rows  []RemoteRow
+	Hosts []HostEntry
+	// Warnings are local configuration problems, shown in the output's warnings.
+	Warnings []string
+}
+
+// RemoteLister is optionally implemented by a Backend that can list paired hosts.
+type RemoteLister interface {
+	ListRemote(ctx context.Context) RemoteListing
+}
+
 // listAgents serves unbound callers too; a bound caller is registered first
 // so it appears in its own listing, and a binding failure becomes a notice.
 func (s *Server) listAgentsTool(ctx context.Context, req *mcp.CallToolRequest, _ listIn) (*mcp.CallToolResult, any, error) {
@@ -35,11 +70,29 @@ func (s *Server) listAgentsTool(ctx context.Context, req *mcp.CallToolRequest, _
 			notice, self = n, a.ID()
 		}
 	}
+	var remote chan RemoteListing
+	if rl, ok := s.backend.(RemoteLister); ok {
+		remote = make(chan RemoteListing, 1)
+		go func() { remote <- rl.ListRemote(ctx) }()
+	}
 	rows, warnings := s.listAgents(ctx)
+	agents := make([]any, 0, len(rows))
 	for i := range rows {
 		rows[i].You = self != "" && rows[i].AgentID == self
+		agents = append(agents, rows[i])
 	}
-	out := map[string]any{"agents": rows}
+	out := map[string]any{"agents": agents}
+	if remote != nil {
+		l := <-remote
+		for _, r := range l.Rows {
+			agents = append(agents, r)
+		}
+		out["agents"] = agents
+		warnings = append(warnings, l.Warnings...)
+		if len(l.Hosts) > 0 {
+			out["hosts"] = l.Hosts
+		}
+	}
 	if len(warnings) > 0 {
 		out["warnings"] = warnings
 	}
@@ -48,6 +101,9 @@ func (s *Server) listAgentsTool(ctx context.Context, req *mcp.CallToolRequest, _
 	}
 	return nil, out, nil
 }
+
+// Listing is the local listing, as the gateway serves it to paired hosts.
+func (s *Server) Listing(ctx context.Context) ([]Row, []string) { return s.listAgents(ctx) }
 
 func (s *Server) listAgents(ctx context.Context) ([]Row, []string) {
 	rows := map[string]*Row{}
