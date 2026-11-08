@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net"
 	"net/http"
+	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -401,4 +402,57 @@ func keysOf(m map[string]any) []string {
 		ks = append(ks, k)
 	}
 	return ks
+}
+
+func TestRemoteUnnamedNativeStaysVisible(t *testing.T) {
+	h1 := newRHost(t, 4001, "alice")
+	h2 := newRHost(t, 4001, "")
+	h2.w.codex.addThread("T-anon", "")
+	h2.serve()
+	pair(t, h1, "lab", h2, "desk")
+
+	out := h1.n.ok(nil, "list_agents", map[string]any{})
+	rr := remoteRowsOf(asRows(t, out), "lab")
+	if len(rr) != 1 || rr[0]["crosstalk"] != false || rr[0]["messageable"] != false || !strings.HasPrefix(rr[0]["name"].(string), "unnamed-") {
+		t.Fatalf("unnamed native row missing or wrong: %v", rr)
+	}
+	if he := hostEntry(t, out, "lab"); he == nil || he["reachable"] != true || he["error"] != nil {
+		t.Fatalf("host entry %v", he)
+	}
+}
+
+func TestBrokenPeersFileWarnsAndKeepsLocalRows(t *testing.T) {
+	cases := map[string]func(t *testing.T, h *rhost){
+		"malformed json": func(t *testing.T, h *rhost) {
+			if err := os.WriteFile(filepath.Join(h.cfg, "peers.json"), []byte("{not json"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"wrong mode": func(t *testing.T, h *rhost) {
+			if err := os.WriteFile(filepath.Join(h.cfg, "peers.json"), []byte(`{"version":1,"peers":[]}`), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		},
+	}
+	for name, break_ := range cases {
+		t.Run(name, func(t *testing.T) {
+			h1 := newRHost(t, 4001, "alice")
+			break_(t, h1)
+			out := h1.n.ok(nil, "list_agents", map[string]any{})
+			ws, _ := out["warnings"].([]any)
+			if len(ws) != 1 || !strings.Contains(ws[0].(string), "peers.json") {
+				t.Fatalf("warnings %v, want one naming peers.json", out["warnings"])
+			}
+			if len(asRows(t, out)) != 1 || asRows(t, out)[0]["name"] != "alice" {
+				t.Fatalf("local rows changed: %v", out["agents"])
+			}
+		})
+	}
+	t.Run("absent file is silent", func(t *testing.T) {
+		h1 := newRHost(t, 4001, "alice")
+		out := h1.n.ok(nil, "list_agents", map[string]any{})
+		if _, has := out["warnings"]; has {
+			t.Fatalf("warnings %v for a host with no peers", out["warnings"])
+		}
+	})
 }

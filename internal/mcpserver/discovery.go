@@ -49,6 +49,8 @@ type HostEntry struct {
 type RemoteListing struct {
 	Rows  []RemoteRow
 	Hosts []HostEntry
+	// Warnings are local configuration problems, shown in the output's warnings.
+	Warnings []string
 }
 
 // RemoteLister is optionally implemented by a Backend that can list paired hosts.
@@ -86,6 +88,7 @@ func (s *Server) listAgentsTool(ctx context.Context, req *mcp.CallToolRequest, _
 			agents = append(agents, r)
 		}
 		out["agents"] = agents
+		warnings = append(warnings, l.Warnings...)
 		if len(l.Hosts) > 0 {
 			out["hosts"] = l.Hosts
 		}

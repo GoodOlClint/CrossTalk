@@ -36,7 +36,10 @@ func (s *Shim) ListRemote(ctx context.Context) mcpserver.RemoteListing {
 		dir = d
 	}
 	peers, err := remote.NewPeers(dir).List()
-	if err != nil || len(peers) == 0 {
+	if err != nil {
+		return mcpserver.RemoteListing{Warnings: []string{"remote: paired hosts not listed: " + err.Error()}}
+	}
+	if len(peers) == 0 {
 		return mcpserver.RemoteListing{}
 	}
 	sort.Slice(peers, func(i, j int) bool { return peers[i].Alias < peers[j].Alias })
@@ -112,7 +115,11 @@ func RemoteSource(srv *mcpserver.Server) remote.AgentsSource {
 		rows, _ := srv.Listing(ctx)
 		out := make([]remote.AgentRow, 0, len(rows))
 		for _, r := range rows {
-			a := remote.AgentRow{AgentID: r.AgentID, Name: r.Name, Harness: r.Harness, CrossTalk: r.CrossTalk, Reachable: r.Reachable, Status: r.Status, Messageable: r.CrossTalk}
+			name := r.Name
+			if name == "" {
+				name = "unnamed-" + r.AgentID[:6]
+			}
+			a := remote.AgentRow{AgentID: r.AgentID, Name: name, Harness: r.Harness, CrossTalk: r.CrossTalk, Reachable: r.Reachable, Status: r.Status, Messageable: r.CrossTalk}
 			if r.CrossTalk {
 				a.Role = r.Role
 			} else {
