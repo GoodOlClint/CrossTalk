@@ -32,3 +32,5 @@ Status of captured frames: to be committed before `go mod init`. Until then the 
 - [17 CI two-host job (S6)](17-ci-two-host.md) — v0.2.0 spike: two Docker containers on the Ubuntu runner pair through the real `remote pair` / `remote join` CLI with Fake-backed agents and deliver one inform in under 1 s and one ask and reply in about 4.3 s (limit 180 s), 4 of 4 CI runs; PASS. Code later promoted to `internal/remotee2e/` and `scripts/remote-e2e/` (R10).
 - [18 remote send latency and settle (S5)](18-live-latency-settle.md) — partial: stand-in 10 of 10 `accepted`, median 112 ms; the Wi-Fi series is pending; keep `RemoteSettle` at 5 s.
 - [19 login unit (S7)](19-live-login-unit.md) — partial: VM linger and user unit pass; reboot and Mac legs pending the operator; `enable` legs blocked-on-R11; `remote status` does not report `service running, port not bound` for a foreign listener. Units in `19-live-login-unit/`.
+
+R10 probe: docs-only change to observe the remote-e2e skip. Throwaway.
