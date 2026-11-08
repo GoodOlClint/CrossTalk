@@ -742,7 +742,7 @@ func TestCIWorkflowScopesTests(t *testing.T) {
 			t.Errorf("fast step lacks %s", name)
 		}
 	}
-	for _, sub := range []string{"go build ./...", "go test -race -timeout 20m ./...", "go vet ./...", "gofmt -l ."} {
+	for _, sub := range []string{"go build ./...", "go test -race -timeout 10m ./...", "go vet ./...", "gofmt -l ."} {
 		s := find(sub)
 		if s == "" || !strings.Contains(s, "steps.scope.outputs.scope != 'docs'") {
 			t.Errorf("step running %s is not skipped for docs scope:\n%s", sub, s)
