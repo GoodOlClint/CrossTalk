@@ -48,3 +48,19 @@ func TestNativeReplyToRemoteAskBounced(t *testing.T) {
 		t.Fatalf("%d requests to the peer for a bounced native reply, want 0", n)
 	}
 }
+
+func TestEndReplyReportsJournalFailure(t *testing.T) {
+	w := newWorld(t)
+	w.codex.addThread("T-bob", "bob")
+	nb := w.node(1, &countingRemote{}, nil)
+	nb.ok(thread("T-bob"), "receive_message", map[string]any{})
+	st := nb.sh.Agent(identity.AgentID("codex", "T-bob"))
+	irt := msg.NewUUIDv7()
+	r := st.newMessage("alice@desk", msg.Inform, msg.Immediate, "42")
+	r.InReplyTo = &irt
+	st.agent.Journal().Close()
+	res := st.endReply(r, remoteKey, "", ObligationRejected, ReasonNoSuchAgent)
+	if res.State != adapter.Unknown || res.Reason != receiver.ReasonJournal || res.MessageID != r.MessageID {
+		t.Fatalf("endReply with the journal closed: %+v, want unknown/%s", res, receiver.ReasonJournal)
+	}
+}

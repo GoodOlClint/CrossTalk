@@ -1,11 +1,11 @@
 # ADR 0022 — Cross-host addressing and trust: name@host, host-scoped sender keys, inform ask and reply only
 
-- **Status:** Provisional (operator 2026-11-06); planned for v0.2.0; the receiving side's identity model is built (slice R4), addressing, discovery and cross-host sending are no
+- **Status:** Provisional (operator 2026-11-06); planned for v0.2.0; the receiving side's identity model is built (slice R4), addressing, discovery and cross-host sending (R6, R7) and the cross-host reply (R8) are built
 - **Date:** 2026-11-06
 - **Deciders:** operator + council (Claude Opus 5.5 chair, two Codex advisors) + Claude (Opus 5.5)
 - **Context source:** council decision 2026-11-06 (`~/.claude/coordinators/archive/council-decision.md`); operator clarification 2026-11-06 on discovery; change plan [`docs/plans/release-0.2.0.md`](https://github.com/GoodOlClint/CrossTalk/blob/main/docs/plans/release-0.2.0.md)
 
-## Contex
+## Context
 
 With a gateway per host ([ADR 0021](0021-remote-transport-and-enrollment-a-user-started-per-host-gateway-with-pinned-mtls-and-two-sided-pairing.md)), messages cross machines, and today's identity rules do not separate machines. Names are unique per host only (`internal/registry/registry.go:59`), so two hosts may each have a `crosstalk-coordinator`. The receiver keys a sender by AgentID before Principal (`internal/receiver/receiver.go:61-68`, `internal/a2a/server.go:422-427`), and receipts and reply routes record the bare AgentID (`receiver.go:267`, `:291`), so a principal `remote:<host>` alone would let a paired host speak as a local agent or as an agent of a third host. The descriptor directory prunes any descriptor whose pid is not alive here (`registry.go:378`, `:411-427`), so remote agents cannot be written into it. The operator clarified that once two hosts are paired, `list_agents` must show the agent sessions on the other host, so a model can find them without knowing names in advance; only host discovery (suggesting machines to pair) is deferred.
 
