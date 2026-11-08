@@ -66,6 +66,10 @@ Each whole job (checkout to artifact upload) took 39 to 52 s in the first three 
 - **Flakiness:** none in 7 CI runs and 3 local runs. That is too few to bound it.
 - **Reply leg**: needs R8 in the build. It is on by default now, and `run.sh` fails the job at 180 s or more. The ask and reply figure is about 3.4 s above the inform figure; `run.sh` sleeps 3 s after the inform before starting the ask, so the ask and reply itself took roughly 0.4 s.
 
+## After slice R10
+
+The harness moved out of this folder: the workload is `internal/remotee2e/` and the scenario is `scripts/remote-e2e/{run.sh,Dockerfile}`, run by the `remote-e2e` job in `.github/workflows/ci.yml`. `spike-s6.yml` and the code under `17-ci-two-host/` are gone; this report keeps the evidence.
+
 ## Gates
 
 `go build ./...`, `go vet ./docs/spikes/17-ci-two-host` and `gofmt -l` are clean for the spike package.
