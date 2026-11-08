@@ -75,15 +75,16 @@ func TestReplyLimitAnchoredOnReceiptNotSentAt(t *testing.T) {
 	})
 	nb.ok(thread("T-bob"), "receive_message", map[string]any{})
 	st := nb.sh.Agent(identity.AgentID("codex", "T-bob"))
-	id := msg.NewUUIDv7()
+	old := time.Now().Add(-2 * time.Hour)
+	id := uuidV7At(old)
 	ask := msg.Message{MessageID: id, ContextID: id, From: "x", To: "bob", Kind: msg.Ask, Delivery: msg.Immediate, DeadlineSeconds: 300,
-		SentAt: time.Now().Add(-2 * time.Hour), Parts: []msg.Part{{Type: "text", Text: "question?"}}}
+		SentAt: old, Parts: []msg.Part{{Type: "text", Text: "question?"}}}
 	if res := st.rcv.Receive(context.Background(), receiver.Inbound{Ingress: receiver.A2A, Message: ask, Sender: remoteSnd}); res.State != adapter.Accepted {
 		t.Fatalf("ask: %+v", res)
 	}
 	isErr, out := nb.call(thread("T-bob"), "reply", map[string]any{"message_id": id, "text": "42"})
 	if out["reason"] != ReasonRemoteReplyPending || (isErr && out["error"] != string(adapter.Unreachable)) {
-		t.Fatalf("reply to an ask whose sender stamped it 2 h ago: %v, want pending (limit runs from the receipt time on this host's clock)", out)
+		t.Fatalf("reply to an ask whose SentAt and message_id time are 2 h old: %v, want pending (limit runs from the receipt time on this host's clock)", out)
 	}
 	rs, _ := st.agent.Journal().Records()
 	for _, r := range rs {

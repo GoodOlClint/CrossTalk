@@ -387,10 +387,7 @@ func TestRemoteReplyRetryEndsUnreachable(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			tm := newTimer()
-			askerBehind := func(so *shim.Options) {
-				so.Now = func() time.Time { return time.Now().Add(-20 * time.Minute) }
-			}
-			h1, h2, alice, bob := twoHostsMods(t, askerBehind, tm.mod)
+			h1, h2, alice, bob := twoHostsMod(t, tm.mod)
 			askID := askBob(t, alice, c.extra)
 			h1.setHook(abortPosts)
 			bob.ok("reply", replyArgs(askID))
