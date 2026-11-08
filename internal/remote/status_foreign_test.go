@@ -92,11 +92,15 @@ func TestGatewayStatusForeignListener(t *testing.T) {
 
 func TestGatewayStatusRunningNeedsOwnCertificate(t *testing.T) {
 	e := startGateway(t, nil)
+	other, err := LoadOrCreateHost(newDir(t))
+	if err != nil {
+		t.Fatal(err)
+	}
 	cfg := Config{Alias: "desk", Bind: "127.0.0.1", Port: e.gw.Addr().(*net.TCPAddr).Port}
 	if got, err := GatewayStatus(e.stateDir, cfg, e.host.Fingerprint); err != nil || got != StateRunning {
 		t.Errorf("GatewayStatus with this host's gateway = %q, %v; want %q", got, err, StateRunning)
 	}
-	if got, err := GatewayStatus(e.stateDir, cfg, "00"+e.host.Fingerprint[2:]); err != nil || got != StateNoPort {
+	if got, err := GatewayStatus(e.stateDir, cfg, other.Fingerprint); err != nil || got != StateNoPort {
 		t.Errorf("GatewayStatus when the listener presents another key = %q, %v; want %q", got, err, StateNoPort)
 	}
 }
