@@ -450,3 +450,39 @@ func TestRemoteTaskResumeKeepsHostScope(t *testing.T) {
 		t.Fatalf("sender %+v", in.Sender)
 	}
 }
+
+func TestRemoteContinuationCannotTakeLocalMessageID(t *testing.T) {
+	e := newEnv(t, receiver.Limits{}, Limits{}, nil)
+	local := receiver.Sender{Verified: true, AgentID: localID, Name: "alice", Role: registry.RolePrimary}
+	m := msg.Message{MessageID: msg.NewUUIDv7(), ContextID: "ctx", From: "alice", To: "self", Kind: msg.Inform, Delivery: msg.Immediate, Parts: []msg.Part{{Type: "text", Text: "local"}}}
+	if res := e.rcv.Receive(context.Background(), receiver.Inbound{Ingress: receiver.A2A, Message: m, Sender: local}); res.State != adapter.Accepted {
+		t.Fatalf("local %+v", res)
+	}
+	cl, ctx := e.remote(goodRemote())
+	own := textMsg("remote ask", map[string]any{"kind": "ask"})
+	task, err := send(t, cl, ctx, own, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cont := &sdk.Message{ID: m.MessageID, TaskID: task.ID, ContextID: task.ContextID, Role: sdk.MessageRoleUser, Parts: sdk.ContentParts{sdk.NewTextPart("continuation with a stolen id")}}
+	_, err = cl.SendMessage(ctx, &sdk.SendMessageRequest{Message: cont, Config: &sdk.SendMessageConfig{ReturnImmediately: true}})
+	var se *sdk.Error
+	if !errors.As(err, &se) {
+		t.Fatalf("contested continuation: %v, want a JSON-RPC rejection", err)
+	}
+	if ct, _ := se.Details[MetaKey].(map[string]any); ct["reason"] != receiver.ReasonIDInUse {
+		t.Fatalf("details %v", se.Details)
+	}
+	if _, _, known := e.srv.AskOpen(m.MessageID); known {
+		t.Fatal("the local message_id became a handle of the remote ask")
+	}
+	if err := e.srv.CompleteAsk(m.MessageID, "secret answer"); !errors.Is(err, ErrNoSuchAsk) {
+		t.Fatalf("CompleteAsk of the local message_id: %v", err)
+	}
+	if !e.rcv.RouteOpen(m.MessageID) {
+		t.Fatal("the local message lost its reply route")
+	}
+	if n := writesFor(e.fake, m.MessageID); n != 1 {
+		t.Fatalf("injects %d, want only the local one", n)
+	}
+}

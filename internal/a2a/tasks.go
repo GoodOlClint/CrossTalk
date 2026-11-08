@@ -631,13 +631,14 @@ func (h *handler) SendMessage(ctx context.Context, req *sdk.SendMessageRequest) 
 	}
 	wire := wireCopy(req.Message, m.MessageID, clientID)
 
-	if req.Message.TaskID != "" {
-		return h.continuation(ctx, snd, m, wire, wait)
-	}
 	if hc, ok := s.cfg.Receiver.(interface {
 		IDHeldByOther(senderKey, messageID string) bool
 	}); ok && hc.IDHeldByOther(snd.Key(), m.MessageID) {
 		return nil, rejection(m.MessageID, receiver.ReasonIDInUse)
+	}
+
+	if req.Message.TaskID != "" {
+		return h.continuation(ctx, snd, m, wire, wait)
 	}
 	if m.ContextID == "" {
 		m.ContextID = m.MessageID
