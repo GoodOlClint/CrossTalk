@@ -46,13 +46,13 @@ Pass-line clock is pair start to delivery (inform) or to reply received (ask and
 | 42452256538 | dispatch | 0.74 s | 0.87 s | blocked on R8 | 13.2 s | green |
 | local, PR #77 head, `REPLY_LEG=1` | local | 0.68 s | 0.76 s | 4.2 s | 1.3 s | pass (not CI) |
 
-Each whole job (checkout to artifact upload) took 44 to 54 s, of which the Go build was 12 to 18 s and the scenario 9 to 19 s.
+Each whole job (checkout to artifact upload) took 39 to 52 s, of which the Go build was 12 to 18 s and the scenario 9 to 19 s.
 
 ## Surprises for R10
 
 - **Static addresses work.** `docker run --ip` on a user-defined network with an explicit subnet gave stable addresses on the runner, so the plan's static-IP rule needs no workaround. Compose service names were not tried.
 - **No production change was needed** to pair through the real CLI in containers. `remote serve` needs only a descriptor in the shared state dir to forward to an agent, so a Fake-backed shim in the same `HOME` is enough; `remote serve` builds its own shim with the real Claude and Codex harnesses and did not mind having neither installed.
-- **Startup waits are short**: agent and gateway ready within the first poll in every run. The script polls every 0.2 s up to 30 s; nothing came near the limit.
+- **Startup waits are short**: every run got past the readiness polls (0.2 s interval, 30 s limit) and the whole scenario, including pairing, took 9 to 19 s, so no wait came near the limit. Per-wait times were not recorded.
 - **Image build time varies 4x** (3.3, 6.7, 13.2 s) for a two-file `COPY` image, almost all of it pulling the base image. R10 should build with the runner's cache or pull a pinned base once.
 - **Token on stdout, hint on stderr**: `pair` prints the token as the first stdout line, so the script reads the first line of its output file; `join` reads the token from stdin, so a pipe works with no tty.
 - **Inform timing has a 0.2 s floor** from the poll interval, so sub-second figures are upper bounds of that resolution.
