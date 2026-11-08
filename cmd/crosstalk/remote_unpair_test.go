@@ -157,14 +157,15 @@ func TestUnpairRefusesKeyOnRunningGatewayWithoutRestart(t *testing.T) {
 		Limits: remote.DefaultLimits(), Log: func(string, ...any) {},
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusNoContent) }),
 	})
-	done := make(chan error, 1)
+	finished := make(chan struct{})
+	var serveErr error
 	ctx, cancel := contextWithCancel()
-	go func() { done <- g.Serve(ctx) }()
-	t.Cleanup(func() { cancel(); <-done })
+	go func() { serveErr = g.Serve(ctx); close(finished) }()
+	t.Cleanup(func() { cancel(); <-finished })
 	select {
 	case <-g.Ready():
-	case err := <-done:
-		t.Fatalf("serve: %v", err)
+	case <-finished:
+		t.Fatalf("serve: %v", serveErr)
 	case <-time.After(5 * time.Second):
 		t.Fatal("gateway not ready")
 	}
@@ -207,3 +208,20 @@ func contextWithCancel() (context.Context, context.CancelFunc) {
 }
 
 func bufioReader(c net.Conn) *bufio.Reader { return bufio.NewReader(c) }
+
+func TestUnpairLeadingDashAlias(t *testing.T) {
+	dir := unpairEnv(t, true)
+	if err := remote.NewPeers(dir).Upsert(remote.Peer{Alias: "-lab", Address: "192.0.2.1:7745", Fingerprint: fp("d")}); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, _ := remoteRun(t, false, "unpair", "-lab"); code != 2 {
+		t.Errorf("bare -lab: exit %d, want 2", code)
+	}
+	code, out, errs := remoteRun(t, false, "unpair", "--", "-lab")
+	if code != 0 || !strings.HasPrefix(out, "unpaired -lab;") {
+		t.Fatalf("unpair -- -lab: %d %q %q", code, out, errs)
+	}
+	if ps, _ := remote.NewPeers(dir).List(); len(ps) != 3 {
+		t.Fatalf("%d peers left, want 3", len(ps))
+	}
+}

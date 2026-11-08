@@ -67,7 +67,12 @@ func runRemote(args []string, in io.Reader, tty bool, stdout, stderr io.Writer) 
 }
 
 func runRemoteUnpair(args []string, stdout, stderr io.Writer) int {
-	if len(args) != 1 || strings.HasPrefix(args[0], "-") {
+	if len(args) > 0 && args[0] == "--" {
+		args = args[1:]
+	} else if len(args) > 0 && strings.HasPrefix(args[0], "-") {
+		args = nil
+	}
+	if len(args) != 1 {
 		fmt.Fprintf(stderr, "crosstalk remote unpair: takes exactly one ALIAS\n%s", remoteUsage)
 		return 2
 	}
