@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sync"
 
 	"github.com/GoodOlClint/crosstalk/internal/registry"
@@ -34,7 +33,7 @@ type statusReport struct {
 }
 
 func remoteUnitPath(home string) string {
-	if runtime.GOOS == "darwin" {
+	if remoteGOOS == "darwin" {
 		return filepath.Join(home, "Library", "LaunchAgents", "dev.getcrosstalk.remote.plist")
 	}
 	return filepath.Join(home, ".config", "systemd", "user", "crosstalk-remote.service")
@@ -90,7 +89,7 @@ func runRemoteStatus(args []string, stdout, stderr io.Writer) int {
 		return fail(err)
 	}
 	rep.Alias, rep.Bind, rep.Port, rep.Fingerprint = cfg.Alias, cfg.Bind, cfg.Port, host.Fingerprint
-	if rep.GatewayState, err = remote.GatewayStatus(state, cfg); err != nil {
+	if rep.GatewayState, err = remote.GatewayStatus(state, cfg, host.Fingerprint); err != nil {
 		return fail(err)
 	}
 	rep.Peers = make([]statusPeer, len(peers))

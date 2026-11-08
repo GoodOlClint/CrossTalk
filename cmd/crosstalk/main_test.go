@@ -42,7 +42,11 @@ func TestMain(m *testing.M) {
 	if os.Getenv("CROSSTALK_TEST_MAIN") == "1" {
 		os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 	}
-	os.Exit(m.Run())
+	code := m.Run()
+	if builtMain.dir != "" {
+		os.RemoveAll(builtMain.dir)
+	}
+	os.Exit(code)
 }
 
 func TestMCPExitsCleanlyOnClosedStdin(t *testing.T) {
