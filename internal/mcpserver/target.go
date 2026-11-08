@@ -32,6 +32,12 @@ type RemoteAddresser interface {
 	IsPairedAlias(alias string) bool
 }
 
+// RemoteChecker is optionally implemented by a Backend that can ask a paired
+// host whether it lists a session the value also reaches.
+type RemoteChecker interface {
+	CheckRemote(ctx context.Context, rr RemoteRef) (agentID string, collides bool, err error)
+}
+
 func aliasChecker(b Backend) func(string) bool {
 	if ra, ok := b.(RemoteAddresser); ok {
 		return ra.IsPairedAlias

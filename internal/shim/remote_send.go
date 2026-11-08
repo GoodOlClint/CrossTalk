@@ -21,6 +21,7 @@ const (
 	ReasonUnpairedByPeer    = remote.ReasonUnpairedByPeer
 	ReasonRemoteKind        = receiver.ReasonRemoteKind
 	ReasonPending           = "pending"
+	hintCollisionUnknown    = "%s could name a session on %s as well as one on this host, and %s did not answer, so nothing was sent. Address the local session by its agent_id %s, or try again when the host answers."
 	hintAmbiguousRemoteName = "%s names a session on this host (agent_id %s) and a session on %s. Address the local one as %s, the remote one as %s@%s."
 )
 
@@ -119,27 +120,20 @@ func listingFailure(err error) (adapter.State, string) {
 	return adapter.Unreachable, remote.ReasonUnreachable
 }
 
-// remoteCollision reports the agent_id of a session on the peer that the
-// same value as a local name also reaches, if the peer lists one.
-func (st *AgentState) remoteCollision(ctx context.Context, rr *mcpserver.RemoteRef) (string, bool) {
-	_, _, rows, err := st.shim.peerRows(ctx, rr.Alias)
+// CheckRemote reports whether the paired host rr.Alias lists a session the
+// value rr also reaches, and its agent_id. A failed lookup is an error: the
+// caller cannot rule a collision out.
+func (s *Shim) CheckRemote(ctx context.Context, rr mcpserver.RemoteRef) (string, bool, error) {
+	_, _, rows, err := s.peerRows(ctx, rr.Alias)
 	if err != nil {
-		return "", false
-	}
-	if mcpserver.IsAgentID(rr.Ref) {
-		for _, r := range rows {
-			if r.AgentID == rr.Ref {
-				return r.AgentID, true
-			}
-		}
-		return "", false
+		return "", false, err
 	}
 	for _, r := range rows {
-		if r.Name == rr.Ref {
-			return r.AgentID, true
+		if mcpserver.IsAgentID(rr.Ref) && r.AgentID == rr.Ref || !mcpserver.IsAgentID(rr.Ref) && r.Name == rr.Ref {
+			return r.AgentID, true, nil
 		}
 	}
-	return "", false
+	return "", false, nil
 }
 
 func (st *AgentState) localAgentID(tgt mcpserver.Target) string {

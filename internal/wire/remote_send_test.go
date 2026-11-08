@@ -296,6 +296,81 @@ func TestLocalNameWithAtStaysLocal(t *testing.T) {
 	if n := h2.count("/v1/a2a/"); n != 0 || len(build.codex.Writes()) != 1 || len(remoteBuild.codex.Writes()) != 0 {
 		t.Errorf("an ambiguous send delivered: forwarded %d, local %d, remote %d", n, len(build.codex.Writes()), len(remoteBuild.codex.Writes()))
 	}
+
+	for _, tool := range []string{"claim", "release"} {
+		res, err := alice.cs.CallTool(context.Background(), &mcp.CallToolParams{Meta: map[string]any{"threadId": alice.thread}, Name: tool, Arguments: map[string]any{"name": "build@desktop"}})
+		b, _ := json.Marshal(res)
+		if err != nil || !res.IsError || !strings.Contains(string(b), "ambiguous_name") {
+			t.Errorf("%s with a collision: %v %s", tool, err, b)
+		}
+	}
+	ds, _ := registry.New(h1.state).List()
+	for _, d := range ds {
+		if d.AgentID == build.id() && (d.Owner != nil || d.Role != registry.RolePrimary) {
+			t.Errorf("local build's ownership changed: %+v", d)
+		}
+	}
+
+	h2.stop()
+	waitFor(t, "gateway 2 stopped", func() bool {
+		c, err := net.DialTimeout("tcp", h2.addr(), 200*time.Millisecond)
+		if err == nil {
+			c.Close()
+		}
+		return err != nil
+	})
+	for _, tool := range []string{"send_message", "ask"} {
+		args := map[string]any{"to": "build@desktop", "text": "peer is down"}
+		if tool == "ask" {
+			args["deadline_seconds"] = 5
+		}
+		out := alice.ok(tool, args)
+		if st := str(out, "state"); st == "accepted" || st == "queued" {
+			t.Errorf("%s with the peer's listing failing was delivered: %v", tool, out)
+		}
+		if !strings.Contains(str(out, "hint"), build.id()) {
+			t.Errorf("hint %q does not offer the local agent_id", str(out, "hint"))
+		}
+	}
+	if len(build.codex.Writes()) != 1 || len(remoteBuild.codex.Writes()) != 0 {
+		t.Errorf("a send with an unanswered peer reached an agent: local %d, remote %d", len(build.codex.Writes()), len(remoteBuild.codex.Writes()))
+	}
+}
+
+func TestRemoteResponseOverCapIsUnknownNotDelivered(t *testing.T) {
+	huge := strings.Repeat("x", remote.MaxResponse+10)
+	t.Run("send", func(t *testing.T) {
+		_, h2, alice, _ := twoHosts(t)
+		h2.setHook(func(w http.ResponseWriter, r *http.Request, next http.Handler) bool {
+			if r.Method != http.MethodPost {
+				return false
+			}
+			next.ServeHTTP(httptest.NewRecorder(), r)
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(huge))
+			return true
+		})
+		out := alice.ok("send_message", map[string]any{"to": "bob@lab", "text": "hi"})
+		if str(out, "state") != "unknown" || str(out, "reason") != "pending" {
+			t.Errorf("%v", out)
+		}
+	})
+	t.Run("poll", func(t *testing.T) {
+		_, h2, alice, _ := twoHosts(t)
+		var n atomic.Int32
+		h2.setHook(func(w http.ResponseWriter, r *http.Request, next http.Handler) bool {
+			if r.Method != http.MethodPost || n.Add(1) == 1 {
+				return false
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.Write([]byte(huge))
+			return true
+		})
+		out := alice.ok("send_message", map[string]any{"to": "bob@lab", "text": "hi"})
+		if str(out, "state") != "unknown" || str(out, "reason") != "pending" {
+			t.Errorf("%v", out)
+		}
+	})
 }
 
 func TestRemoteNameWithSpacesAndUnicode(t *testing.T) {

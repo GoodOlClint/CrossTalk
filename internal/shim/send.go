@@ -253,8 +253,15 @@ func (st *AgentState) deliver(ctx context.Context, m msg.Message) mcpserver.Resu
 	case tgt.Remote != nil && !local:
 		return st.deliverRemote(ctx, m, tgt.Remote, finish)
 	case tgt.Remote != nil:
-		if rid, ok := st.remoteCollision(ctx, tgt.Remote); ok {
-			lid := st.localAgentID(tgt)
+		lid := st.localAgentID(tgt)
+		rid, hit, err := st.shim.CheckRemote(ctx, *tgt.Remote)
+		switch {
+		case err != nil:
+			state, reason := listingFailure(err)
+			res := finish(m.To, state, reason)
+			res.Hint = fmt.Sprintf(hintCollisionUnknown, m.To, tgt.Remote.Alias, tgt.Remote.Alias, lid)
+			return res
+		case hit:
 			res := finish(m.To, adapter.Rejected, ReasonAmbiguousName)
 			res.Hint = fmt.Sprintf(hintAmbiguousRemoteName, m.To, lid, tgt.Remote.Alias, lid, rid, tgt.Remote.Alias)
 			return res

@@ -77,9 +77,44 @@ func (c *Client) httpClient() (*http.Client, *http.Transport) {
 // per request and no redirects. It sets no Timeout: callers bound it with a
 // context.
 func (c *Client) HTTPClient() *http.Client {
-	hc, _ := c.httpClient()
+	hc, tr := c.httpClient()
+	hc.Transport = capBody{tr}
 	return hc
 }
+
+// capBody limits every response body to MaxResponse bytes, so a peer cannot
+// exhaust memory through a decoder that reads to the end.
+type capBody struct{ http.RoundTripper }
+
+func (c capBody) RoundTrip(r *http.Request) (*http.Response, error) {
+	resp, err := c.RoundTripper.RoundTrip(r)
+	if err == nil {
+		resp.Body = &cappedReader{rc: resp.Body, left: MaxResponse}
+	}
+	return resp, err
+}
+
+type cappedReader struct {
+	rc   io.ReadCloser
+	left int64
+}
+
+func (c *cappedReader) Read(p []byte) (int, error) {
+	if c.left < 0 {
+		return 0, errTooLarge
+	}
+	if int64(len(p)) > c.left+1 {
+		p = p[:c.left+1]
+	}
+	n, err := c.rc.Read(p)
+	c.left -= int64(n)
+	if c.left < 0 {
+		return n, errTooLarge
+	}
+	return n, err
+}
+
+func (c *cappedReader) Close() error { return c.rc.Close() }
 
 // pinnedTLSConfig is the one outbound TLS configuration: h's certificate,
 // TLS 1.3 only, and acceptance of exactly p's fingerprint. onMismatch, when

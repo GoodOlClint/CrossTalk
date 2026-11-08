@@ -47,6 +47,13 @@ func (s *Server) claimTarget(ctx context.Context, a *Agent, name string) (regist
 	if !r.Registered {
 		return registry.Descriptor{}, rejected("no_such_agent")
 	}
+	if r.Remote != nil {
+		if rc, ok := s.backend.(RemoteChecker); ok {
+			if rid, hit, err := rc.CheckRemote(ctx, *r.Remote); err != nil || hit {
+				return registry.Descriptor{}, &Error{Code: CodeRejected, Reason: "ambiguous_name", Hint: fmt.Sprintf("%s could name a session on %s as well as this host's %s (%s). Name the local one by its agent_id; nothing was claimed or released.", name, r.Remote.Alias, r.Desc.AgentID, rid)}
+			}
+		}
+	}
 	t := r.Desc
 	if t.AgentID == a.id {
 		return registry.Descriptor{}, rejected("self")
