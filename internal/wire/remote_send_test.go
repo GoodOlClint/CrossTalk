@@ -337,17 +337,27 @@ func TestLocalNameWithAtStaysLocal(t *testing.T) {
 	}
 }
 
+// padded answers r through next, then adds a field the decoder ignores but
+// must read past, so the response is valid and over the cap.
+func padded(w http.ResponseWriter, r *http.Request, next http.Handler) {
+	rec := httptest.NewRecorder()
+	next.ServeHTTP(rec, r)
+	var doc map[string]any
+	json.Unmarshal(rec.Body.Bytes(), &doc)
+	doc["pad"] = strings.Repeat("x", remote.MaxResponse+10)
+	b, _ := json.Marshal(doc)
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(b)
+}
+
 func TestRemoteResponseOverCapIsUnknownNotDelivered(t *testing.T) {
-	huge := strings.Repeat("x", remote.MaxResponse+10)
 	t.Run("send", func(t *testing.T) {
 		_, h2, alice, _ := twoHosts(t)
 		h2.setHook(func(w http.ResponseWriter, r *http.Request, next http.Handler) bool {
 			if r.Method != http.MethodPost {
 				return false
 			}
-			next.ServeHTTP(httptest.NewRecorder(), r)
-			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(huge))
+			padded(w, r, next)
 			return true
 		})
 		out := alice.ok("send_message", map[string]any{"to": "bob@lab", "text": "hi"})
@@ -362,8 +372,7 @@ func TestRemoteResponseOverCapIsUnknownNotDelivered(t *testing.T) {
 			if r.Method != http.MethodPost || n.Add(1) == 1 {
 				return false
 			}
-			w.Header().Set("Content-Type", "application/json")
-			w.Write([]byte(huge))
+			padded(w, r, next)
 			return true
 		})
 		out := alice.ok("send_message", map[string]any{"to": "bob@lab", "text": "hi"})
