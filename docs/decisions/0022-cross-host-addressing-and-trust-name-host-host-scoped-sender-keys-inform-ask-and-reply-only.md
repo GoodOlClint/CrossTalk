@@ -1,6 +1,6 @@
 # ADR 0022 — Cross-host addressing and trust: name@host, host-scoped sender keys, inform ask and reply only
 
-- **Status:** Provisional (operator 2026-11-06); planned for v0.2.0; the receiving side's identity model is built (slice R4), addressing, discovery and cross-host sending (R6, R7) and the cross-host reply (R8) are built
+- **Status:** Provisional (operator 2026-11-06); built in main, arrives in 0.2.0 and is not yet released; the receiving side's identity model is built (slice R4), addressing, discovery and cross-host sending (R6, R7) and the cross-host reply (R8) are built
 - **Date:** 2026-11-06
 - **Deciders:** operator + council (Claude Opus 5.5 chair, two Codex advisors) + Claude (Opus 5.5)
 - **Context source:** council decision 2026-11-06 (`~/.claude/coordinators/archive/council-decision.md`); operator clarification 2026-11-06 on discovery; change plan [`docs/plans/release-0.2.0.md`](https://github.com/GoodOlClint/CrossTalk/blob/main/docs/plans/release-0.2.0.md)
