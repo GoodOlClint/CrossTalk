@@ -82,7 +82,9 @@ func (st *AgentState) askReceivedAt(id string) (time.Time, bool) {
 func (st *AgentState) endReply(r msg.Message, key, taskID, state, reason string) mcpserver.Result {
 	rec := st.obligation(r, key, state, false, taskID)
 	rec.Reason = reason
-	st.agent.Journal().Append(rec)
+	if st.agent.Journal().Append(rec) != nil {
+		return mcpserver.Result{MessageID: r.MessageID, State: adapter.Unknown, Reason: receiver.ReasonJournal}
+	}
 	return mcpserver.Result{MessageID: r.MessageID, State: adapter.State(state), Reason: reason}
 }
 

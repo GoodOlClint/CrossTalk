@@ -434,3 +434,33 @@ func dials(addr string) bool {
 	}
 	return err == nil
 }
+
+func TestRemoteReplyResponseDroppedDedupes(t *testing.T) {
+	h1, h2, alice, bob := twoHosts(t)
+	askID := askBob(t, alice, nil)
+	var dropped atomic.Bool
+	h1.setHook(func(w http.ResponseWriter, r *http.Request, next http.Handler) bool {
+		if r.Method != http.MethodPost || !dropped.CompareAndSwap(false, true) {
+			return false
+		}
+		next.ServeHTTP(httptest.NewRecorder(), r)
+		panic(http.ErrAbortHandler)
+	})
+	out := bob.ok("reply", replyArgs(askID))
+	if s := str(out, "state"); s != "unknown" || str(out, "reason") != shim.ReasonRemoteReplyPending {
+		t.Fatalf("reply whose response was dropped: %v", out)
+	}
+	waitFor(t, "the dropped reply's inject on host 1", func() bool { return replyWrites(alice) == 1 })
+	bob.restart()
+	waitFor(t, "obligation delivered", func() bool {
+		st, _, _ := obligation(t, h2.state, bob.id(), askID)
+		return st == journal.StateDelivered
+	})
+	time.Sleep(150 * time.Millisecond)
+	if n := replyWrites(alice); n != 1 {
+		t.Fatalf("host 1 injected the reply %d times, want 1", n)
+	}
+	if n := h1.count("POST /v1/a2a/" + alice.id()); n < 2 {
+		t.Fatalf("%d POSTs: the reply was not resent", n)
+	}
+}
