@@ -173,3 +173,6 @@ func Classify(err error) string {
 	}
 	return ReasonUnreachable
 }
+
+// pinnedTLSConfig is a stub until the consolidation.
+func pinnedTLSConfig(h Host, p Peer, onMismatch func()) *tls.Config { return &tls.Config{} }
