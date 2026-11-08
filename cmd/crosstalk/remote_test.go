@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/GoodOlClint/crosstalk/internal/registry"
 	"github.com/GoodOlClint/crosstalk/internal/remote"
 )
 
@@ -316,5 +317,31 @@ func TestRemotePairCLI(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("remote pair did not notice the redemption")
+	}
+}
+
+func TestRegisteredA2AURL(t *testing.T) {
+	reg := registry.New(t.TempDir())
+	publish := func(agentID, url string) {
+		t.Helper()
+		g, err := reg.Acquire(registry.Request{AgentID: agentID, HarnessName: "n" + agentID, Harness: "claude", Cwd: "/w"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { g.Close() })
+		if err := g.Publish(registry.Descriptor{A2AURL: url}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	publish("a1a1a1a1a1a1a1a1", "http://127.0.0.1:4001")
+	publish("b2b2b2b2b2b2b2b2", "")
+	lookup := registeredA2AURL(reg)
+	if u, ok := lookup("a1a1a1a1a1a1a1a1"); !ok || u != "http://127.0.0.1:4001" {
+		t.Fatalf("registered agent: %q %v", u, ok)
+	}
+	for name, id := range map[string]string{"registered without a2a_url": "b2b2b2b2b2b2b2b2", "unknown id": "c3c3c3c3c3c3c3c3"} {
+		if u, ok := lookup(id); ok {
+			t.Fatalf("%s resolved to %q", name, u)
+		}
 	}
 }
