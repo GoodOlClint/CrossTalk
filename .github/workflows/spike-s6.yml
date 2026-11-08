@@ -1,0 +1,54 @@
+name: spike-s6
+
+on:
+  push:
+    branches: [spike-020-s6]
+  workflow_dispatch:
+    inputs:
+      reply_leg:
+        description: "Run the ask and reply leg"
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+jobs:
+  two-host:
+    if: github.ref == 'refs/heads/spike-020-s6'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      REPLY_LEG: ${{ github.event_name == 'workflow_dispatch' && !inputs.reply_leg && '0' || '1' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - name: Build linux binaries
+        run: |
+          set -eu
+          mkdir -p bin
+          CGO_ENABLED=0 go build -trimpath -o bin/crosstalk ./cmd/crosstalk
+          CGO_ENABLED=0 go build -trimpath -o bin/spike17 ./docs/spikes/17-ci-two-host
+      - name: Two-host scenario
+        env:
+          LOGS: ${{ github.workspace }}/s6-logs
+        run: |
+          set -o pipefail
+          bash docs/spikes/17-ci-two-host/run.sh bin 2>&1 | tee s6-run.log
+          grep '^S6_E2E ' s6-run.log
+      - name: Environment
+        if: always()
+        run: |
+          { docker version --format 'docker {{.Server.Version}}'; go version; uname -sr; } | tee s6-env.log
+      - uses: actions/upload-artifact@v5
+        if: always()
+        with:
+          name: s6-logs
+          path: |
+            s6-logs
+            s6-run.log
+            s6-env.log
