@@ -103,6 +103,9 @@ func ProbePeer(h Host, p Peer) string {
 		if mismatch {
 			return "tls_pin_mismatch"
 		}
+		if isAlert(err) {
+			return "unpaired_by_peer"
+		}
 		return probeClass(err)
 	}
 	// TLS 1.3 finishes the client side before the server judges our
@@ -118,7 +121,10 @@ func ProbePeer(h Host, p Peer) string {
 		if errors.As(err, &ne) && ne.Timeout() {
 			return "ok"
 		}
-		return "unpaired_by_peer"
+		if isAlert(err) {
+			return "unpaired_by_peer"
+		}
+		return "unreachable"
 	}
 	return "ok"
 }
@@ -129,4 +135,11 @@ func probeClass(err error) string {
 		return "timeout"
 	}
 	return "unreachable"
+}
+
+// isAlert reports whether err is a TLS alert sent by the peer, as opposed to
+// a plain close, reset or timeout.
+func isAlert(err error) bool {
+	var oe *net.OpError
+	return errors.As(err, &oe) && oe.Op == "remote error"
 }
