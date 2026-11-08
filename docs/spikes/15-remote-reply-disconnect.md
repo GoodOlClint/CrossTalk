@@ -90,3 +90,7 @@ The spike reached every clause by stubbing outside production. These are the lin
 ## After slice R4
 
 `completeReply` now keeps a remote reply key pending (`unreachable/remote_reply_pending`) until R8 builds the remote branch of `forwardReply`. Three tests in the spike package delivered the reply through the spike's own `OnReply` stand-in and are skipped with that reason: `TestReplyReachesOriginalAsker`, `TestReplyNeverReachesNameReuser` and `TestReplyPendingWhileAskerGatewayDown`. R8 re-pins them as `TestTwoHostReplyAcrossDisconnect` and `TestReplyNeverReachesNameReuser` on the production path.
+
+## After slice R8
+
+The three skipped tests are deleted, not un-skipped: they delivered the reply through the spike's own `OnReply` stand-in, which production no longer needs. Their claims are pinned on the production path by `TestTwoHostReplyAcrossDisconnect` (reply reaches the original asker once, across a dropped response and a same-message_id retry), `TestReplyNeverReachesNameReuser` (the POST path carries the original agent_id, a new session with the asker's name gets nothing, the obligation ends `rejected/no_such_agent`) and `TestRemoteReplyPendingWhileGatewayDown` (not delivered while the asker's gateway is down), all in `internal/wire/remote_reply_test.go`. `TestReplyToGoneAskerNotRedirected` stays. The gateway answers a gone asker with the A2A rejection `no_such_agent`, not a bare 404, so R8 needed no change under `internal/remote`.

@@ -173,6 +173,10 @@ func TestRetentionKeepsUnresolved(t *testing.T) {
 	j.Append(Record{Type: TypeObligation, MessageID: "reply-done", State: StatePending})
 	j.Append(Record{Type: TypeObligation, MessageID: "reply-done", State: StateDelivered})
 	j.Append(Record{Type: TypeClaim, Owner: "fedcba9876543210", Claimed: true})
+	j.Append(Record{Type: TypeObligation, MessageID: "reply-rejected", State: StatePending})
+	j.Append(Record{Type: TypeObligation, MessageID: "reply-rejected", State: StateRejected, Reason: "no_such_agent"})
+	j.Append(Record{Type: TypeObligation, MessageID: "reply-expired", State: StatePending})
+	j.Append(Record{Type: TypeObligation, MessageID: "reply-expired", State: StateUnreachable, Reason: "reply_expired"})
 	j.Close()
 
 	now = now.Add(23 * time.Hour)
@@ -217,6 +221,11 @@ func TestRetentionKeepsUnresolved(t *testing.T) {
 	}
 	if _, ok := j2.Latest(Record{Type: TypeObligation, MessageID: "reply-done"}); ok {
 		t.Error("delivered reply older than 24h kept")
+	}
+	for _, id := range []string{"reply-rejected", "reply-expired"} {
+		if _, ok := j2.Latest(Record{Type: TypeObligation, MessageID: id}); ok {
+			t.Errorf("ended reply %s older than 24h kept", id)
+		}
 	}
 	if c, ok := j2.Latest(Record{Type: TypeClaim}); !ok || !c.Claimed {
 		t.Error("active claim truncated")
