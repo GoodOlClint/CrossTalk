@@ -84,8 +84,7 @@ func GatewayStatus(stateDir string, c Config, fingerprint string) (string, error
 }
 
 // listenerIsOurs starts a TLS 1.3 handshake with no client certificate and
-// reports whether the server presented the certificate with fingerprint. The
-// gateway refuses the unpinned client afterwards; that does not matter here.
+// reports whether the server presented the certificate with fingerprint.
 func listenerIsOurs(addr, fingerprint string) bool {
 	deadline := time.Now().Add(probeTimeout)
 	ctx, cancel := context.WithDeadline(context.Background(), deadline)

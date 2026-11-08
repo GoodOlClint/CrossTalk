@@ -73,7 +73,7 @@ func (r *runLog) count(sub string) int {
 }
 
 // fakeGateway holds gateway.lock and answers TLS handshakes with the host
-// certificate on bind:port, which is all status and K8 look at.
+// certificate on bind:port.
 type fakeGateway struct {
 	lock *os.File
 	ln   net.Listener
@@ -213,8 +213,6 @@ func eachOS(t *testing.T, f func(t *testing.T, goos string)) {
 	}
 }
 
-// hostOS runs f for the OS the tests run on; the install-driven tests are
-// slow and their unit commands are the only OS-dependent part.
 func hostOS(t *testing.T, f func(t *testing.T, goos string)) {
 	t.Helper()
 	goos := runtime.GOOS
@@ -634,6 +632,8 @@ func TestPurgeRemovesConfigAndListsPeers(t *testing.T) {
 			t.Fatalf("install --remote: exit %d\n%s", code, out)
 		}
 		addPeers(t, home, "desk", "vm")
+		sibling := filepath.Join(home, ".config", "other-tool", "settings")
+		installWrite(t, sibling, "keep\n")
 		code, out := installRunCmd(t, "uninstall", "--purge", "--yes", "--bin-dir", bin)
 		if code != 0 {
 			t.Fatalf("uninstall --purge: exit %d\n%s", code, out)
@@ -642,6 +642,9 @@ func TestPurgeRemovesConfigAndListsPeers(t *testing.T) {
 			if _, err := os.Stat(p); !errors.Is(err, os.ErrNotExist) {
 				t.Errorf("%s kept: %v", p, err)
 			}
+		}
+		if installRead(t, sibling) != "keep\n" {
+			t.Errorf("purge removed a file outside ~/.config/crosstalk")
 		}
 		if !strings.Contains(out, "unpair this host on: desk, vm") {
 			t.Errorf("output does not list the peers to unpair on:\n%s", out)
@@ -839,6 +842,17 @@ func TestK8UnitChecks(t *testing.T) {
 	}
 	rec.linger = "yes"
 	unit := remoteUnitPath(home)
+	dir := filepath.Join(home, ".config", "crosstalk")
+	good := fileSHA(t, unit)
+	if err := setUnitHash(dir, strings.Repeat("0", 64)); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(unitK8(t, home, bin), "\n"); !strings.Contains(got, "K8 FAIL") || !strings.Contains(got, "hash") || strings.Contains(got, "binary other than") {
+		t.Errorf("unit content right but unit_sha256 wrong must fail on the hash alone:\n%s", got)
+	}
+	if err := setUnitHash(dir, good); err != nil {
+		t.Fatal(err)
+	}
 	installWrite(t, unit, installRead(t, unit)+"\n# edited\n")
 	if got := strings.Join(unitK8(t, home, bin), "\n"); !strings.Contains(got, "K8 FAIL") || !strings.Contains(got, unit) {
 		t.Errorf("edited unit:\n%s", got)
@@ -908,4 +922,75 @@ func TestEnableRefusesDanglingUnitSymlink(t *testing.T) {
 			t.Errorf("commands ran: %v", c)
 		}
 	})
+}
+
+func TestInstallRemoteRefusesWildcardBind(t *testing.T) {
+	home, rec := unitSandbox(t, "linux", "claude")
+	before := installSnapshot(t, home)
+	for _, bind := range []string{"0.0.0.0", "::"} {
+		code, out := installRunCmd(t, "install", "--yes", "--remote", "--bind", bind, "--bin-dir", filepath.Join(home, "bin"))
+		if code != 2 || !strings.Contains(out, "--bind") {
+			t.Errorf("install --remote --bind %s: exit %d, want 2 naming --bind\n%s", bind, code, out)
+		}
+	}
+	if after := installSnapshot(t, home); fmt.Sprint(before) != fmt.Sprint(after) {
+		t.Errorf("HOME changed")
+	}
+	if c := rec.all(); len(c) != 0 {
+		t.Errorf("commands ran: %v", c)
+	}
+}
+
+func TestEnableRefusesSymlinkToRegularFile(t *testing.T) {
+	eachOS(t, func(t *testing.T, goos string) {
+		home, rec := unitSandbox(t, goos)
+		mustEnable(t, freePort(t))
+		unit := remoteUnitPath(home)
+		real := filepath.Join(home, "real-unit")
+		if err := os.Rename(unit, real); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(real, unit); err != nil {
+			t.Fatal(err)
+		}
+		ran := len(rec.all())
+		code, out := enableCmd(t, "--yes")
+		if code != 1 || !strings.Contains(out, unit) {
+			t.Errorf("enable over a symlink to a file with the recorded hash: exit %d, want 1 naming the path\n%s", code, out)
+		}
+		if fi, err := os.Lstat(unit); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+			t.Errorf("symlink replaced: %v %v", fi, err)
+		}
+		if n := len(rec.all()); n != ran {
+			t.Errorf("commands ran: %v", rec.all()[ran:])
+		}
+		if code, out := disableCmd(t, "--yes"); code != 1 {
+			t.Errorf("disable over a symlink: exit %d, want 1\n%s", code, out)
+		}
+	})
+}
+
+func TestPurgeRefusesForegroundGatewayBesideOwnedUnit(t *testing.T) {
+	hostOS(t, func(t *testing.T, goos string) {
+		home, rec := unitSandbox(t, goos, "claude")
+		bin := filepath.Join(home, "bin")
+		if code, out := installRemote(t, bin); code != 0 {
+			t.Fatalf("install --remote: exit %d\n%s", code, out)
+		}
+		rec.failOn = map[string]string{"darwin": "launchctl bootout", "linux": "disable --now"}[goos]
+		before := installSnapshot(t, home)
+		code, out := uninstallPurge(t, bin)
+		want := fmt.Sprintf("a gateway is running (pid %d); stop it, then run uninstall --purge again", os.Getpid())
+		if code != 1 || !strings.Contains(out, want) {
+			t.Errorf("uninstall --purge: exit %d, want 1 with %q\n%s", code, want, out)
+		}
+		if after := installSnapshot(t, home); fmt.Sprint(before) != fmt.Sprint(after) {
+			t.Errorf("HOME changed:\nbefore %v\nafter  %v", before, after)
+		}
+	})
+}
+
+func uninstallPurge(t *testing.T, bin string) (int, string) {
+	t.Helper()
+	return installRunCmd(t, "uninstall", "--purge", "--yes", "--bin-dir", bin)
 }

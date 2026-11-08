@@ -201,10 +201,24 @@ func runInstall(mode string, args []string, in io.Reader, tty bool, stdout, stde
 		}
 	}
 	if mode == "uninstall" && o.purge {
-		if held, err := remote.GatewayLockHeld(stateDir); err != nil {
+		held, err := remote.GatewayLockHeld(stateDir)
+		if err != nil {
 			fmt.Fprintf(stderr, "crosstalk %s: %v\n", mode, err)
 			return 1
-		} else if _, _, present, owned, _ := unitOwnership(home, cfgDir); held && !(present && owned) {
+		}
+		if _, _, present, owned, _ := unitOwnership(home, cfgDir); held && present && owned {
+			if installKeep(all, targets, env, false) == "" {
+				unitStop(ctx)
+				held, err = remote.GatewayLockHeld(stateDir)
+				if err != nil {
+					fmt.Fprintf(stderr, "crosstalk %s: %v\n", mode, err)
+					return 1
+				}
+			} else {
+				held = false
+			}
+		}
+		if held {
 			fmt.Fprintf(stderr, "crosstalk %s: %s\n", mode, gatewayRunningMsg(stateDir))
 			return 1
 		}
