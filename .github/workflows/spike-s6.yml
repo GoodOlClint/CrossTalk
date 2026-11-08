@@ -15,6 +15,7 @@ permissions:
 
 jobs:
   two-host:
+    if: github.ref == 'refs/heads/spike-020-s6'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:

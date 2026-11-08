@@ -55,7 +55,7 @@ Each whole job (checkout to artifact upload) took 39 to 52 s, of which the Go bu
 - **Startup waits are short**: every run got past the readiness polls (0.2 s interval, 30 s limit) and the whole scenario, including pairing, took 9 to 19 s, so no wait came near the limit. Per-wait times were not recorded.
 - **Image build time varies 4x** (3.3, 6.7, 13.2 s) for a two-file `COPY` image, almost all of it pulling the base image. R10 should build with the runner's cache or pull a pinned base once.
 - **Token on stdout, hint on stderr**: `pair` prints the token as the first stdout line, so the script reads the first line of its output file; `join` reads the token from stdin, so a pipe works with no tty.
-- **Inform timing has a 0.2 s floor** from the poll interval, so sub-second figures are upper bounds of that resolution.
+- **What the times are**: elapsed time from pair start to the moment the script observed the delivery. Polling (0.2 s sleep between failed checks) can add delay, so they are observed figures, not a fixed resolution. The ask and reply time also includes the inform leg and its 3 s settle wait that run first, so it overstates the reply path alone; that is the conservative direction for the pass line.
 - **`actions/upload-artifact@v5` warns** that it targets Node 20 and is forced to Node 24. `ci.yml` already uses `checkout@v7` and `setup-go@v7`, so the version floor in the kickoff is behind; R10 should pick the current majors when it writes the job.
 - **Flakiness:** none in 3 CI runs and 2 local runs. Three runs is too few to bound it.
 - **Reply leg**: needs R8 on the branch the job builds. Once #77 is on main, flip the `reply_leg` default and require `reply_seconds` to be a number below 180.
