@@ -168,7 +168,13 @@ On a terminal, `crosstalk install` also asks once, after the other steps: `Set u
 
 ### Firewalls and network filters
 
-A firewall or network filter that asks you before a new program may use the network (for example Little Snitch, or the macOS firewall) can hold the first connection. A stalled handshake is silent: `remote serve` logs nothing. In the one Mac trial `remote join` ended with a bare `EOF` after about 7 seconds; other filters can instead end in a timeout (the joining side waits up to 15 seconds, a gateway drops a handshake that takes over 5). Allow incoming TCP on the gateway's port (7745 unless you changed it) and outgoing TCP to the peer's port. A rule is per program path and signature, so use the installed binary at its stable path.
+A firewall or network filter that asks you before a new program may use the network (for example Little Snitch, or the macOS firewall) can hold the first connection, so the TLS handshake never completes. CrossTalk reports it in three places:
+
+- `crosstalk remote serve` prints one line, `handshake not completed from <address>`, when a connection times out during the handshake (the gateway drops one that takes over 5 seconds) or the peer closes it before sending anything. The line carries the remote IP address and nothing else. Each address is logged at most once a minute, and at most 256 addresses are tracked, so a scanner cannot fill the log or memory. Under the login unit the line is in the log file named above.
+- `crosstalk remote join` and `crosstalk remote status` report a `handshake timeout` instead of a bare `EOF`, followed by `a host firewall or network filter (for example an application firewall such as Little Snitch) on either host may be holding the connection`. `join` waits 5 seconds for the handshake; `status` waits 2 seconds per peer and shows the peer as `timeout`.
+- `crosstalk remote pair` dials nothing, so it cannot see a stalled handshake; it prints a note when it starts and pair waits the full 10 minutes. If `join` on the other host reports a handshake timeout, check firewalls or network filters on the pair host too.
+
+Allow incoming TCP on the gateway's port (7745 unless you changed it) and outgoing TCP to the peer's port. A rule is per program path and signature, so use the installed binary at its stable path. In the one Mac trial `remote join` ended with a bare `EOF` after about 7 seconds before these reports existed.
 
 The macOS Local Network prompt: no such dialog was identified in the one trial on a Mac, so whether macOS asks for Local Network access for this binary is unverified. The same trial recorded that the macOS Application Firewall was on and allowed the binary, so it was not the cause; a third-party filter was suspected, not confirmed. No exact prompt text is recorded yet, and the signed release binary has not been tried.
 

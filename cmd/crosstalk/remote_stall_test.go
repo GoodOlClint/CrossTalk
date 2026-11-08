@@ -7,6 +7,7 @@ import (
 	"net"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,6 +21,7 @@ func TestStatusReportsStalledHandshake(t *testing.T) {
 			_ = home
 			l := statusListener(t)
 			var held []net.Conn
+			var mu sync.Mutex
 			go func() {
 				for {
 					c, err := l.Accept()
@@ -29,11 +31,16 @@ func TestStatusReportsStalledHandshake(t *testing.T) {
 					if closeAtOnce {
 						c.Close()
 					} else {
+						mu.Lock()
 						held = append(held, c)
+						mu.Unlock()
 					}
 				}
 			}()
 			t.Cleanup(func() {
+				l.Close()
+				mu.Lock()
+				defer mu.Unlock()
 				for _, c := range held {
 					c.Close()
 				}

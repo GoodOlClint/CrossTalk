@@ -10,7 +10,9 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"os"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -33,6 +35,45 @@ var (
 	errPinMismatch = errors.New("remote: peer certificate does not match the pinned fingerprint")
 	errTooLarge    = errors.New("remote: response over the size cap")
 )
+
+// HandshakeHint is appended to every report of a stalled handshake.
+const HandshakeHint = "a host firewall or network filter (for example an application firewall such as Little Snitch) on either host may be holding the connection"
+
+// HandshakeError reports a TLS handshake that timed out or was closed by the
+// peer before it finished.
+type HandshakeError struct{ Addr string }
+
+func (e *HandshakeError) Error() string {
+	return "handshake timeout: no TLS handshake completed with " + e.Addr + "; " + HandshakeHint
+}
+
+// traceHandshake returns a context that records how the TLS handshake went,
+// and a function that takes the request's error and returns a *HandshakeError
+// when the handshake timed out or was closed before it finished.
+func traceHandshake(ctx context.Context, addr string) (context.Context, func(error) error) {
+	var mu sync.Mutex
+	var started, done bool
+	var hsErr error
+	ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
+		TLSHandshakeStart: func() { mu.Lock(); started = true; mu.Unlock() },
+		TLSHandshakeDone:  func(_ tls.ConnectionState, err error) { mu.Lock(); done, hsErr = true, err; mu.Unlock() },
+	})
+	return ctx, func(reqErr error) error {
+		mu.Lock()
+		defer mu.Unlock()
+		if !started {
+			return nil
+		}
+		cause := reqErr
+		if done {
+			cause = hsErr
+		}
+		if cause != nil && (handshakeCut(cause) || errors.Is(cause, context.DeadlineExceeded)) {
+			return &HandshakeError{Addr: addr}
+		}
+		return nil
+	}
+}
 
 // Error carries one of the Reason* codes.
 type Error struct {
@@ -155,8 +196,13 @@ func (c *Client) Do(ctx context.Context, method, path string, hdr http.Header, b
 	}
 	hc, tr := c.httpClient()
 	defer tr.CloseIdleConnections()
+	ctx, stalled := traceHandshake(ctx, c.peer.Address)
+	req = req.WithContext(ctx)
 	resp, err := hc.Do(req)
 	if err != nil {
+		if he := stalled(err); he != nil {
+			return 0, nil, &Error{Reason: ReasonTimeout, Err: he}
+		}
 		return 0, nil, &Error{Reason: Classify(err), Err: err}
 	}
 	defer resp.Body.Close()

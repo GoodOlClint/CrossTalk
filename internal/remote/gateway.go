@@ -115,12 +115,13 @@ type peerState struct {
 }
 
 type Gateway struct {
-	cfg   GatewayConfig
-	base  *tls.Config
-	ready chan struct{}
-	addr  net.Addr
-	state atomic.Value
-	quit  chan struct{}
+	cfg    GatewayConfig
+	base   *tls.Config
+	ready  chan struct{}
+	addr   net.Addr
+	state  atomic.Value
+	quit   chan struct{}
+	stalls *stallLimiter
 
 	mu       sync.Mutex
 	raw      map[net.Conn]struct{}
@@ -155,6 +156,7 @@ func NewGateway(c GatewayConfig) *Gateway {
 		cfg: c, ready: make(chan struct{}), quit: make(chan struct{}),
 		raw: map[net.Conn]struct{}{}, conns: map[*gwConn]struct{}{}, peerSt: map[string]*peerState{},
 		accepted: make(chan *gwConn),
+		stalls:   newStallLimiter(c.Limits.StallWindow, c.Limits.MaxStallAddrs),
 	}
 	g.base = &tls.Config{
 		Certificates:           []tls.Certificate{c.Host.Certificate},
@@ -321,6 +323,7 @@ func (g *Gateway) handshake(raw net.Conn, slots chan struct{}) {
 	g.mu.Unlock()
 	<-slots
 	if err != nil {
+		g.noteStall(raw, err)
 		raw.Close()
 		return
 	}

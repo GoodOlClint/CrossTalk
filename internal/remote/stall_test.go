@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -18,6 +19,7 @@ func holdServer(t *testing.T, closeAtOnce bool) string {
 		t.Fatal(err)
 	}
 	var held []net.Conn
+	var mu sync.Mutex
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -29,13 +31,17 @@ func holdServer(t *testing.T, closeAtOnce bool) string {
 			if closeAtOnce {
 				c.Close()
 			} else {
+				mu.Lock()
 				held = append(held, c)
+				mu.Unlock()
 			}
 		}
 	}()
 	t.Cleanup(func() {
 		l.Close()
 		<-done
+		mu.Lock()
+		defer mu.Unlock()
 		for _, c := range held {
 			c.Close()
 		}
