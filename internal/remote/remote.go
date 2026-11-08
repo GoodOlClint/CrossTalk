@@ -45,6 +45,7 @@ const (
 
 var (
 	ErrNotConfigured = errors.New("remote: not configured")
+	ErrUnknownAlias  = errors.New("remote: no such peer")
 	ErrMode          = errors.New("remote: file or directory has the wrong mode")
 	ErrAliasTaken    = errors.New("remote: alias belongs to another peer")
 )
@@ -651,7 +652,7 @@ func (p *Peers) Remove(alias string) error {
 				return append(ps[:i], ps[i+1:]...), nil
 			}
 		}
-		return nil, fmt.Errorf("remote: no peer %q", alias)
+		return nil, fmt.Errorf("%w: %q", ErrUnknownAlias, alias)
 	})
 }
 
