@@ -69,9 +69,9 @@ func (b Binding) SameConversation(o Binding) bool {
 //	task:       TaskID, MessageID, ContextID, Principal, Kind, State
 //	            (submitted|working|completed|failed|canceled|removed), Delivery,
 //	            Reason, Text (an ask's reply), Deadline, Message (appended history)
-//	dispatch:   MessageID (State = dispatching)
-//	outcome:    MessageID, State
-//	cancel:     MessageID
+//	dispatch:   MessageID (State = dispatching), Sender (only for a remote sender's message: its host-scoped key)
+//	outcome:    MessageID, State, Sender (as dispatch)
+//	cancel:     MessageID, Sender (as dispatch)
 //	route:      Session, MessageID, Sender (original sender), State open|closed
 //	obligation: MessageID (the reply), InReplyTo, To, TaskID, State pending|completed|released|delivered, or closed (the ask closed first); the first carries Message
 //	claim:      Owner (agent_id), Claimed
@@ -112,7 +112,7 @@ func (r Record) key() string {
 	case TypeTask:
 		return "t\x00" + r.TaskID
 	case TypeDispatch, TypeOutcome, TypeCancel:
-		return "m\x00" + r.MessageID
+		return "m\x00" + r.dispatchKey()
 	case TypeRoute:
 		return "r\x00" + r.Session + "\x00" + r.MessageID + "\x00" + r.Sender
 	case TypeObligation:
@@ -127,6 +127,18 @@ func (r Record) key() string {
 		return "n\x00" + r.To + "\x00" + strconv.Itoa(r.Count)
 	}
 	return "?\x00" + string(r.Type)
+}
+
+// dispatchKey is the message_id alone for a local sender, so existing
+// records keep their key, and the sender's scope plus message_id for a remote
+// one.
+func (r Record) dispatchKey() string { return dispatchKey(r.Sender, r.MessageID) }
+
+func dispatchKey(scope, messageID string) string {
+	if scope == "" {
+		return messageID
+	}
+	return scope + "\x00" + messageID
 }
 
 type dispatchState struct {
@@ -246,13 +258,15 @@ type Replay struct {
 }
 
 type Journal struct {
-	mu       sync.Mutex
-	f        *os.File
-	path     string
-	binding  Binding
-	now      func() time.Time
-	latest   map[string]Record
-	dispatch map[string]*dispatchState
+	mu      sync.Mutex
+	f       *os.File
+	path    string
+	binding Binding
+	now     func() time.Time
+	latest  map[string]Record
+	// idSenders lists, per message_id, the sender keys holding a dedupe record.
+	idSenders map[string]map[string]bool
+	dispatch  map[string]*dispatchState
 	// repairTo is the file size to truncate back to before the next append, or -1.
 	repairTo int64
 }
@@ -306,7 +320,7 @@ func Open(stateDir, agentID string, binding Binding, opt Options) (*Journal, Rep
 	if err != nil {
 		return nil, Replay{}, err
 	}
-	j := &Journal{f: f, path: path, binding: binding, now: opt.Now, latest: map[string]Record{}, dispatch: map[string]*dispatchState{}, repairTo: -1}
+	j := &Journal{f: f, path: path, binding: binding, now: opt.Now, latest: map[string]Record{}, idSenders: map[string]map[string]bool{}, dispatch: map[string]*dispatchState{}, repairTo: -1}
 	for _, r := range kept {
 		j.index(r)
 	}
@@ -395,15 +409,21 @@ func (j *Journal) index(r Record) {
 	if r.MessageID == "" {
 		return
 	}
+	if r.Type == TypeDedupe {
+		if j.idSenders[r.MessageID] == nil {
+			j.idSenders[r.MessageID] = map[string]bool{}
+		}
+		j.idSenders[r.MessageID][r.Sender] = true
+	}
 	switch r.Type {
 	case TypeDispatch, TypeOutcome, TypeCancel:
 	default:
 		return
 	}
-	ds := j.dispatch[r.MessageID]
+	ds := j.dispatch[r.dispatchKey()]
 	if ds == nil {
 		ds = &dispatchState{}
-		j.dispatch[r.MessageID] = ds
+		j.dispatch[r.dispatchKey()] = ds
 	}
 	switch r.Type {
 	case TypeDispatch:
@@ -495,13 +515,18 @@ func (j *Journal) Dedupe(sender, messageID string) (string, bool) {
 // Claim durably records a dispatch claim for messageID. It returns false, and
 // writes nothing, if the message is already claimed or canceled. The claim is
 // on disk before Claim returns, so a harness write may follow it.
-func (j *Journal) Claim(messageID string) (bool, error) {
+func (j *Journal) Claim(messageID string) (bool, error) { return j.ClaimFor("", messageID) }
+
+// ClaimFor is Claim in a sender's namespace: scope is "" for a local sender
+// and the host-scoped key for a remote one, so two senders' equal message_ids
+// are separate claims.
+func (j *Journal) ClaimFor(scope, messageID string) (bool, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	if ds := j.dispatch[messageID]; ds != nil && (ds.claimed || ds.canceled) {
+	if ds := j.dispatch[dispatchKey(scope, messageID)]; ds != nil && (ds.claimed || ds.canceled) {
 		return false, nil
 	}
-	if _, err := j.appendLocked(Record{Type: TypeDispatch, MessageID: messageID, State: StateDispatching}); err != nil {
+	if _, err := j.appendLocked(Record{Type: TypeDispatch, MessageID: messageID, Sender: scope, State: StateDispatching}); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -509,35 +534,43 @@ func (j *Journal) Claim(messageID string) (bool, error) {
 
 // Cancel durably records a cancel for messageID. It returns false, and writes
 // nothing, if the message is already claimed or canceled.
-func (j *Journal) Cancel(messageID string) (bool, error) {
+func (j *Journal) Cancel(messageID string) (bool, error) { return j.CancelFor("", messageID) }
+
+func (j *Journal) CancelFor(scope, messageID string) (bool, error) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	if ds := j.dispatch[messageID]; ds != nil && (ds.claimed || ds.canceled) {
+	if ds := j.dispatch[dispatchKey(scope, messageID)]; ds != nil && (ds.claimed || ds.canceled) {
 		return false, nil
 	}
-	if _, err := j.appendLocked(Record{Type: TypeCancel, MessageID: messageID, State: StateCanceled}); err != nil {
+	if _, err := j.appendLocked(Record{Type: TypeCancel, MessageID: messageID, Sender: scope, State: StateCanceled}); err != nil {
 		return false, err
 	}
 	return true, nil
 }
 
 // Resolve records the dispatch outcome for a claimed messageID.
-func (j *Journal) Resolve(messageID, state string) error {
+func (j *Journal) Resolve(messageID, state string) error { return j.ResolveFor("", messageID, state) }
+
+func (j *Journal) ResolveFor(scope, messageID, state string) error {
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	ds := j.dispatch[messageID]
+	ds := j.dispatch[dispatchKey(scope, messageID)]
 	if ds == nil || !ds.claimed {
 		return fmt.Errorf("journal: resolve %s: not claimed", messageID)
 	}
-	_, err := j.appendLocked(Record{Type: TypeOutcome, MessageID: messageID, State: state})
+	_, err := j.appendLocked(Record{Type: TypeOutcome, MessageID: messageID, Sender: scope, State: state})
 	return err
 }
 
 // DispatchState returns the latest dispatch-related record for messageID.
 func (j *Journal) DispatchState(messageID string) (Record, bool) {
+	return j.DispatchStateFor("", messageID)
+}
+
+func (j *Journal) DispatchStateFor(scope, messageID string) (Record, bool) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
-	r, ok := j.latest[Record{Type: TypeDispatch, MessageID: messageID}.key()]
+	r, ok := j.latest[Record{Type: TypeDispatch, MessageID: messageID, Sender: scope}.key()]
 	return r, ok
 }
 

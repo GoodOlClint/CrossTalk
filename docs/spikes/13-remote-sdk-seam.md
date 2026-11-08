@@ -87,3 +87,7 @@ No clause failed, so section 3.2 stands. Changes found:
 - `TestC1` asserts `From` equals `remote:<fingerprint>/<agent_id>` (what the Principal-only sender labels as), not `name@alias`.
 - C0 `TestC0_BackendRequiresGatewayToken` gained a fourth subtest (right bearer, bad host header).
 - No mutation check was run for S1 beyond the C5 control; the S3 spike has one (spike 14).
+
+## After slice R4
+
+R4 (`impl-020-r4`) made the three changes listed under "What the plan and R4 must change". The two findings tests are flipped: `TestC4_PlanShapedSenderNoLongerCollides` and `TestC5_PlanShapedSenderCannotCommandNow`; the plan-shaped sender now carries `Host` and `HostAlias` as the production remote sender does. The spike's loopback names `X-CrossTalk-Remote-*` are the spike's own; production uses `X-CrossTalk-GW-*` (design section 5).

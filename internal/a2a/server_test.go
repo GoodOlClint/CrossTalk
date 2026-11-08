@@ -36,6 +36,9 @@ type env struct {
 	srv     *Server
 	url     string
 	peerTok string
+	gwTok   string
+	j       *journal.Journal
+	rcv     *receiver.Receiver
 	stop    func()
 
 	mu     sync.Mutex
@@ -65,7 +68,12 @@ func newEnvOn(t *testing.T, dir string, tasks func(*journal.Journal) TaskStore, 
 		defer e.mu.Unlock()
 		return e.self
 	}})
+	e.j, e.rcv = j, rcv
 	peerPath := filepath.Join(e.dir, "peer.token")
+	gwPath := filepath.Join(e.dir, "gateway.token")
+	if e.gwTok, err = udsingress.EnsureKey(gwPath); err != nil {
+		t.Fatal(err)
+	}
 	e.peerTok, err = udsingress.EnsureKey(peerPath)
 	if err != nil {
 		t.Fatal(err)
@@ -81,11 +89,12 @@ func newEnvOn(t *testing.T, dir string, tasks func(*journal.Journal) TaskStore, 
 		alim.MaxMessageBytes = lim.MaxMessageBytes
 	}
 	e.srv = NewServer(Config{
-		Tasks:         ts,
-		Receiver:      rcv,
-		Version:       "test-1",
-		PeerTokenPath: peerPath,
-		Limits:        alim,
+		Tasks:            ts,
+		Receiver:         rcv,
+		Version:          "test-1",
+		PeerTokenPath:    peerPath,
+		GatewayTokenPath: gwPath,
+		Limits:           alim,
 		Profile: func() Profile {
 			e.mu.Lock()
 			defer e.mu.Unlock()

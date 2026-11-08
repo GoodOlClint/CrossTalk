@@ -475,6 +475,10 @@ func (st *AgentState) inbound(messageID string) (msg.Message, string, bool) {
 	return msg.Message{}, "", false
 }
 
+// addressable reports a reply key that names an agent, local or on a paired
+// host, as opposed to a principal such as local-user.
+func addressable(key string) bool { return mcpserver.IsAgentID(key) || receiver.IsRemoteKey(key) }
+
 func (s *Shim) descriptorByID(agentID string) (registry.Descriptor, bool) {
 	ds, err := s.reg.List()
 	if err != nil {
@@ -526,7 +530,7 @@ func (s *Shim) Reply(ctx context.Context, from *mcpserver.Agent, messageID, text
 	if closed {
 		return mcpserver.Result{}, askClosed(orig)
 	}
-	if mcpserver.IsAgentID(key) && orig.Kind != msg.Ask && !st.rcv.RouteOpen(orig.MessageID) {
+	if addressable(key) && orig.Kind != msg.Ask && !st.rcv.RouteOpen(orig.MessageID) {
 		return mcpserver.Result{}, &mcpserver.Error{Code: mcpserver.CodeInvalid, Reason: ReasonNoSuchMessage, Hint: hintNoRouteExpired}
 	}
 	r := st.newMessage(orig.From, msg.Inform, msg.Immediate, text)
@@ -564,7 +568,7 @@ func (st *AgentState) completeReply(ctx context.Context, orig, r msg.Message, ke
 	}
 	if stage == journal.StatePending {
 		hook := st.shim.opt.OnReply
-		if hook == nil && !mcpserver.IsAgentID(key) {
+		if hook == nil && !addressable(key) {
 			res.State, res.Reason = adapter.Unreachable, ReasonNoReplyHook
 			return res, nil
 		}
@@ -588,6 +592,10 @@ func (st *AgentState) completeReply(ctx context.Context, orig, r msg.Message, ke
 		if !advance(stageReleased) {
 			return res, nil
 		}
+	}
+	if receiver.IsRemoteKey(key) {
+		res.State, res.Reason = adapter.Unreachable, ReasonRemoteReplyPending
+		return res, nil
 	}
 	if !mcpserver.IsAgentID(key) {
 		if advance(journal.StateDelivered) {

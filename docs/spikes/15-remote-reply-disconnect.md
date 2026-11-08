@@ -86,3 +86,7 @@ The spike reached every clause by stubbing outside production. These are the lin
 ## Gates
 
 `go test ./...` passes (all packages, including the spike package); `go test -race -count=1 ./docs/spikes/...` passes; `go vet ./...` is clean; `gofmt -l .` prints nothing. Run 2026-11-07 on macOS arm64, go1.27.3.
+
+## After slice R4
+
+`completeReply` now keeps a remote reply key pending (`unreachable/remote_reply_pending`) until R8 builds the remote branch of `forwardReply`. Three tests in the spike package delivered the reply through the spike's own `OnReply` stand-in and are skipped with that reason: `TestReplyReachesOriginalAsker`, `TestReplyNeverReachesNameReuser` and `TestReplyPendingWhileAskerGatewayDown`. R8 re-pins them as `TestTwoHostReplyAcrossDisconnect` and `TestReplyNeverReachesNameReuser` on the production path.

@@ -7,6 +7,7 @@ import (
 	"maps"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -159,6 +160,14 @@ func (st *store) resumeInbound(t *task, resolve func(string) (receiver.Sender, b
 	switch {
 	case who == receiver.PrincipalLocalUser:
 		snd = receiver.Sender{Verified: true, Principal: who}
+	case receiver.IsRemoteKey(who):
+		host, agentID, _ := strings.Cut(strings.TrimPrefix(who, receiver.RemoteKeyPrefix), "/")
+		snd = receiver.Sender{Verified: true, Host: host, AgentID: agentID, Name: who, Principal: who}
+		if resolve != nil {
+			if rs, ok := resolve(who); ok {
+				snd = rs
+			}
+		}
 	default:
 		ok := false
 		if resolve != nil {
@@ -201,6 +210,29 @@ func (st *store) pending() []string {
 		}
 	}
 	slices.Sort(out)
+	return out
+}
+
+// pendingScoped lists the non-terminal tasks as (dispatch scope, message_id):
+// the scope is the sender's host-scoped key for a remote one and empty for a
+// local one.
+func (st *store) pendingScoped() []PendingMessage {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	var out []PendingMessage
+	for _, t := range st.byID {
+		if t.state.Terminal() {
+			continue
+		}
+		p := PendingMessage{MessageID: t.messageID}
+		if receiver.IsRemoteKey(t.principal) {
+			p.Scope = t.principal
+		}
+		out = append(out, p)
+	}
+	slices.SortFunc(out, func(a, b PendingMessage) int {
+		return strings.Compare(a.Scope+"\x00"+a.MessageID, b.Scope+"\x00"+b.MessageID)
+	})
 	return out
 }
 
@@ -599,6 +631,12 @@ func (h *handler) SendMessage(ctx context.Context, req *sdk.SendMessageRequest) 
 	}
 	wire := wireCopy(req.Message, m.MessageID, clientID)
 
+	if hc, ok := s.cfg.Receiver.(interface {
+		IDHeldByOther(senderKey, messageID string) bool
+	}); ok && hc.IDHeldByOther(snd.Key(), m.MessageID) {
+		return nil, rejection(m.MessageID, receiver.ReasonIDInUse)
+	}
+
 	if req.Message.TaskID != "" {
 		return h.continuation(ctx, snd, m, wire, wait)
 	}
@@ -867,7 +905,7 @@ func (h *handler) CancelTask(ctx context.Context, req *sdk.CancelTaskRequest) (*
 	if state != sdk.TaskStateSubmitted {
 		return nil, sdk.ErrTaskNotCancelable
 	}
-	won, err := s.cfg.Receiver.Cancel(t.messageID)
+	won, err := s.cancelTask(t.principal, t.messageID)
 	if err != nil {
 		return nil, sdk.NewError(sdk.ErrInternalError, "cancel could not be recorded")
 	}

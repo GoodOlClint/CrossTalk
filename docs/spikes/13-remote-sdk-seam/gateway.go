@@ -241,14 +241,14 @@ type SenderShape int
 const (
 	// NamespacedPrincipal: Verified, AgentID empty, Principal "remote:<fp>/<agent_id>".
 	NamespacedPrincipal SenderShape = iota
-	// PlanShaped: AgentID and Role set, as plan section 3.3 reads, on today's Sender.
+	// PlanShaped: Host, HostAlias, AgentID and Role set, as plan section 3.3 reads and R4 builds it.
 	PlanShaped
 )
 
 func ToSender(r Remote, shape SenderShape) receiver.Sender {
 	p := "remote:" + r.Host + "/" + r.AgentID
 	if shape == PlanShaped {
-		return receiver.Sender{Verified: true, Principal: p, AgentID: r.AgentID, Name: r.Name + "@" + r.Alias, Role: r.Role, Harness: r.Harness}
+		return receiver.Sender{Verified: true, Host: r.Host, HostAlias: r.Alias, Principal: p, AgentID: r.AgentID, Name: r.Name + "@" + r.Alias, Role: r.Role, Harness: r.Harness}
 	}
 	return receiver.Sender{Verified: true, Principal: p, Name: r.Name + "@" + r.Alias, Role: r.Role, Harness: r.Harness}
 }

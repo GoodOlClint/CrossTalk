@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,9 +16,12 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	sdk "github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2asrv"
@@ -25,6 +29,7 @@ import (
 	"github.com/GoodOlClint/crosstalk/internal/adapter"
 	"github.com/GoodOlClint/crosstalk/internal/msg"
 	"github.com/GoodOlClint/crosstalk/internal/receiver"
+	"github.com/GoodOlClint/crosstalk/internal/registry"
 	"github.com/GoodOlClint/crosstalk/internal/udsingress"
 )
 
@@ -32,8 +37,18 @@ const (
 	// SenderHeader names the registered agent whose own token the bearer
 	// credential is; absent means the bearer is the peer token.
 	SenderHeader = "X-CrossTalk-Agent"
-	SchemeBearer = sdk.SecuritySchemeName("bearer")
-	MetaKey      = "crosstalk"
+
+	// Gateway-set headers: the gateway writes these on the loopback hop after
+	// it stripped every inbound X-CrossTalk-* header; they are distinct from
+	// the X-CrossTalk-Remote-* names a sending host puts on the wire.
+	GWHostHeader    = "X-CrossTalk-GW-Host"
+	GWAliasHeader   = "X-CrossTalk-GW-Alias"
+	GWAgentIDHeader = "X-CrossTalk-GW-Agent-ID"
+	GWNameHeader    = "X-CrossTalk-GW-Name"
+	GWHarnessHeader = "X-CrossTalk-GW-Harness"
+	GWRoleHeader    = "X-CrossTalk-GW-Role"
+	SchemeBearer    = sdk.SecuritySchemeName("bearer")
+	MetaKey         = "crosstalk"
 
 	CompletionDelivered = "delivered"
 	ReasonDeadline      = "deadline"
@@ -89,7 +104,10 @@ type Config struct {
 	Profile       func() Profile
 	Version       string
 	PeerTokenPath string
-	ResolvePeer   func(name string) (Peer, bool)
+	// GatewayTokenPath is the gateway credential file; empty disables the
+	// remote-sender case in authenticate.
+	GatewayTokenPath string
+	ResolvePeer      func(name string) (Peer, bool)
 	// Claim, when set, serves metadata.crosstalk.claim requests; nil refuses
 	// them as unsupported.
 	Claim  ClaimFunc
@@ -400,9 +418,28 @@ func (s *Server) Resolve(messageID string, state adapter.State, reason string) e
 	return nil
 }
 
+// cancel records a cancel in the namespace of the task's sender: a remote
+// principal's message_id is not a local one.
+func (s *Server) cancelTask(principal, messageID string) (bool, error) {
+	if rc, ok := s.cfg.Receiver.(interface {
+		CancelFrom(senderKey, messageID string) (bool, error)
+	}); ok && receiver.IsRemoteKey(principal) {
+		return rc.CancelFrom(principal, messageID)
+	}
+	return s.cfg.Receiver.Cancel(messageID)
+}
+
 // PendingMessageIDs lists the message_ids of non-terminal tasks, the ones a
 // caller may reconcile with Resolve.
 func (s *Server) PendingMessageIDs() []string { return s.tasks.pending() }
+
+// PendingMessage is a non-terminal task's message_id with the journal scope of
+// its dispatch claim (the sender's host-scoped key for a remote sender,
+// otherwise empty).
+type PendingMessage struct{ Scope, MessageID string }
+
+// PendingMessages is PendingMessageIDs with each task's dispatch scope.
+func (s *Server) PendingMessages() []PendingMessage { return s.tasks.pendingScoped() }
 
 func (s *Server) enforcer() a2asrv.CallInterceptor {
 	ic, err := a2asrv.NewAgentCardEnforcer(s.Card())
@@ -420,6 +457,9 @@ func senderFrom(ctx context.Context) (receiver.Sender, bool) {
 }
 
 func principal(snd receiver.Sender) string {
+	if snd.Host != "" {
+		return receiver.RemoteKey(snd.Host, snd.AgentID)
+	}
 	if snd.AgentID != "" {
 		return snd.AgentID
 	}
@@ -432,52 +472,136 @@ type authInterceptor struct {
 }
 
 func (a *authInterceptor) Before(ctx context.Context, callCtx *a2asrv.CallContext, _ *a2asrv.Request) (context.Context, any, error) {
-	snd, ok := a.s.authenticate(callCtx.ServiceParams())
-	if !ok {
-		return ctx, nil, sdk.ErrUnauthenticated
+	snd, err := a.s.authenticate(callCtx.ServiceParams())
+	if err != nil {
+		return ctx, nil, err
 	}
 	callCtx.User = a2asrv.NewAuthenticatedUser(principal(snd), nil)
 	return context.WithValue(ctx, senderKey{}, snd), nil, nil
 }
 
-func (s *Server) authenticate(p *a2asrv.ServiceParams) (receiver.Sender, bool) {
+func (s *Server) authenticate(p *a2asrv.ServiceParams) (receiver.Sender, error) {
 	auth, _ := p.Get("Authorization")
 	if len(auth) != 1 {
-		return receiver.Sender{}, false
+		return receiver.Sender{}, sdk.ErrUnauthenticated
 	}
 	scheme, tok, ok := strings.Cut(auth[0], " ")
 	tok = strings.TrimSpace(tok)
 	if !ok || !strings.EqualFold(scheme, "Bearer") || tok == "" {
-		return receiver.Sender{}, false
+		return receiver.Sender{}, sdk.ErrUnauthenticated
 	}
 	got := sha256.Sum256([]byte(tok))
 
 	names, _ := p.Get(SenderHeader)
-	switch {
-	case len(names) == 0:
+	if len(names) == 0 {
 		s.mu.Lock()
 		want := s.peerHash
 		s.mu.Unlock()
-		if subtle.ConstantTimeCompare(got[:], want[:]) != 1 {
-			return receiver.Sender{}, false
+		if subtle.ConstantTimeCompare(got[:], want[:]) == 1 {
+			return receiver.Sender{Verified: true, Principal: receiver.PrincipalLocalUser}, nil
 		}
-		return receiver.Sender{Verified: true, Principal: receiver.PrincipalLocalUser}, true
-	case len(names) == 1 && names[0] != "" && s.cfg.ResolvePeer != nil:
+		if s.gatewayCredential(got) {
+			return remoteSender(p)
+		}
+		return receiver.Sender{}, sdk.ErrUnauthenticated
+	}
+	if len(names) == 1 && names[0] != "" && s.cfg.ResolvePeer != nil {
 		peer, ok := s.cfg.ResolvePeer(names[0])
 		if !ok || peer.AgentID == "" {
-			return receiver.Sender{}, false
+			return receiver.Sender{}, sdk.ErrUnauthenticated
 		}
 		own, err := readToken(peer.TokenPath)
 		if err != nil {
-			return receiver.Sender{}, false
+			return receiver.Sender{}, sdk.ErrUnauthenticated
 		}
 		want := sha256.Sum256([]byte(own))
 		if subtle.ConstantTimeCompare(got[:], want[:]) != 1 {
-			return receiver.Sender{}, false
+			return receiver.Sender{}, sdk.ErrUnauthenticated
 		}
-		return receiver.Sender{Verified: true, AgentID: peer.AgentID, Name: names[0], Role: peer.Role, Harness: peer.Harness}, true
+		return receiver.Sender{Verified: true, AgentID: peer.AgentID, Name: names[0], Role: peer.Role, Harness: peer.Harness}, nil
 	}
-	return receiver.Sender{}, false
+	return receiver.Sender{}, sdk.ErrUnauthenticated
+}
+
+// gatewayCredential reports whether the bearer hash is the gateway token. The
+// file is read on every call (mode-checked), so a rotated token takes effect
+// without a restart; a missing or loose file matches nothing.
+func (s *Server) gatewayCredential(got [32]byte) bool {
+	if s.cfg.GatewayTokenPath == "" {
+		return false
+	}
+	tok, err := readToken(s.cfg.GatewayTokenPath)
+	if err != nil {
+		return false
+	}
+	want := sha256.Sum256([]byte(tok))
+	return subtle.ConstantTimeCompare(got[:], want[:]) == 1
+}
+
+var (
+	hostFingerprintRE = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	agentIDRE         = regexp.MustCompile(`^[0-9a-f]{16}$`)
+)
+
+const maxRemoteNameBytes = 256
+
+// ReasonRemoteSender is the rejection reason for gateway headers that are
+// missing, repeated or malformed.
+const ReasonRemoteSender = "invalid_remote_sender"
+
+// remoteSender builds the sender of a request that carried the gateway
+// credential from the gateway-set headers. Each header must appear exactly
+// once; a malformed value is a JSON-RPC rejection, never an HTTP error, so the
+// far side reads it as rejected and not as unknown.
+func remoteSender(p *a2asrv.ServiceParams) (receiver.Sender, error) {
+	bad := func() (receiver.Sender, error) { return receiver.Sender{}, rejection("", ReasonRemoteSender) }
+	one := func(k string) (string, bool) {
+		v, _ := p.Get(k)
+		if len(v) != 1 || v[0] == "" {
+			return "", false
+		}
+		return v[0], true
+	}
+	host, ok := one(GWHostHeader)
+	if !ok || !hostFingerprintRE.MatchString(host) {
+		return bad()
+	}
+	alias, ok := one(GWAliasHeader)
+	if !ok || !validAlias(alias) {
+		return bad()
+	}
+	agentID, ok := one(GWAgentIDHeader)
+	if !ok || !agentIDRE.MatchString(agentID) {
+		return bad()
+	}
+	enc, ok := one(GWNameHeader)
+	if !ok {
+		return bad()
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(enc)
+	if err != nil || len(raw) == 0 || len(raw) > maxRemoteNameBytes || !utf8.Valid(raw) || strings.IndexFunc(string(raw), unicode.IsControl) >= 0 {
+		return bad()
+	}
+	harness, ok := one(GWHarnessHeader)
+	if !ok || (harness != "claude" && harness != "codex") {
+		return bad()
+	}
+	role, ok := one(GWRoleHeader)
+	if !ok || (role != registry.RolePrimary && role != registry.RoleSubagent) {
+		return bad()
+	}
+	return receiver.Sender{
+		Verified: true, Host: host, HostAlias: alias, AgentID: agentID,
+		Name: string(raw) + "@" + alias, Role: role, Harness: harness,
+		Principal: receiver.RemoteKey(host, agentID),
+	}, nil
+}
+
+func validAlias(a string) bool {
+	if a == "" || len(a) > 63 || !utf8.ValidString(a) || strings.ContainsRune(a, '@') {
+		return false
+	}
+	return strings.IndexFunc(a, func(r rune) bool { return unicode.IsSpace(r) || unicode.IsControl(r) }) < 0
 }
 
 func readToken(path string) (string, error) {
