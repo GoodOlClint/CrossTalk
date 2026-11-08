@@ -16,6 +16,8 @@ import (
 	"testing"
 	"time"
 
+	sdk "github.com/a2aproject/a2a-go/v2/a2a"
+
 	"github.com/GoodOlClint/crosstalk/internal/a2a"
 	"github.com/GoodOlClint/crosstalk/internal/adapter"
 	"github.com/GoodOlClint/crosstalk/internal/journal"
@@ -169,6 +171,7 @@ func (e *gwEnv) post(c *http.Client, path string, hdr http.Header, body []byte) 
 		e.t.Fatal(err)
 	}
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(sdk.SvcParamVersion, string(sdk.Version))
 	for k, vs := range hdr {
 		req.Header[k] = append([]string(nil), vs...)
 	}
@@ -253,6 +256,7 @@ func TestTwoHostInform(t *testing.T) {
 	if _, bad := res.errCode(); bad || res.Status != 200 {
 		t.Fatalf("inform: status %d body %s", res.Status, res.Body)
 	}
+	waitFor(t, "host 2 inject", func() bool { return injects(bob.fake, id) >= 1 })
 	if n := injects(bob.fake, id); n != 1 {
 		t.Fatalf("host 2 injected %d times, want 1", n)
 	}
@@ -264,6 +268,7 @@ func TestTwoHostInform(t *testing.T) {
 	if res.Status != 200 {
 		t.Fatalf("replay: status %d body %s", res.Status, res.Body)
 	}
+	time.Sleep(200 * time.Millisecond)
 	if n := injects(bob.fake, id); n != 1 {
 		t.Fatalf("after a replayed message_id host 2 injected %d times, want 1", n)
 	}
@@ -547,5 +552,16 @@ func TestGatewayForwardRequiresPinnedPeer(t *testing.T) {
 	}
 	if res := e.post(cl, "/v1/a2a/"+targetAgent, remoteFields(), body); res.Status != http.StatusForbidden || lb.count() != 1 {
 		t.Fatalf("unpaired peer on its open connection: status %d, loopback %d, want 403 and no new request", res.Status, lb.count())
+	}
+}
+
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }

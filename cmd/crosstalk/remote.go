@@ -79,7 +79,8 @@ func runRemoteServe(args []string, stdout, stderr io.Writer) int {
 	}
 	g := remote.NewGateway(remote.GatewayConfig{
 		StateDir: state, Host: host, Bind: cfg.Bind, Port: cfg.Port, Alias: cfg.Alias, Peers: remote.NewPeers(dir),
-		Log: func(format string, a ...any) { fmt.Fprintf(stdout, format+"\n", a...) },
+		Handler: remote.NewForwarder(state, registeredA2AURL(registry.New(state))),
+		Log:     func(format string, a ...any) { fmt.Fprintf(stdout, format+"\n", a...) },
 	})
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -88,6 +89,21 @@ func runRemoteServe(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+func registeredA2AURL(reg *registry.Registry) func(string) (string, bool) {
+	return func(agentID string) (string, bool) {
+		ds, err := reg.List()
+		if err != nil {
+			return "", false
+		}
+		for _, d := range ds {
+			if d.AgentID == agentID && d.A2AURL != "" {
+				return d.A2AURL, true
+			}
+		}
+		return "", false
+	}
 }
 
 func parseAliasFlag(name string, args []string, stderr io.Writer) (string, bool) {

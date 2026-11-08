@@ -571,30 +571,53 @@ func remoteSender(p *a2asrv.ServiceParams) (receiver.Sender, error) {
 		return bad()
 	}
 	agentID, ok := one(GWAgentIDHeader)
-	if !ok || !agentIDRE.MatchString(agentID) {
+	if !ok {
 		return bad()
 	}
 	enc, ok := one(GWNameHeader)
 	if !ok {
 		return bad()
 	}
-	raw, err := base64.RawURLEncoding.DecodeString(enc)
-	if err != nil || len(raw) == 0 || len(raw) > maxRemoteNameBytes || !utf8.Valid(raw) || strings.IndexFunc(string(raw), unicode.IsControl) >= 0 {
-		return bad()
-	}
 	harness, ok := one(GWHarnessHeader)
-	if !ok || (harness != "claude" && harness != "codex") {
+	if !ok {
 		return bad()
 	}
 	role, ok := one(GWRoleHeader)
-	if !ok || (role != registry.RolePrimary && role != registry.RoleSubagent) {
+	if !ok {
+		return bad()
+	}
+	name, ok := ValidateAttested(agentID, enc, harness, role)
+	if !ok {
 		return bad()
 	}
 	return receiver.Sender{
 		Verified: true, Host: host, HostAlias: alias, AgentID: agentID,
-		Name: string(raw) + "@" + alias, Role: role, Harness: harness,
+		Name: name + "@" + alias, Role: role, Harness: harness,
 		Principal: receiver.RemoteKey(host, agentID),
 	}, nil
+}
+
+// ValidateAttested checks the four fields a sending host attests about its
+// agent: agent_id (16 lowercase hex), name (base64url, 1 to 256 bytes of UTF-8
+// without control characters), harness and role. The gateway applies it to the
+// X-CrossTalk-Remote-* request headers and remoteSender to the X-CrossTalk-GW-*
+// headers the gateway rebuilds, so the two cannot disagree. It returns the
+// decoded name.
+func ValidateAttested(agentID, encName, harness, role string) (string, bool) {
+	if !agentIDRE.MatchString(agentID) {
+		return "", false
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(encName)
+	if err != nil || len(raw) == 0 || len(raw) > maxRemoteNameBytes || !utf8.Valid(raw) || strings.IndexFunc(string(raw), unicode.IsControl) >= 0 {
+		return "", false
+	}
+	if harness != "claude" && harness != "codex" {
+		return "", false
+	}
+	if role != registry.RolePrimary && role != registry.RoleSubagent {
+		return "", false
+	}
+	return string(raw), true
 }
 
 func validAlias(a string) bool {

@@ -43,5 +43,7 @@ CrossTalk is same-machine only: each agent's A2A server binds `127.0.0.1:0` (`in
 
 - Council verdict: remote first, user-started gateway, pinned mTLS, two-sided pairing (chair Claude Opus 5.5; advisor A Codex 630dd741ae2a2049, security; advisor B Codex d7fe688547014abc, sequencing). Operator rulings 2026-11-06: install option, login unit in v0.2.0, port 7745, static IPs.
 - Rests on: ADR 0022 (the trust model the gateway feeds).
-- Commits: none yet; implementing commits carry `Provisional-ADR: 0021`.
+- Commits: slice R5 (gateway forwarding), branch `impl-020-r5`; implementing commits carry `Provisional-ADR: 0021`.
+- Built (R5): `remote.Forwarder`, the handler `remote serve` sets: `POST /v1/a2a/{agent_id}` for `SendMessage` and `GetTask` only, target from this host's registry only, loopback request rebuilt from an allowlist of headers, JSON-RPC refusals for every bad request (design §5 "Gateway forwarding").
+- Pinning tests (R5): `TestTwoHostInform`, `TestGatewayStripsInboundHeaders`, `TestGatewayRefusesOtherMethods`, `TestGatewayResolvesTargetLocally`, `TestGatewayUnknownAgent`, `TestGatewayMalformedRemoteFieldsRefused`, `TestGatewayRefusesClaimMetadata`, `TestGatewayForwardRequiresPinnedPeer`.
 - Pinning tests (planned): `TestUnpinnedClientRefusedBeforeHTTP`, `TestUnpairRefusesOpenConnection`, `TestNoSessionResumption`, `TestPairSingleUse`, `TestPairConcurrentRedeem`, `TestPairBindsClientKey`, `TestEnableRefusesForeignUnit` (change plan section 11).

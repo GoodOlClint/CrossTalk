@@ -146,6 +146,10 @@ var admissionReasons = map[string]bool{
 
 // rejection is the JSON-RPC error for a message that created no task: an
 // admission rejection (§5 C9) or a rejected continuation.
+// Rejection is the JSON-RPC error a definite refusal travels as, so the
+// gateway's refusals read exactly like the loopback server's.
+func Rejection(messageID, reason string) error { return rejection(messageID, reason) }
+
 func rejection(messageID, reason string) error {
 	base := sdk.ErrInvalidParams
 	switch {
