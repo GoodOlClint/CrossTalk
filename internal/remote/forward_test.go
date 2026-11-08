@@ -7,7 +7,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -61,15 +63,29 @@ func newLoopback(t *testing.T) *loopback {
 	t.Helper()
 	l := &loopback{}
 	l.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		b, _ := io.ReadAll(r.Body)
-		l.mu.Lock()
-		l.reqs = append(l.reqs, recorded{Path: r.URL.Path, Query: r.URL.RawQuery, Host: r.Host, Header: r.Header.Clone(), Body: b})
-		l.mu.Unlock()
+		l.record(r)
 		w.Header().Set("Content-Type", "application/json")
 		io.WriteString(w, `{"jsonrpc":"2.0","id":"1","result":{}}`)
 	}))
 	t.Cleanup(l.srv.Close)
 	return l
+}
+
+func (l *loopback) record(r *http.Request) {
+	b, _ := io.ReadAll(r.Body)
+	l.mu.Lock()
+	l.reqs = append(l.reqs, recorded{Path: r.URL.Path, Query: r.URL.RawQuery, Host: r.Host, Header: r.Header.Clone(), Body: b})
+	l.mu.Unlock()
+}
+
+func nonLoopbackIP() string {
+	addrs, _ := net.InterfaceAddrs()
+	for _, a := range addrs {
+		if ipn, ok := a.(*net.IPNet); ok && ipn.IP.To4() != nil && !ipn.IP.IsLoopback() && !ipn.IP.IsLinkLocalUnicast() {
+			return ipn.IP.String()
+		}
+	}
+	return ""
 }
 
 func (l *loopback) count() int {
@@ -476,7 +492,7 @@ func TestGatewayMalformedRemoteFieldsRefused(t *testing.T) {
 		if v == nil {
 			h.Del(k)
 		} else {
-			h[k] = v
+			h[http.CanonicalHeaderKey(k)] = v
 		}
 		return h
 	}
@@ -598,5 +614,43 @@ func TestGatewayOversizedReplyIsDefiniteError(t *testing.T) {
 	}
 	if _, ok := res.errCode(); !ok || res.Status != 200 || !res.hasReason(ReasonResponseTooLarge) || !strings.Contains(string(res.Body), `"state":"unknown"`) {
 		t.Fatalf("status %d body %.300s, want a JSON-RPC error unknown/%s", res.Status, res.Body, ReasonResponseTooLarge)
+	}
+}
+
+func TestGatewayRefusesNonLoopbackRegistryURL(t *testing.T) {
+	lb := newLoopback(t)
+	port := lb.srv.Listener.Addr().(*net.TCPAddr).Port
+	nonLoopbackURL := "http://192.0.2.1:9"
+	if ip := nonLoopbackIP(); ip != "" {
+		ln, err := net.Listen("tcp", net.JoinHostPort(ip, "0"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		other := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { lb.record(r) })}
+		go other.Serve(ln)
+		t.Cleanup(func() { other.Close() })
+		nonLoopbackURL = "http://" + ln.Addr().String()
+	} else {
+		t.Log("no non-loopback interface address; the non-loopback listener case is not exercised")
+	}
+	for name, u := range map[string]string{
+		"hostname not an ip":    fmt.Sprintf("http://localhost:%d", port),
+		"https":                 fmt.Sprintf("https://127.0.0.1:%d", port),
+		"userinfo":              fmt.Sprintf("http://user@127.0.0.1:%d", port),
+		"path":                  fmt.Sprintf("http://127.0.0.1:%d/x", port),
+		"query":                 fmt.Sprintf("http://127.0.0.1:%d/?a=1", port),
+		"non-loopback ip":       "http://192.0.2.1:9",
+		"non-loopback listener": nonLoopbackURL,
+		"empty":                 "",
+	} {
+		e := forwardGateway(t, agentsOf(map[string]string{targetAgent: u}))
+		cl := e.senderClient(e.pin("desk1"))
+		res := e.post(cl, "/v1/a2a/"+targetAgent, remoteFields(), rpcBody("1", "SendMessage", sendParams(msg.NewUUIDv7(), "x", nil)))
+		if !res.hasReason(ReasonNoSuchAgent) {
+			t.Fatalf("%s: status %d body %s, want rejected/%s", name, res.Status, res.Body, ReasonNoSuchAgent)
+		}
+	}
+	if n := lb.count(); n != 0 {
+		t.Fatalf("%d requests reached the loopback listener, want 0", n)
 	}
 }
