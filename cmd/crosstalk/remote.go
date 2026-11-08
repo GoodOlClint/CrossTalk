@@ -14,8 +14,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/GoodOlClint/crosstalk/internal/mcpserver"
 	"github.com/GoodOlClint/crosstalk/internal/registry"
 	"github.com/GoodOlClint/crosstalk/internal/remote"
+	"github.com/GoodOlClint/crosstalk/internal/shim"
 )
 
 const remoteUsage = `usage: crosstalk remote <command>
@@ -77,9 +79,21 @@ func runRemoteServe(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "crosstalk remote serve: %v\n", err)
 		return 1
 	}
+	hs, err := harnesses(state)
+	if err != nil {
+		fmt.Fprintf(stderr, "crosstalk remote serve: %v\n", err)
+		return 1
+	}
+	sh, err := shim.New(shim.Options{StateDir: state, Harnesses: hs})
+	if err != nil {
+		fmt.Fprintf(stderr, "crosstalk remote serve: %v\n", err)
+		return 1
+	}
+	defer sh.Close()
+	fw := remote.NewForwarder(state, registeredA2AURL(registry.New(state)))
 	g := remote.NewGateway(remote.GatewayConfig{
 		StateDir: state, Host: host, Bind: cfg.Bind, Port: cfg.Port, Alias: cfg.Alias, Peers: remote.NewPeers(dir),
-		Handler: remote.NewForwarder(state, registeredA2AURL(registry.New(state))),
+		Handler: remote.NewMux(fw, shim.RemoteSource(mcpserver.New(sh.MCPOptions()))),
 		Log:     func(format string, a ...any) { fmt.Fprintf(stdout, format+"\n", a...) },
 	})
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

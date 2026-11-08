@@ -68,11 +68,28 @@ func (s *Server) listAgentsTool(ctx context.Context, req *mcp.CallToolRequest, _
 			notice, self = n, a.ID()
 		}
 	}
+	var remote chan RemoteListing
+	if rl, ok := s.backend.(RemoteLister); ok {
+		remote = make(chan RemoteListing, 1)
+		go func() { remote <- rl.ListRemote(ctx) }()
+	}
 	rows, warnings := s.listAgents(ctx)
+	agents := make([]any, 0, len(rows))
 	for i := range rows {
 		rows[i].You = self != "" && rows[i].AgentID == self
+		agents = append(agents, rows[i])
 	}
-	out := map[string]any{"agents": rows}
+	out := map[string]any{"agents": agents}
+	if remote != nil {
+		l := <-remote
+		for _, r := range l.Rows {
+			agents = append(agents, r)
+		}
+		out["agents"] = agents
+		if len(l.Hosts) > 0 {
+			out["hosts"] = l.Hosts
+		}
+	}
 	if len(warnings) > 0 {
 		out["warnings"] = warnings
 	}

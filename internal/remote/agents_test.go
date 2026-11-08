@@ -237,7 +237,7 @@ func TestClientRejectsBadListings(t *testing.T) {
 			{"agent_id": "NOT-HEX", "name": "x", "harness": "claude"},
 			{"agent_id": "cccccccccccccccc", "name": "ctl\x07char", "harness": "claude"},
 			{"agent_id": "dddddddddddddddd", "name": "n", "harness": "gemini"},
-			{"agent_id": "eeeeeeeeeeeeeeee", "name": "n", "harness": "codex", "role": "admin"},
+			{"agent_id": "eeeeeeeeeeeeeeee", "name": "n", "harness": "codex", "crosstalk": true, "role": "admin"},
 		}
 		body, _ := json.Marshal(map[string]any{"agents": rows})
 		e := startGateway(t, func(c *GatewayConfig) {
