@@ -1,4 +1,4 @@
-// Spike S6 workload: one Fake-backed Codex-shaped agent served by a shim, plus
+// Test-only workload for scripts/remote-e2e: one Fake-backed Codex-shaped agent served by a shim, plus
 // a loopback control port the scenario script drives with `call` and `writes`.
 package main
 
@@ -41,7 +41,7 @@ func (f *fakeCodex) LoadedThreads(context.Context, ...string) []codex.LoadedThre
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: spike agent NAME | call TOOL JSON | writes")
+		fmt.Fprintln(os.Stderr, "usage: remotee2e agent NAME | call TOOL JSON | writes")
 		os.Exit(2)
 	}
 	var err error
@@ -56,7 +56,7 @@ func main() {
 		err = fmt.Errorf("unknown command %q", os.Args[1])
 	}
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "spike:", err)
+		fmt.Fprintln(os.Stderr, "remotee2e:", err)
 		os.Exit(1)
 	}
 }
@@ -96,7 +96,7 @@ func runAgent(name string) error {
 	if _, err := srv.MCP().Connect(ctx, st, nil); err != nil {
 		return err
 	}
-	cs, err := mcp.NewClient(&mcp.Implementation{Name: "spike", Version: "0"}, nil).Connect(ctx, ct, nil)
+	cs, err := mcp.NewClient(&mcp.Implementation{Name: "remotee2e", Version: "0"}, nil).Connect(ctx, ct, nil)
 	if err != nil {
 		return err
 	}
@@ -138,10 +138,15 @@ func runAgent(name string) error {
 			From      string `json:"from"`
 			Kind      string `json:"kind"`
 			Text      string `json:"text"`
+			InReplyTo string `json:"in_reply_to"`
 		}
 		rows := []row{}
 		for _, c := range fc.Writes() {
-			rows = append(rows, row{c.Message.MessageID, c.Message.From, string(c.Message.Kind), c.Message.Parts[0].Text})
+			r := row{MessageID: c.Message.MessageID, From: c.Message.From, Kind: string(c.Message.Kind), Text: c.Message.Parts[0].Text}
+			if c.Message.InReplyTo != nil {
+				r.InReplyTo = *c.Message.InReplyTo
+			}
+			rows = append(rows, r)
 		}
 		json.NewEncoder(rw).Encode(rows)
 	})

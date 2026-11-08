@@ -21,6 +21,20 @@ go vet ./...
 test -z "$(gofmt -l .)"
 ```
 
+### The remote-e2e job
+
+CI also runs `remote-e2e` on Linux: two Docker containers on one bridge network pair through the real `crosstalk remote config`, `serve`, `pair` and `join`, then send one `send_message` inform and one `ask` with its `reply` between Fake-backed agents. It checks that the receiver injects the ask exactly once, the asker injects the reply exactly once, and the ask and reply finish in under 180 seconds. A second run joins with a wrong token and must fail. The workload is `internal/remotee2e`; the scenario is `scripts/remote-e2e/run.sh`.
+
+It is skipped for changes that touch only docs or the marketplace files (the job still reports success). It is not a required check yet.
+
+To run it on your machine, with Docker running (use `GOARCH=amd64` if your Docker is x86):
+
+```sh
+mkdir -p bin && for p in cmd/crosstalk:crosstalk internal/remotee2e:remotee2e; do CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o bin/${p#*:} ./${p%:*}; done && bash scripts/remote-e2e/run.sh bin
+```
+
+The last line printed is `REMOTE_E2E inform_seconds=N reply_seconds=N`. Logs land in `./e2e-logs`.
+
 ## Where things are
 
 - `cmd/crosstalk`: the command line (`mcp`, `install`, `uninstall`, `reinstall`, `send`, `capture`, `version`).
