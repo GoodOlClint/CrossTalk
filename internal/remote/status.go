@@ -4,10 +4,12 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
 	"strconv"
+	"syscall"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -26,14 +28,22 @@ const (
 // GatewayLockHeld reports whether a gateway holds gateway.lock. It never
 // creates the file and drops any lock it briefly gets.
 func GatewayLockHeld(stateDir string) (bool, error) {
-	f, err := os.Open(filepath.Join(stateDir, "gateway.lock"))
+	path := filepath.Join(stateDir, "gateway.lock")
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	if errors.Is(err, os.ErrNotExist) {
 		return false, nil
 	}
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("remote: %s: %w", path, err)
 	}
 	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil {
+		return false, err
+	}
+	if !fi.Mode().IsRegular() || fi.Mode().Perm() != 0o600 {
+		return false, fmt.Errorf("%w: %s is %v, want a regular file with mode 0600", ErrMode, path, fi.Mode())
+	}
 	if err := unix.Flock(int(f.Fd()), unix.LOCK_SH|unix.LOCK_NB); err != nil {
 		if errors.Is(err, unix.EWOULDBLOCK) {
 			return true, nil
@@ -66,7 +76,8 @@ func GatewayStatus(stateDir string, c Config) (string, error) {
 // certificate and sends no application bytes. It returns ok,
 // tls_pin_mismatch, unpaired_by_peer, timeout or unreachable.
 func ProbePeer(h Host, p Peer) string {
-	ctx, cancel := context.WithTimeout(context.Background(), probeTimeout)
+	deadline := time.Now().Add(probeTimeout)
+	ctx, cancel := context.WithDeadline(context.Background(), deadline)
 	defer cancel()
 	raw, err := (&net.Dialer{}).DialContext(ctx, "tcp", p.Address)
 	if err != nil {
@@ -87,7 +98,7 @@ func ProbePeer(h Host, p Peer) string {
 			return nil
 		},
 	})
-	raw.SetDeadline(time.Now().Add(probeTimeout))
+	raw.SetDeadline(deadline)
 	if err := c.HandshakeContext(ctx); err != nil {
 		if mismatch {
 			return "tls_pin_mismatch"
@@ -96,7 +107,11 @@ func ProbePeer(h Host, p Peer) string {
 	}
 	// TLS 1.3 finishes the client side before the server judges our
 	// certificate, so a refusal arrives as an alert on the next read.
-	raw.SetReadDeadline(time.Now().Add(alertWait))
+	wait := time.Now().Add(alertWait)
+	if wait.After(deadline) {
+		wait = deadline
+	}
+	raw.SetReadDeadline(wait)
 	var b [1]byte
 	if _, err := c.Read(b[:]); err != nil {
 		var ne net.Error

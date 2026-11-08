@@ -475,3 +475,77 @@ func TestRemoteStatusNeverWrites(t *testing.T) {
 		})
 	}
 }
+
+func TestRemoteStatusBadLockPath(t *testing.T) {
+	for _, kind := range []string{"fifo", "symlink", "mode", "dir"} {
+		t.Run(kind, func(t *testing.T) {
+			home, _, state := statusHome(t, true)
+			if err := os.MkdirAll(state, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			lock := filepath.Join(state, "gateway.lock")
+			switch kind {
+			case "fifo":
+				if err := unix.Mkfifo(lock, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			case "symlink":
+				if err := os.Symlink(filepath.Join(home, "elsewhere"), lock); err != nil {
+					t.Fatal(err)
+				}
+			case "mode":
+				if err := os.WriteFile(lock, nil, 0o644); err != nil {
+					t.Fatal(err)
+				}
+			case "dir":
+				if err := os.Mkdir(lock, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			start := time.Now()
+			code, _, errs := remoteRun(t, false, "status")
+			if time.Since(start) > time.Second || code != 1 || !strings.Contains(errs, lock) {
+				t.Errorf("exit=%d after %v stderr=%q", code, time.Since(start), errs)
+			}
+			if _, out := statusChecks(t, home); !strings.Contains(out, "K8 crosstalk FAIL") {
+				t.Errorf("K8: %s", out)
+			}
+		})
+	}
+}
+
+func TestRemoteStatusProbeBudget(t *testing.T) {
+	_, dir, _ := statusHome(t, true)
+	h, err := remote.LoadHost(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer, err := remote.LoadOrCreateHost(filepath.Join(t.TempDir(), "peer"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := statusListener(t)
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				time.Sleep(1850 * time.Millisecond)
+				s := tls.Server(c, &tls.Config{Certificates: []tls.Certificate{peer.Certificate}, MinVersion: tls.VersionTLS13, ClientAuth: tls.RequireAnyClientCert})
+				s.SetDeadline(time.Now().Add(3 * time.Second))
+				if s.Handshake() == nil {
+					var b [1]byte
+					s.Read(b[:])
+				}
+			}()
+		}
+	}()
+	start := time.Now()
+	got := remote.ProbePeer(h, remote.Peer{Alias: "slow", Address: l.Addr().String(), Fingerprint: peer.Fingerprint})
+	if elapsed := time.Since(start); elapsed > 2080*time.Millisecond {
+		t.Errorf("probe returned %q after %v, budget 2 s", got, elapsed)
+	}
+}
