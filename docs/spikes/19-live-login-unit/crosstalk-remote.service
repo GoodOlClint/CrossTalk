@@ -1,0 +1,12 @@
+[Unit]
+Description=CrossTalk remote gateway (spike S7, throwaway)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=__BIN__ remote serve
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
