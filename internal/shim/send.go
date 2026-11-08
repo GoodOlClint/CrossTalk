@@ -582,6 +582,10 @@ const (
 // leaves the obligation where a retry or startup replay resumes it.
 func (st *AgentState) completeReply(ctx context.Context, orig, r msg.Message, key, taskID, stage string) (mcpserver.Result, error) {
 	res := mcpserver.Result{MessageID: r.MessageID}
+	if stage == ObligationRejected || stage == ObligationUnreachable {
+		l, _ := st.agent.Journal().Latest(st.obligation(r, key, stage, false, taskID))
+		return mcpserver.Result{MessageID: r.MessageID, State: adapter.State(stage), Reason: l.Reason}, nil
+	}
 	advance := func(s string) bool {
 		if err := st.agent.Journal().Append(st.obligation(r, key, s, false, taskID)); err != nil {
 			res.State, res.Reason = adapter.Unknown, receiver.ReasonJournal
@@ -618,8 +622,7 @@ func (st *AgentState) completeReply(ctx context.Context, orig, r msg.Message, ke
 		}
 	}
 	if receiver.IsRemoteKey(key) {
-		res.State, res.Reason = adapter.Unreachable, ReasonRemoteReplyPending
-		return res, nil
+		return st.forwardRemoteReply(ctx, orig, r, key, taskID), nil
 	}
 	if !mcpserver.IsAgentID(key) {
 		if advance(journal.StateDelivered) {
@@ -689,7 +692,7 @@ func (st *AgentState) retryObligations() {
 			continue
 		}
 		l, ok := j.Latest(rec)
-		if !ok || l.State == journal.StateDelivered || l.State == journal.StateClosed {
+		if !ok || obligationEnded(l.State) {
 			continue
 		}
 		var r msg.Message

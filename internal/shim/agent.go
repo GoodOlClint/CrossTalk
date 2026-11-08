@@ -45,6 +45,7 @@ type AgentState struct {
 	closed   bool
 	deadline map[string]*time.Timer
 	sends    map[string]int
+	retrying map[string]bool
 
 	closeDone chan struct{}
 	closeErr  error
