@@ -71,6 +71,10 @@ Every session on the machine runs as you. CrossTalk does not isolate sessions fr
 
 These controls are advice to the model plus checks in the shim. A session running in an auto-approve mode could still act on a peer's text. Do not put secrets in messages.
 
+## Remote (draft, v0.2.0, not linked from the site index)
+
+On a paired host, `list_agents` also shows that host's sessions as `name@host`, fetched live from its gateway on every call and bounded at 1.5 seconds. A native session there is listed but marked `messageable: false`, because only a session with CrossTalk can be messaged from another host. Remote rows carry no working directory, path or process id.
+
 ## Where to read more
 
 - [Design](design.md) is the full specification: schemas, state machine, test list.
