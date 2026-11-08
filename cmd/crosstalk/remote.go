@@ -30,6 +30,8 @@ commands:
              print a one-time token for another host and wait for it to join
   join [--alias NAME]
              read a token from stdin and pair with the host that printed it
+  unpair ALIAS
+             remove one paired host from this host's peers
   status [--json]
              show config, gateway state, login unit and each peer's reachability
   enable [--bind ADDR] [--port N] [--alias NAME] [--yes]
@@ -49,6 +51,8 @@ func runRemote(args []string, in io.Reader, tty bool, stdout, stderr io.Writer) 
 			return runRemotePair(args[1:], stdout, stderr)
 		case "join":
 			return runRemoteJoin(args[1:], in, stdout, stderr)
+		case "unpair":
+			return runRemoteUnpair(args[1:], stdout, stderr)
 		case "status":
 			return runRemoteStatus(args[1:], stdout, stderr)
 		case "enable":
@@ -60,6 +64,33 @@ func runRemote(args []string, in io.Reader, tty bool, stdout, stderr io.Writer) 
 	}
 	fmt.Fprint(stderr, remoteUsage)
 	return 2
+}
+
+func runRemoteUnpair(args []string, stdout, stderr io.Writer) int {
+	if len(args) != 1 || strings.HasPrefix(args[0], "-") {
+		fmt.Fprintf(stderr, "crosstalk remote unpair: takes exactly one ALIAS\n%s", remoteUsage)
+		return 2
+	}
+	alias := args[0]
+	dir, err := remote.ConfigDir()
+	if err != nil {
+		fmt.Fprintf(stderr, "crosstalk remote unpair: %v\n", err)
+		return 1
+	}
+	if err := remote.NewPeers(dir).Remove(alias); err != nil {
+		if errors.Is(err, remote.ErrUnknownAlias) {
+			fmt.Fprintf(stderr, "crosstalk remote unpair: no paired host %q\n", alias)
+		} else {
+			fmt.Fprintf(stderr, "crosstalk remote unpair: %v\n", err)
+		}
+		return 1
+	}
+	self := "<this alias>"
+	if cfg, err := remote.LoadConfig(dir); err == nil && cfg.Alias != "" {
+		self = cfg.Alias
+	}
+	fmt.Fprintf(stdout, "unpaired %s; run crosstalk remote unpair %s on %s too\n", alias, self, alias)
+	return 0
 }
 
 func runRemoteServe(args []string, stdout, stderr io.Writer) int {
