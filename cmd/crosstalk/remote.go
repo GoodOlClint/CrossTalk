@@ -28,6 +28,8 @@ commands:
              print a one-time token for another host and wait for it to join
   join [--alias NAME]
              read a token from stdin and pair with the host that printed it
+  status [--json]
+             show config, gateway state, login unit and each peer's reachability
 `
 
 func runRemote(args []string, in io.Reader, tty bool, stdout, stderr io.Writer) int {
@@ -41,6 +43,8 @@ func runRemote(args []string, in io.Reader, tty bool, stdout, stderr io.Writer) 
 			return runRemotePair(args[1:], stdout, stderr)
 		case "join":
 			return runRemoteJoin(args[1:], in, stdout, stderr)
+		case "status":
+			return runRemoteStatus(args[1:], stdout, stderr)
 		}
 		fmt.Fprintf(stderr, "crosstalk remote: unknown command %q\n", args[0])
 	}
