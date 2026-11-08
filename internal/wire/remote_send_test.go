@@ -36,6 +36,8 @@ type rhost struct {
 	host  remote.Host
 	peers *remote.Peers
 	nodes []*node
+	mod   func(*shim.Options)
+	port  int
 	gw    *remote.Gateway
 	stop  context.CancelFunc
 
@@ -63,7 +65,7 @@ var rhostPPID = 100
 func (h *rhost) agent(name string, extra ...string) *node {
 	h.t.Helper()
 	rhostPPID++
-	n := newNodeIn(h.t, h.state, h.cfg, rhostPPID, name, "T-"+name+fmt.Sprint(rhostPPID), extra...)
+	n := newNodeOpt(h.t, h.mod, h.state, h.cfg, rhostPPID, name, "T-"+name+fmt.Sprint(rhostPPID), extra...)
 	n.ok("receive_message", map[string]any{})
 	h.nodes = append(h.nodes, n)
 	return n
@@ -87,7 +89,7 @@ func (h *rhost) serve() {
 	fw := remote.NewForwarder(h.state, h.registeredURL)
 	mux := remote.NewMux(fw, shim.RemoteSource(h.nodes[0].srv))
 	h.gw = remote.NewGateway(remote.GatewayConfig{
-		StateDir: h.state, Host: h.host, Bind: "127.0.0.1", Port: 0, Peers: h.peers, Limits: testLimits(),
+		StateDir: h.state, Host: h.host, Bind: "127.0.0.1", Port: h.port, Peers: h.peers, Limits: testLimits(),
 		Log: func(string, ...any) {},
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			h.mu.Lock()
@@ -112,6 +114,22 @@ func (h *rhost) serve() {
 		h.t.Fatal("gateway not ready")
 	}
 	h.t.Cleanup(func() { cancel(); <-done })
+}
+
+// restartGateway stops h's gateway and starts another on the same port.
+func (h *rhost) restartGateway() {
+	h.t.Helper()
+	h.port = h.gw.Addr().(*net.TCPAddr).Port
+	addr := h.addr()
+	h.stop()
+	waitFor(h.t, "gateway stopped", func() bool {
+		c, err := net.DialTimeout("tcp", addr, 200*time.Millisecond)
+		if err == nil {
+			c.Close()
+		}
+		return err != nil
+	})
+	h.serve()
 }
 
 func (h *rhost) addr() string { return h.gw.Addr().String() }

@@ -34,6 +34,19 @@ const (
 	DefaultDiscoveryTimeout  = 3 * time.Second
 )
 
+// ReplyRetry is the schedule for a reply that a paired host did not take: the
+// first retry after First, doubling to Cap, until the obligation ends. With
+// no ask deadline the limit is NoDeadline. After, when set, replaces time.After.
+type ReplyRetry struct {
+	First, Cap, NoDeadline time.Duration
+	After                  func(time.Duration) <-chan time.Time
+}
+
+const (
+	ObligationRejected    = "rejected"
+	ObligationUnreachable = "unreachable"
+)
+
 // Transport carries a message to an agent served by a shim (A2A in
 // production). returnImmediately is always true for send_message and ask
 // (§8).
@@ -83,6 +96,9 @@ type Options struct {
 	// obligation pending and OnReply runs again on the retry or replay.
 	OnReply          func(ctx context.Context, st *AgentState, original, reply msg.Message) error
 	DiscoveryTimeout time.Duration
+	// ReplyRetry tunes the retry of a reply to an agent on a paired host; the
+	// zero value means the defaults.
+	ReplyRetry ReplyRetry
 	// RemoteConfigDir holds the host identity and peers.json; "" means
 	// remote.ConfigDir().
 	RemoteConfigDir string
