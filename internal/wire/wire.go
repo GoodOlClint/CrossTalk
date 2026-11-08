@@ -35,6 +35,11 @@ const (
 	// DefaultSettle bounds how long a returnImmediately send polls GetTask
 	// for a delivery state past submitted (§8).
 	DefaultSettle = 2 * time.Second
+
+	// RemoteSettle bounds the same poll for a target on a paired host.
+	// ponytail: 5 s from a loopback two-gateway measurement only; spike S5
+	// (Wi-Fi and tailnet latency) has not run, so the bound is unmeasured there.
+	RemoteSettle = 5 * time.Second
 )
 
 var errNoServer = errors.New("wire: no A2A server for agent")
@@ -51,11 +56,12 @@ type Wire struct {
 }
 
 var (
-	_ shim.Transport      = (*Wire)(nil)
-	_ shim.TaskTransport  = (*Wire)(nil)
-	_ shim.ClaimTransport = (*Wire)(nil)
-	_ shim.AskTransport   = (*Wire)(nil)
-	_ shim.AskOrigin      = (*Wire)(nil)
+	_ shim.Transport       = (*Wire)(nil)
+	_ shim.TaskTransport   = (*Wire)(nil)
+	_ shim.RemoteTransport = (*Wire)(nil)
+	_ shim.ClaimTransport  = (*Wire)(nil)
+	_ shim.AskTransport    = (*Wire)(nil)
+	_ shim.AskOrigin       = (*Wire)(nil)
 )
 
 // New builds the shim with opt's Transport, StartA2A and OnReply set to this
@@ -325,7 +331,14 @@ func (w *Wire) SendTask(ctx context.Context, from, to registry.Descriptor, m msg
 	if !settling(state) || id == "" {
 		return id, state, nil
 	}
-	deadline := time.Now().Add(w.settle)
+	return pollSettled(ctx, c, to.A2AURL, tok, id, w.settle)
+}
+
+// pollSettled polls GetTask at url until the task leaves submitted and
+// dispatching or bound passes; a task still settling then is unknown with
+// reason pending.
+func pollSettled(ctx context.Context, c *a2a.Client, url, tok, id string, bound time.Duration) (string, adapter.State, error) {
+	deadline := time.Now().Add(bound)
 	wait := 10 * time.Millisecond
 	for time.Now().Before(deadline) {
 		select {
@@ -334,7 +347,7 @@ func (w *Wire) SendTask(ctx context.Context, from, to registry.Descriptor, m msg
 		case <-time.After(min(wait, time.Until(deadline))):
 		}
 		pctx, cancel := context.WithDeadline(ctx, deadline)
-		t, err := c.GetTask(pctx, to.A2AURL, tok, id)
+		t, err := c.GetTask(pctx, url, tok, id)
 		cancel()
 		if err == nil && !settling(t.State) {
 			if t.Reason != "" && t.State != adapter.Accepted && t.State != adapter.Queued {

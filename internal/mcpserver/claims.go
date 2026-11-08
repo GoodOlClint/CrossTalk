@@ -37,12 +37,22 @@ func (s *Server) addClaimTools() {
 }
 
 func (s *Server) claimTarget(ctx context.Context, a *Agent, name string) (registry.Descriptor, error) {
-	r, err := ResolveTarget(ctx, s.reg, s.backend.Discover, name)
+	r, err := ResolveTarget(ctx, s.reg, s.backend.Discover, aliasChecker(s.backend), name)
 	if err != nil {
 		return registry.Descriptor{}, err
 	}
+	if r.Remote != nil && !r.Registered {
+		return registry.Descriptor{}, &Error{Code: CodeRejected, Reason: "remote_kind", Hint: HintRemoteKind}
+	}
 	if !r.Registered {
 		return registry.Descriptor{}, rejected("no_such_agent")
+	}
+	if r.Remote != nil {
+		if rc, ok := s.backend.(RemoteChecker); ok {
+			if rid, hit, err := rc.CheckRemote(ctx, *r.Remote); err != nil || hit {
+				return registry.Descriptor{}, &Error{Code: CodeRejected, Reason: "ambiguous_name", Hint: fmt.Sprintf("%s could name a session on %s as well as this host's %s (%s). Name the local one by its agent_id; nothing was claimed or released.", name, r.Remote.Alias, r.Desc.AgentID, rid)}
+			}
+		}
 	}
 	t := r.Desc
 	if t.AgentID == a.id {

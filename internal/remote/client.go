@@ -11,7 +11,6 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"strings"
 	"syscall"
 	"time"
 )
@@ -64,25 +63,78 @@ func NewClient(host Host, peer Peer) *Client {
 }
 
 func (c *Client) httpClient() (*http.Client, *http.Transport) {
-	want := c.peer.Fingerprint
 	tr := &http.Transport{
 		Proxy:               nil,
 		DisableKeepAlives:   true,
 		TLSHandshakeTimeout: c.Timeout,
-		TLSClientConfig: &tls.Config{
-			Certificates:       []tls.Certificate{c.host.Certificate},
-			MinVersion:         tls.VersionTLS13,
-			MaxVersion:         tls.VersionTLS13,
-			InsecureSkipVerify: true,
-			VerifyConnection: func(cs tls.ConnectionState) error {
-				if len(cs.PeerCertificates) == 0 || Fingerprint(cs.PeerCertificates[0]) != want {
-					return errPinMismatch
-				}
-				return nil
-			},
-		},
+		TLSClientConfig:     pinnedTLSConfig(c.host, c.peer, nil),
 	}
 	return &http.Client{Transport: tr, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, tr
+}
+
+// HTTPClient returns a client that dials only this peer's pinned
+// fingerprint, with this host's certificate, TLS 1.3 only, one full handshake
+// per request and no redirects. It sets no Timeout: callers bound it with a
+// context.
+func (c *Client) HTTPClient() *http.Client {
+	hc, tr := c.httpClient()
+	hc.Transport = capBody{tr}
+	return hc
+}
+
+// capBody limits every response body to MaxResponse bytes, so a peer cannot
+// exhaust memory through a decoder that reads to the end.
+type capBody struct{ http.RoundTripper }
+
+func (c capBody) RoundTrip(r *http.Request) (*http.Response, error) {
+	resp, err := c.RoundTripper.RoundTrip(r)
+	if err == nil {
+		resp.Body = &cappedReader{rc: resp.Body, left: MaxResponse}
+	}
+	return resp, err
+}
+
+type cappedReader struct {
+	rc   io.ReadCloser
+	left int64
+}
+
+func (c *cappedReader) Read(p []byte) (int, error) {
+	if c.left < 0 {
+		return 0, errTooLarge
+	}
+	if int64(len(p)) > c.left+1 {
+		p = p[:c.left+1]
+	}
+	n, err := c.rc.Read(p)
+	c.left -= int64(n)
+	if c.left < 0 {
+		return n, errTooLarge
+	}
+	return n, err
+}
+
+func (c *cappedReader) Close() error { return c.rc.Close() }
+
+// pinnedTLSConfig is the one outbound TLS configuration: h's certificate,
+// TLS 1.3 only, and acceptance of exactly p's fingerprint. onMismatch, when
+// set, runs before a pin failure is returned.
+func pinnedTLSConfig(h Host, p Peer, onMismatch func()) *tls.Config {
+	return &tls.Config{
+		Certificates:       []tls.Certificate{h.Certificate},
+		MinVersion:         tls.VersionTLS13,
+		MaxVersion:         tls.VersionTLS13,
+		InsecureSkipVerify: true,
+		VerifyConnection: func(cs tls.ConnectionState) error {
+			if len(cs.PeerCertificates) == 0 || Fingerprint(cs.PeerCertificates[0]) != p.Fingerprint {
+				if onMismatch != nil {
+					onMismatch()
+				}
+				return errPinMismatch
+			}
+			return nil
+		},
+	}
 }
 
 // Do sends one request to the peer's gateway and returns the status and a
@@ -159,7 +211,6 @@ func (c *Client) Agents(ctx context.Context) ([]AgentRow, error) {
 
 // Classify maps a transport error to a Reason* code.
 func Classify(err error) string {
-	var op *net.OpError
 	var ne net.Error
 	switch {
 	case errors.Is(err, errPinMismatch):
@@ -168,7 +219,7 @@ func Classify(err error) string {
 		return ReasonGatewayNotRunning
 	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, os.ErrDeadlineExceeded), errors.As(err, &ne) && ne.Timeout():
 		return ReasonTimeout
-	case errors.As(err, &op) && op.Op == "remote error" && strings.Contains(op.Err.Error(), "bad certificate"):
+	case isAlert(err):
 		return ReasonUnpairedByPeer
 	}
 	return ReasonUnreachable

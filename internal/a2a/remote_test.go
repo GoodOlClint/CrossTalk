@@ -530,3 +530,30 @@ func TestRemoteContinuationCannotTakeLocalMessageID(t *testing.T) {
 		t.Fatal("the local message lost its reply route")
 	}
 }
+
+func TestValidateAttestedRejectsFormatChars(t *testing.T) {
+	enc := func(s string) string { return base64.RawURLEncoding.EncodeToString([]byte(s)) }
+	for name, tc := range map[string]struct {
+		in string
+		ok bool
+	}{
+		"plain":                 {"Remote Alice", true},
+		"unicode letters":       {"Zoë 日本語", true},
+		"emoji":                 {"worker 🙂", true},
+		"left-to-right mark":    {"alice‎", false},
+		"right-to-left embed":   {"alice‫bob", false},
+		"right-to-left ovrride": {"alice‮bob", false},
+		"left-to-right isolate": {"alice⁦bob", false},
+		"pop isolate":           {"alice⁩", false},
+		"zero width joiner":     {"al‍ice", false},
+		"zero width space":      {"al​ice", false},
+		"word joiner":           {"al⁠ice", false},
+		"byte order mark":       {"\ufeffalice", false},
+		"soft hyphen":           {"al­ice", false},
+		"control":               {"al\x07ice", false},
+	} {
+		if _, ok := ValidateAttested(remoteID, enc(tc.in), "codex", registry.RolePrimary); ok != tc.ok {
+			t.Errorf("%s: ValidateAttested ok = %v, want %v", name, ok, tc.ok)
+		}
+	}
+}

@@ -75,6 +75,8 @@ These controls are advice to the model plus checks in the shim. A session runnin
 
 On a paired host, `list_agents` also shows that host's sessions as `name@host`, fetched live from its gateway on every call and bounded at 1.5 seconds. A native session there is listed but marked `messageable: false`, because only a session with CrossTalk can be messaged from another host. Remote rows carry no working directory, path or process id.
 
+Address a session on a paired host as `name@host` (or `agent_id@host`); `send_message` and `ask` work there, `command`, `claim` and `release` do not. A bare name never leaves this host: if only a paired host has a session called `bob`, the error says to use `bob@host`. A local name that itself contains `@` still resolves locally first. The send waits up to 5 seconds, not 2, for the far side to report delivery, and a gateway's acceptance alone is never reported as delivered. An ask's deadline runs on your own clock.
+
 ## Where to read more
 
 - [Design](design.md) is the full specification: schemas, state machine, test list.

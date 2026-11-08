@@ -608,7 +608,7 @@ func ValidateAttested(agentID, encName, harness, role string) (string, bool) {
 		return "", false
 	}
 	raw, err := base64.RawURLEncoding.DecodeString(encName)
-	if err != nil || len(raw) == 0 || len(raw) > maxRemoteNameBytes || !utf8.Valid(raw) || strings.IndexFunc(string(raw), unicode.IsControl) >= 0 {
+	if err != nil || len(raw) == 0 || len(raw) > maxRemoteNameBytes || !utf8.Valid(raw) || strings.IndexFunc(string(raw), func(r rune) bool { return unicode.IsControl(r) || unicode.Is(unicode.Cf, r) }) >= 0 {
 		return "", false
 	}
 	if harness != "claude" && harness != "codex" {

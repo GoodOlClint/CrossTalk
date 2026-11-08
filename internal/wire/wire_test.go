@@ -64,16 +64,28 @@ type node struct {
 // own fake harness, sharing stateDir with its peers.
 func newNode(t *testing.T, stateDir string, ppid int, name string) *node {
 	t.Helper()
-	th := "T-" + name
+	n := newNodeIn(t, stateDir, "", ppid, name, "T-"+name)
+	n.ok("receive_message", map[string]any{})
+	return n
+}
+
+// newNodeIn builds a shim for the Codex thread th (named name) without
+// registering it; extra names further loaded threads that no shim serves.
+func newNodeIn(t *testing.T, stateDir, cfgDir string, ppid int, name, th string, extra ...string) *node {
+	t.Helper()
 	fc := &fakeCodex{Fake: adapter.NewFake(adapter.Codex)}
 	fc.threads = []codex.LoadedThread{{Endpoint: "fake://" + th, ID: th, Name: name, Cwd: "/work/" + name, Status: "idle",
 		Session: adapter.SessionStatus{Loaded: true, Reachable: true}}}
+	for _, x := range extra {
+		fc.threads = append(fc.threads, codex.LoadedThread{Endpoint: "fake://T-" + x, ID: "T-" + x, Name: x, Cwd: "/work/" + x, Status: "idle",
+			Session: adapter.SessionStatus{Loaded: true, Reachable: true}})
+	}
 	ch, err := claude.NewHarness(claude.HarnessOptions{SessionsDir: shortDir(t), Ingress: udsingress.NewIngress})
 	if err != nil {
 		t.Fatal(err)
 	}
 	hs := []harness.Harness{codex.NewHarness(codex.HarnessOptions{Adapter: fc, Directory: registry.New(stateDir)}), ch}
-	w, err := New(shim.Options{StateDir: stateDir, PPID: ppid, Harnesses: hs})
+	w, err := New(shim.Options{StateDir: stateDir, PPID: ppid, Harnesses: hs, RemoteConfigDir: cfgDir})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +109,6 @@ func newNode(t *testing.T, stateDir string, ppid int, name string) *node {
 			t.Error(err)
 		}
 	})
-	n.ok("receive_message", map[string]any{})
 	return n
 }
 
