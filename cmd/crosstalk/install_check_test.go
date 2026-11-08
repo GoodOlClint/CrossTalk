@@ -3,16 +3,42 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
-// installBuild builds pkg (relative to this package) into a temp dir.
+var builtMain struct {
+	once sync.Once
+	dir  string
+	path string
+	err  error
+}
+
+// installBuild builds pkg (relative to this package); the main package is
+// built once per test binary.
 func installBuild(t *testing.T, pkg string) string {
 	t.Helper()
+	if pkg == "." {
+		builtMain.once.Do(func() {
+			builtMain.dir, builtMain.err = os.MkdirTemp("", "crosstalk-test-bin")
+			if builtMain.err != nil {
+				return
+			}
+			builtMain.path = filepath.Join(builtMain.dir, "crosstalk")
+			if b, err := exec.Command("go", "build", "-o", builtMain.path, ".").CombinedOutput(); err != nil {
+				builtMain.err = fmt.Errorf("go build .: %v\n%s", err, b)
+			}
+		})
+		if builtMain.err != nil {
+			t.Fatal(builtMain.err)
+		}
+		return builtMain.path
+	}
 	out := filepath.Join(t.TempDir(), "crosstalk")
 	b, err := exec.Command("go", "build", "-o", out, pkg).CombinedOutput()
 	if err != nil {

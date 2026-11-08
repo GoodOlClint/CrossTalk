@@ -55,10 +55,21 @@ func GatewayLockHeld(stateDir string) (bool, error) {
 	return false, nil
 }
 
-// GatewayStatus names the gateway state of a configured host from the lock
-// and a TCP connect to bind:port; it speaks no protocol to the gateway.
+// GatewayHolderPID is the pid the gateway holding gateway.lock recorded in
+// it, or "unknown".
+func GatewayHolderPID(stateDir string) string {
+	b, err := os.ReadFile(filepath.Join(stateDir, "gateway.lock"))
+	if pid := strings.TrimSpace(string(b)); err == nil && pid != "" {
+		return pid
+	}
+	return "unknown"
+}
+
+// GatewayStatus names the gateway state of a configured host. The lock says
+// a gateway process runs; the port is bound only if the listener on
+// bind:port presents the certificate with this host's fingerprint, so a
+// foreign listener on the address never reads as running.
 func GatewayStatus(stateDir string, c Config, fingerprint string) (string, error) {
-	_ = fingerprint
 	held, err := GatewayLockHeld(stateDir)
 	if err != nil {
 		return "", err
@@ -66,12 +77,37 @@ func GatewayStatus(stateDir string, c Config, fingerprint string) (string, error
 	if !held {
 		return StateNotRunning, nil
 	}
-	conn, err := net.DialTimeout("tcp", net.JoinHostPort(c.Bind, strconv.Itoa(c.Port)), probeTimeout)
-	if err != nil {
+	if !listenerIsOurs(net.JoinHostPort(c.Bind, strconv.Itoa(c.Port)), fingerprint) {
 		return StateNoPort, nil
 	}
-	conn.Close()
 	return StateRunning, nil
+}
+
+// listenerIsOurs starts a TLS 1.3 handshake with no client certificate and
+// reports whether the server presented the certificate with fingerprint. The
+// gateway refuses the unpinned client afterwards; that does not matter here.
+func listenerIsOurs(addr, fingerprint string) bool {
+	deadline := time.Now().Add(probeTimeout)
+	ctx, cancel := context.WithDeadline(context.Background(), deadline)
+	defer cancel()
+	raw, err := (&net.Dialer{}).DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return false
+	}
+	defer raw.Close()
+	raw.SetDeadline(deadline)
+	ours := false
+	c := tls.Client(raw, &tls.Config{
+		MinVersion:         tls.VersionTLS13,
+		MaxVersion:         tls.VersionTLS13,
+		InsecureSkipVerify: true,
+		VerifyConnection: func(cs tls.ConnectionState) error {
+			ours = len(cs.PeerCertificates) > 0 && Fingerprint(cs.PeerCertificates[0]) == fingerprint
+			return nil
+		},
+	})
+	c.HandshakeContext(ctx)
+	return ours
 }
 
 // ProbePeer completes a pinned TLS 1.3 handshake with p using this host's

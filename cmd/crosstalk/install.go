@@ -22,11 +22,12 @@ import (
 	"github.com/GoodOlClint/crosstalk/internal/harness"
 	"github.com/GoodOlClint/crosstalk/internal/mcpserver"
 	"github.com/GoodOlClint/crosstalk/internal/registry"
+	"github.com/GoodOlClint/crosstalk/internal/remote"
 )
 
-const installUsage = `usage: crosstalk install   [claude|codex] [--yes] [--path] [--bin-dir DIR] [--skip-rule-port] [--check]
+const installUsage = `usage: crosstalk install   [claude|codex] [--yes] [--path] [--bin-dir DIR] [--skip-rule-port] [--check] [--remote --bind ADDR [--port N] [--alias NAME]]
        crosstalk uninstall [claude|codex] [--yes] [--purge] [--bin-dir DIR]
-       crosstalk reinstall [claude|codex] [--yes] [--path] [--bin-dir DIR] [--skip-rule-port]
+       crosstalk reinstall [claude|codex] [--yes] [--path] [--bin-dir DIR] [--skip-rule-port] [--remote --bind ADDR [--port N] [--alias NAME]]
 `
 
 type installOpts struct {
@@ -34,6 +35,10 @@ type installOpts struct {
 	names                           []string
 	yes, path, purge, check, noPort bool
 	binDir                          string
+	remote                          bool
+	bind, alias                     string
+	port                            int
+	set                             map[string]bool
 }
 
 func parseInstallArgs(mode string, args []string) (installOpts, error) {
@@ -47,6 +52,10 @@ func parseInstallArgs(mode string, args []string) (installOpts, error) {
 	} else {
 		fs.BoolVar(&o.path, "path", false, "")
 		fs.BoolVar(&o.noPort, "skip-rule-port", false, "")
+		fs.BoolVar(&o.remote, "remote", false, "")
+		fs.StringVar(&o.bind, "bind", "", "")
+		fs.IntVar(&o.port, "port", 0, "")
+		fs.StringVar(&o.alias, "alias", "", "")
 	}
 	if mode == "install" {
 		fs.BoolVar(&o.check, "check", false, "")
@@ -65,7 +74,25 @@ func parseInstallArgs(mode string, args []string) (installOpts, error) {
 		o.names = append(o.names, n)
 		args = fs.Args()[1:]
 	}
+	o.set = map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { o.set[f.Name] = true })
+	for _, n := range []string{"bind", "port", "alias"} {
+		if o.set[n] && !o.remote {
+			return o, fmt.Errorf("--%s needs --remote", n)
+		}
+	}
+	if o.remote && o.yes && !o.set["bind"] {
+		return o, errors.New("--remote with --yes needs --bind ADDR; nothing remote is set up without it")
+	}
 	return o, nil
+}
+
+func (o installOpts) cfgFlags() cfgFlags {
+	f := cfgFlags{bind: o.bind, port: o.port, alias: o.alias, set: map[string]bool{}}
+	for _, n := range []string{"bind", "port", "alias"} {
+		f.set[n] = o.set[n]
+	}
+	return f
 }
 
 func installRun(ctx context.Context, name string, args ...string) ([]byte, error) {
@@ -162,6 +189,26 @@ func runInstall(mode string, args []string, in io.Reader, tty bool, stdout, stde
 		Marketplace:  cmp.Or(os.Getenv("CROSSTALK_MARKETPLACE"), "GoodOlClint/CrossTalk"),
 	}
 	ctx := context.Background()
+	cfgDir := filepath.Join(home, ".config", "crosstalk")
+	var remoteSteps []harness.Step
+	if mode != "uninstall" && o.remote && o.set["bind"] && !o.check {
+		if remoteSteps, err = remoteEnableSteps(home, cfgDir, env.Bin, o.cfgFlags(), stdout); err != nil {
+			fmt.Fprintf(stderr, "crosstalk %s: %v\n", mode, err)
+			if errors.As(err, new(errUsage)) {
+				return 2
+			}
+			return 1
+		}
+	}
+	if mode == "uninstall" && o.purge {
+		if held, err := remote.GatewayLockHeld(stateDir); err != nil {
+			fmt.Fprintf(stderr, "crosstalk %s: %v\n", mode, err)
+			return 1
+		} else if _, _, present, owned, _ := unitOwnership(home, cfgDir); held && !(present && owned) {
+			fmt.Fprintf(stderr, "crosstalk %s: %s\n", mode, gatewayRunningMsg(stateDir))
+			return 1
+		}
+	}
 	if o.check {
 		if installChecks(ctx, stdout, targets, env, len(o.names) == 0) {
 			return 1
@@ -188,6 +235,7 @@ func runInstall(mode string, args []string, in io.Reader, tty bool, stdout, stde
 	if mode == "uninstall" {
 		groups = append(groups, group{"crosstalk", installRemoveSteps(o, all, targets, env, stateDir, stdout)})
 	}
+
 	if !tty && !o.yes {
 		for _, g := range groups {
 			fmt.Fprintf(stdout, "== %s\n", g.title)
@@ -230,6 +278,9 @@ func runInstall(mode string, args []string, in io.Reader, tty bool, stdout, stde
 				return 1
 			}
 		}
+	}
+	if !installRemoteGroup(ctx, o, home, cfgDir, env.Bin, remoteSteps, tty, answers, stdout, stderr) {
+		return 1
 	}
 	failed := installChecks(ctx, stdout, targets, env, false)
 	fmt.Fprintln(stdout, "Running Claude and Codex sessions keep their old CrossTalk server. Restart them (in Claude, /mcp and reconnect also works).")
@@ -297,7 +348,12 @@ func installKeep(all, targets []installTarget, env harness.InstallEnv, setUp boo
 // installRemoveSteps delete the binary and, with --purge, the state dir,
 // each only when no other harness still runs the binary.
 func installRemoveSteps(o installOpts, all, targets []installTarget, env harness.InstallEnv, stateDir string, w io.Writer) []harness.Step {
-	steps := []harness.Step{{
+	cfgDir := filepath.Join(env.Home, ".config", "crosstalk")
+	var steps []harness.Step
+	if u, ok := unitUninstallStep(env.Home, cfgDir, func() string { return installKeep(all, targets, env, false) }, w); ok {
+		steps = append(steps, u)
+	}
+	steps = append(steps, harness.Step{
 		Title:  "binary",
 		Change: "delete " + env.Bin + " and the PATH lines install marked, unless another harness still runs it",
 		Apply: func(ctx context.Context) error {
@@ -317,13 +373,13 @@ func installRemoveSteps(o installOpts, all, targets []installTarget, env harness
 			}
 			return nil
 		},
-	}}
+	})
 	if !o.purge {
 		return steps
 	}
 	return append(steps, harness.Step{
 		Title:  "state",
-		Change: "delete " + stateDir + " (journals, tokens, descriptors) unless another harness is still installed or a shim is running",
+		Change: "delete " + stateDir + " (journals, tokens, descriptors) and " + cfgDir + " (remote config, host key, peers) unless another harness is still installed, a shim is running or a gateway is running",
 		Apply: func(ctx context.Context) error {
 			if why := installKeep(all, targets, env, true); why != "" {
 				fmt.Fprintf(w, "    kept %s: %s\n", stateDir, why)
@@ -336,7 +392,27 @@ func installRemoveSteps(o installOpts, all, targets []installTarget, env harness
 			if len(held) > 0 {
 				return fmt.Errorf("running shims hold agents %s in %s; end those Claude and Codex sessions, then run uninstall --purge again", strings.Join(held, ", "), stateDir)
 			}
-			return os.RemoveAll(stateDir)
+			if running, err := remote.GatewayLockHeld(stateDir); err != nil {
+				return err
+			} else if running {
+				return errors.New(gatewayRunningMsg(stateDir))
+			}
+			var peers []string
+			if ps, err := remote.NewPeers(cfgDir).List(); err == nil {
+				for _, p := range ps {
+					peers = append(peers, p.Alias)
+				}
+			}
+			if err := os.RemoveAll(stateDir); err != nil {
+				return err
+			}
+			if err := os.RemoveAll(cfgDir); err != nil {
+				return err
+			}
+			if len(peers) > 0 {
+				fmt.Fprintf(w, "    unpair this host on: %s\n", strings.Join(peers, ", "))
+			}
+			return nil
 		},
 	})
 }

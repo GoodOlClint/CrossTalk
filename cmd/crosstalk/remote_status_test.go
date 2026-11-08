@@ -80,13 +80,21 @@ func statusServing(t *testing.T, dir, state string) {
 	if err := remote.SaveConfig(dir, c); err != nil {
 		t.Fatal(err)
 	}
+	host, err := remote.LoadHost(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tl := tls.NewListener(l, &tls.Config{Certificates: []tls.Certificate{host.Certificate}, MinVersion: tls.VersionTLS13})
 	go func() {
 		for {
-			c, err := l.Accept()
+			c, err := tl.Accept()
 			if err != nil {
 				return
 			}
-			c.Close()
+			go func() {
+				c.(*tls.Conn).Handshake()
+				c.Close()
+			}()
 		}
 	}()
 }
@@ -105,7 +113,11 @@ func statusUnit(t *testing.T, home string) string {
 	if err := os.MkdirAll(filepath.Dir(p), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(p, []byte("unit presence only"), 0o600); err != nil {
+	unit := unitContent(runtime.GOOS, filepath.Join(home, "bin", "crosstalk"), home)
+	if err := os.WriteFile(p, unit, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := setUnitHash(filepath.Join(home, ".config", "crosstalk"), sha256Hex(unit)); err != nil {
 		t.Fatal(err)
 	}
 	return p
