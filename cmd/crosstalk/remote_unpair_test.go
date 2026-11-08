@@ -267,7 +267,7 @@ func TestUnpairEmptyAliasExits1AndChangesNothing(t *testing.T) {
 	}
 }
 
-func TestUnpairWritesAtomically(t *testing.T) {
+func TestUnpairReplacesPeersFileByRename(t *testing.T) {
 	dir := unpairEnv(t, false)
 	p := filepath.Join(dir, "peers.json")
 	before, err := os.Stat(p)
