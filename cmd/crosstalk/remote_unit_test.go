@@ -169,6 +169,11 @@ func unitSandbox(t *testing.T, goos string, clis ...string) (home string, rec *r
 			if gw == nil {
 				gw = startFakeGateway(t, home)
 			}
+		case strings.Contains(call, "systemctl --user restart"):
+			if gw != nil {
+				gw.stop()
+			}
+			gw = startFakeGateway(t, home)
 		case strings.Contains(call, "launchctl bootout"), strings.Contains(call, "disable --now"):
 			if gw != nil {
 				gw.stop()
@@ -891,6 +896,12 @@ func TestEnablePortChangeRestartsUnit(t *testing.T) {
 		}
 		if n := rec.count("launchctl bootstrap") + rec.count("enable --now"); n != 2 {
 			t.Errorf("start commands = %d, want 2 (the running gateway kept the old port): %v", n, rec.all())
+		}
+		if goos == "linux" && rec.count("systemctl --user restart") != 1 {
+			t.Errorf("no restart of the running unit: %v", rec.all())
+		}
+		if !gatewayAnswering(filepath.Join(home, ".config", "crosstalk")) {
+			t.Errorf("no gateway answers on the new port %d: %v", next, rec.all())
 		}
 	})
 }

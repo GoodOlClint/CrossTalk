@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -42,6 +43,12 @@ func foreignListener(t *testing.T, tlsCfg *tls.Config) Config {
 				return
 			}
 			t.Cleanup(func() { c.Close() })
+			if tc, ok := c.(*tls.Conn); ok {
+				go func() {
+					tc.SetDeadline(time.Now().Add(3 * time.Second))
+					tc.Handshake()
+				}()
+			}
 		}
 	}()
 	return Config{Alias: "desk", Bind: "127.0.0.1", Port: l.Addr().(*net.TCPAddr).Port}
