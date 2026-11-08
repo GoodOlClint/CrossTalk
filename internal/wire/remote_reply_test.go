@@ -72,9 +72,13 @@ func (tm *timer) none(t *testing.T) {
 func (tm *timer) advance(d time.Duration) { tm.off.Add(int64(d)) }
 
 func twoHostsMod(t *testing.T, mod func(*shim.Options)) (h1, h2 *rhost, alice, bob *node) {
+	return twoHostsMods(t, nil, mod)
+}
+
+func twoHostsMods(t *testing.T, mod1, mod2 func(*shim.Options)) (h1, h2 *rhost, alice, bob *node) {
 	t.Helper()
 	h1, h2 = newRHost(t), newRHost(t)
-	h2.mod = mod
+	h1.mod, h2.mod = mod1, mod2
 	alice, bob = h1.agent("alice"), h2.agent("bob")
 	h1.serve()
 	h2.serve()
@@ -383,7 +387,10 @@ func TestRemoteReplyRetryEndsUnreachable(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			tm := newTimer()
-			h1, h2, alice, bob := twoHostsMod(t, tm.mod)
+			askerBehind := func(so *shim.Options) {
+				so.Now = func() time.Time { return time.Now().Add(-20 * time.Minute) }
+			}
+			h1, h2, alice, bob := twoHostsMods(t, askerBehind, tm.mod)
 			askID := askBob(t, alice, c.extra)
 			h1.setHook(abortPosts)
 			bob.ok("reply", replyArgs(askID))
@@ -462,5 +469,34 @@ func TestRemoteReplyResponseDroppedDedupes(t *testing.T) {
 	}
 	if n := h1.count("POST /v1/a2a/" + alice.id()); n < 2 {
 		t.Fatalf("%d POSTs: the reply was not resent", n)
+	}
+}
+
+func TestReplyReachesOnlyTheAskersHost(t *testing.T) {
+	h1, h2, h3 := newRHost(t), newRHost(t), newRHost(t)
+	carol := h3.agent("carol")
+	alice, bob := h1.agent("alice"), h2.agent("bob")
+	h1.serve()
+	h2.serve()
+	h3.serve()
+	pairHosts(t, h2, "third", h3, "desk3")
+	pairHosts(t, h1, "lab", h2, "desk")
+	ps, _ := h2.peers.List()
+	if len(ps) != 2 || ps[0].Fingerprint != h3.host.Fingerprint {
+		t.Fatalf("host 2 peers %v: the third host must come first", ps)
+	}
+	askID := askBob(t, alice, nil)
+	out := bob.ok("reply", replyArgs(askID))
+	if str(out, "state") != "accepted" {
+		t.Fatalf("reply: %v", out)
+	}
+	if n := h3.count("POST "); n != 0 {
+		t.Fatalf("the third host received %d POSTs: %v", n, h3.log())
+	}
+	if n := len(carol.codex.Writes()); n != 0 {
+		t.Fatalf("the third host injected %d times", n)
+	}
+	if n := replyWrites(alice); n != 1 {
+		t.Fatalf("the asker injected the reply %d times, want 1", n)
 	}
 }
