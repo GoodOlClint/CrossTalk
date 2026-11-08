@@ -76,7 +76,7 @@ func TestDeadlineClosesAskRouteAndRefusesLateReply(t *testing.T) {
 	if !isErr || out["error"] != mcpserver.CodeRejected || out["reason"] != shim.ReasonAskClosed || out["message"] != "ask is closed; send your answer with send_message to alice" {
 		t.Fatalf("late reply %v %v", isErr, out)
 	}
-	if hint, _ := out["hint"].(string); !strings.Contains(hint, "NOT delivered") || !strings.Contains(hint, `send_message with to "alice"`) {
+	if hint, _ := out["hint"].(string); !strings.Contains(hint, "NOT delivered") || !strings.Contains(hint, `send_message with to "`+alice.id()+`"`) {
 		t.Fatalf("late reply hint %q", hint)
 	}
 	for _, r := range records(t, dir, bob.id()) {

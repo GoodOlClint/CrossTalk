@@ -102,10 +102,24 @@ func TestAlreadyRepliedSaysNotDeliveredAndNamesSendMessage(t *testing.T) {
 
 	isErr, out := nb.call(thread("T-bob"), "reply", map[string]any{"message_id": askID, "text": "second"})
 	hint, _ := out["hint"].(string)
-	if !isErr || out["reason"] != ReasonAlreadyReplied || !strings.Contains(hint, "NOT delivered") || !strings.Contains(hint, `send_message with to "alice"`) {
+	if !isErr || out["reason"] != ReasonAlreadyReplied || !strings.Contains(hint, "NOT delivered") || !strings.Contains(hint, `send_message with to "`+alice.agentID()+`"`) {
 		t.Fatalf("already_replied result %v %v", isErr, out)
 	}
 	if len(alice.got()) != 1 {
 		t.Fatalf("alice got %q", alice.got())
+	}
+}
+
+func TestNotDeliveredHintTarget(t *testing.T) {
+	id := identity.AgentID("claude", "sess-alice")
+	for _, c := range []struct{ name, key, want string }{
+		{"alice", id, `to "` + id + `" and`},
+		{"alice-renamed", id, `to "` + id + `" and`},
+		{"Alice \"x\"\nnext", "local-user", `to "Alice \"x\"\nnext" and`},
+	} {
+		got := notDeliveredHint(msg.Message{From: c.name}, c.key)
+		if !strings.Contains(got, "NOT delivered") || !strings.Contains(got, c.want) {
+			t.Errorf("name %q key %q: %q lacks %q", c.name, c.key, got, c.want)
+		}
 	}
 }
