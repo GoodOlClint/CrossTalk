@@ -83,8 +83,11 @@ type Options struct {
 	// obligation pending and OnReply runs again on the retry or replay.
 	OnReply          func(ctx context.Context, st *AgentState, original, reply msg.Message) error
 	DiscoveryTimeout time.Duration
-	Now              func() time.Time
-	Logger           *slog.Logger
+	// RemoteConfigDir holds the host identity and peers.json; "" means
+	// remote.ConfigDir().
+	RemoteConfigDir string
+	Now             func() time.Time
+	Logger          *slog.Logger
 }
 
 // Shim implements mcpserver.Backend, mcpserver.Binder,
