@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	sdk "github.com/a2aproject/a2a-go/v2/a2a"
 	"github.com/a2aproject/a2a-go/v2/a2aclient"
@@ -451,8 +452,34 @@ func TestRemoteTaskResumeKeepsHostScope(t *testing.T) {
 	}
 }
 
+type gateReceiver struct {
+	Receiver
+	reached chan string
+	release chan struct{}
+}
+
+func (g *gateReceiver) Receive(ctx context.Context, in receiver.Inbound) receiver.Result {
+	select {
+	case g.reached <- in.Message.MessageID:
+	default:
+	}
+	<-g.release
+	return g.Receiver.Receive(ctx, in)
+}
+
+func (g *gateReceiver) IDHeldByOther(k, id string) bool {
+	return g.Receiver.(interface {
+		IDHeldByOther(string, string) bool
+	}).IDHeldByOther(k, id)
+}
+
 func TestRemoteContinuationCannotTakeLocalMessageID(t *testing.T) {
-	e := newEnv(t, receiver.Limits{}, Limits{}, nil)
+	gate := &gateReceiver{reached: make(chan string, 4), release: make(chan struct{}, 1)}
+	e := newEnv(t, receiver.Limits{}, Limits{}, func(s *Server) {
+		gate.Receiver = s.cfg.Receiver
+		s.cfg.Receiver = gate
+	})
+	defer close(gate.release)
 	local := receiver.Sender{Verified: true, AgentID: localID, Name: "alice", Role: registry.RolePrimary}
 	m := msg.Message{MessageID: msg.NewUUIDv7(), ContextID: "ctx", From: "alice", To: "self", Kind: msg.Inform, Delivery: msg.Immediate, Parts: []msg.Part{{Type: "text", Text: "local"}}}
 	if res := e.rcv.Receive(context.Background(), receiver.Inbound{Ingress: receiver.A2A, Message: m, Sender: local}); res.State != adapter.Accepted {
@@ -460,18 +487,38 @@ func TestRemoteContinuationCannotTakeLocalMessageID(t *testing.T) {
 	}
 	cl, ctx := e.remote(goodRemote())
 	own := textMsg("remote ask", map[string]any{"kind": "ask"})
+	gate.release <- struct{}{}
 	task, err := send(t, cl, ctx, own, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cont := &sdk.Message{ID: m.MessageID, TaskID: task.ID, ContextID: task.ContextID, Role: sdk.MessageRoleUser, Parts: sdk.ContentParts{sdk.NewTextPart("continuation with a stolen id")}}
-	_, err = cl.SendMessage(ctx, &sdk.SendMessageRequest{Message: cont, Config: &sdk.SendMessageConfig{ReturnImmediately: true}})
-	var se *sdk.Error
-	if !errors.As(err, &se) {
-		t.Fatalf("contested continuation: %v, want a JSON-RPC rejection", err)
+	waitFor(t, "remote ask received", func() bool { return writesFor(e.fake, own.ID) == 1 })
+	for len(gate.reached) > 0 {
+		<-gate.reached
 	}
-	if ct, _ := se.Details[MetaKey].(map[string]any); ct["reason"] != receiver.ReasonIDInUse {
-		t.Fatalf("details %v", se.Details)
+
+	cont := &sdk.Message{ID: m.MessageID, TaskID: task.ID, ContextID: task.ContextID, Role: sdk.MessageRoleUser, Parts: sdk.ContentParts{sdk.NewTextPart("continuation with a stolen id")}}
+	done := make(chan error, 1)
+	go func() {
+		_, err := cl.SendMessage(ctx, &sdk.SendMessageRequest{Message: cont, Config: &sdk.SendMessageConfig{ReturnImmediately: true}})
+		done <- err
+	}()
+	select {
+	case id := <-gate.reached:
+		if _, _, known := e.srv.AskOpen(id); known {
+			t.Fatal("the contested message_id is an ask handle while the receiver has not yet refused it")
+		}
+		t.Fatal("the contested continuation reached the receiver chain")
+	case err := <-done:
+		var se *sdk.Error
+		if !errors.As(err, &se) {
+			t.Fatalf("contested continuation: %v, want a JSON-RPC rejection", err)
+		}
+		if ct, _ := se.Details[MetaKey].(map[string]any); ct["reason"] != receiver.ReasonIDInUse {
+			t.Fatalf("details %v", se.Details)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no answer")
 	}
 	if _, _, known := e.srv.AskOpen(m.MessageID); known {
 		t.Fatal("the local message_id became a handle of the remote ask")
@@ -481,8 +528,5 @@ func TestRemoteContinuationCannotTakeLocalMessageID(t *testing.T) {
 	}
 	if !e.rcv.RouteOpen(m.MessageID) {
 		t.Fatal("the local message lost its reply route")
-	}
-	if n := writesFor(e.fake, m.MessageID); n != 1 {
-		t.Fatalf("injects %d, want only the local one", n)
 	}
 }
