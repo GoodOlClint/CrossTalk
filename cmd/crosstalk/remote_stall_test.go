@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"net"
 	"path/filepath"
@@ -146,5 +147,37 @@ func TestSetupDocStalledHandshake(t *testing.T) {
 	plan := repoFile(t, "docs/plans/release-0.2.0.md")
 	if !strings.Contains(plan, "R12 stalled-handshake report (#83)") {
 		t.Error("release-0.2.0.md lacks the R12 status line for #83")
+	}
+}
+
+func TestJoinPrintsStalledHandshakeHint(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop := make(chan struct{})
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			go func() { <-stop; c.Close() }()
+		}
+	}()
+	t.Cleanup(func() { close(stop); l.Close() })
+	t.Setenv("HOME", t.TempDir())
+	if code, _, _ := remoteRun(t, false, "config", "--bind", "127.0.0.1", "--alias", "beta", "--yes"); code != 0 {
+		t.Fatal("config failed")
+	}
+	port := l.Addr().(*net.TCPAddr).Port
+	tok := remote.PairToken{Address: "127.0.0.1", Port: port, Fingerprint: strings.Repeat("cd", 32), ID: base64.RawURLEncoding.EncodeToString(make([]byte, 16)), Secret: base64.RawURLEncoding.EncodeToString(make([]byte, 32))}.String()
+	var out, errb bytes.Buffer
+	if code := runRemote([]string{"join"}, strings.NewReader(tok+"\n"), false, &out, &errb); code != 1 {
+		t.Fatalf("join exit %d, stderr %q", code, errb.String())
+	}
+	want := "crosstalk remote join: remote: handshake timeout: no TLS handshake completed with 127.0.0.1:" + fmt.Sprint(port) + "; a host firewall or network filter (for example an application firewall such as Little Snitch) on either host may be holding the connection\n"
+	if errb.String() != want {
+		t.Fatalf("stderr %q, want %q", errb.String(), want)
 	}
 }
