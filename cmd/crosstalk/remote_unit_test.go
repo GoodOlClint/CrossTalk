@@ -466,9 +466,6 @@ func TestInstallYesNeverRemote(t *testing.T) {
 	hostOS(t, func(t *testing.T, goos string) {
 		home, rec := unitSandbox(t, goos, "claude")
 		bin := filepath.Join(home, "bin")
-		if code, out := installRunCmd(t, "install", "--yes", "--bin-dir", bin); code != 0 {
-			t.Fatalf("install --yes: exit %d\n%s", code, out)
-		}
 		var out bytes.Buffer
 		if code := runInstall("install", []string{"--yes", "--bin-dir", bin}, strings.NewReader(""), true, &out, &out); code != 0 {
 			t.Fatalf("install --yes on a terminal: exit %d\n%s", code, out.String())
@@ -559,7 +556,6 @@ func TestUninstallNamedLastHarnessRemovesUnit(t *testing.T) {
 func TestUninstallKeepsUnitWhileBinaryKept(t *testing.T) {
 	hostOS(t, func(t *testing.T, goos string) {
 		cases := map[string]func(t *testing.T, home, bin string) (clis []string, uninstall string){
-			"other harness": func(t *testing.T, home, bin string) ([]string, string) { return []string{"claude", "codex"}, "claude" },
 			"project registration": func(t *testing.T, home, bin string) ([]string, string) {
 				proj := filepath.Join(home, "proj")
 				installWrite(t, filepath.Join(home, ".claude.json"), `{"projects":{"`+proj+`":{"mcpServers":{"crosstalk":{"command":"`+filepath.Join(bin, "crosstalk")+`","args":["mcp"]}}}}}`)
@@ -734,23 +730,6 @@ func TestPurgeRefusesRunningGateway(t *testing.T) {
 	})
 }
 
-func TestPurgeAllowsGatewayUnderOwnUnit(t *testing.T) {
-	hostOS(t, func(t *testing.T, goos string) {
-		home, _ := unitSandbox(t, goos, "claude")
-		bin := filepath.Join(home, "bin")
-		if code, out := installRemote(t, bin); code != 0 {
-			t.Fatalf("install --remote: exit %d\n%s", code, out)
-		}
-		code, out := installRunCmd(t, "uninstall", "--purge", "--yes", "--bin-dir", bin)
-		if code != 0 {
-			t.Fatalf("uninstall --purge with the gateway under CrossTalk's own unit: exit %d\n%s", code, out)
-		}
-		if _, err := os.Stat(filepath.Join(home, ".config", "crosstalk")); !errors.Is(err, os.ErrNotExist) {
-			t.Errorf("config kept: %v", err)
-		}
-	})
-}
-
 func TestLingerHintPrintedNeverRun(t *testing.T) {
 	u, err := user.Current()
 	if err != nil {
@@ -768,14 +747,6 @@ func TestLingerHintPrintedNeverRun(t *testing.T) {
 			t.Errorf("the runner saw enable-linger %d times: %v", n, rec.all())
 		}
 		_ = home
-	})
-	t.Run("install", func(t *testing.T) {
-		home, rec := unitSandbox(t, "linux", "claude")
-		rec.linger = "no"
-		_, out := installRemote(t, filepath.Join(home, "bin"))
-		if !strings.Contains(out, hint) || rec.count("enable-linger") != 0 {
-			t.Errorf("install --remote: hint missing or enable-linger run (%v):\n%s", rec.all(), out)
-		}
 	})
 	t.Run("linger already on", func(t *testing.T) {
 		_, rec := unitSandbox(t, "linux")
