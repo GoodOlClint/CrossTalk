@@ -47,6 +47,10 @@ func runRemote(args []string, in io.Reader, tty bool, stdout, stderr io.Writer) 
 			return runRemoteJoin(args[1:], in, stdout, stderr)
 		case "status":
 			return runRemoteStatus(args[1:], stdout, stderr)
+		case "enable":
+			return runRemoteEnable(args[1:], in, tty, stdout, stderr)
+		case "disable":
+			return runRemoteDisable(args[1:], in, tty, stdout, stderr)
 		}
 		fmt.Fprintf(stderr, "crosstalk remote: unknown command %q\n", args[0])
 	}

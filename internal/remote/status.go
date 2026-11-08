@@ -57,7 +57,8 @@ func GatewayLockHeld(stateDir string) (bool, error) {
 
 // GatewayStatus names the gateway state of a configured host from the lock
 // and a TCP connect to bind:port; it speaks no protocol to the gateway.
-func GatewayStatus(stateDir string, c Config) (string, error) {
+func GatewayStatus(stateDir string, c Config, fingerprint string) (string, error) {
+	_ = fingerprint
 	held, err := GatewayLockHeld(stateDir)
 	if err != nil {
 		return "", err
