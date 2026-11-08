@@ -85,6 +85,7 @@ func TestPairPrintsFirewallNote(t *testing.T) {
 	select {
 	case <-gw.Ready():
 	case err := <-done:
+		done <- err
 		t.Fatal(err)
 	}
 	var out, errb syncBuf
@@ -103,8 +104,11 @@ func TestPairPrintsFirewallNote(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	want := "pair waits up to 10 minutes; if crosstalk remote join on the other host reports a handshake timeout, check firewalls or network filters on this host\n"
-	if !strings.Contains(errb.String(), want) {
-		t.Errorf("stderr %q lacks %q", errb.String(), want)
+	for deadline := time.Now().Add(5 * time.Second); !strings.Contains(errb.String(), want); time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Errorf("stderr %q lacks %q", errb.String(), want)
+			break
+		}
 	}
 	tok.Port = gw.Addr().(*net.TCPAddr).Port
 	bdir := filepath.Join(t.TempDir(), "crosstalk")

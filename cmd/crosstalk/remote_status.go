@@ -131,7 +131,7 @@ func printStatus(r statusReport, unit string, asJSON bool, stdout, stderr io.Wri
 		if p.Status != "ok" {
 			note := ""
 			if p.Status == remote.ReasonTimeout {
-				note = ": handshake timeout; " + remote.HandshakeHint
+				note = ": no TLS handshake completed (connection or handshake timeout); " + remote.HandshakeHint
 			}
 			fmt.Fprintf(stderr, "warning: peer %s is %s%s\n", p.Alias, p.Status, note)
 		}

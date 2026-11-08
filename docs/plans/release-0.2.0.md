@@ -2,7 +2,7 @@
 
 Status: draft for the brownfield gate, 2026-11-06. No implementation until the operator approves. It folds in the council decision (`~/.claude/coordinators/archive/council-decision.md`, chair Claude Opus 5.5 with two Codex advisors, 2026-11-06) and the operator rulings of 2026-11-06 (section 1.1), which win where they differ. The Codex critique disposition is section 13. Evidence tags: VERIFIED-SOURCE (read in this repo at f85f1cb), COUNCIL (verified by the council session, not re-read here), UNKNOWN (settled by the named spike).
 
-R12 stalled-handshake report (#83), 2026-11-08: the gateway logs one rate-limited address-only line, `join`, `status` and the shim client report a handshake timeout with a firewall hint, `pair` prints a static note and waits the full TTL; setup.md has the troubleshooting entry.
+R12 stalled-handshake report (#83), 2026-11-08: the gateway logs one rate-limited address-only line, `join`, `status` and the library client `Client.Do` report a handshake timeout with a firewall hint (the shim's message-send transport and its discovery result do not carry the hint yet; not in this slice), `pair` prints a static note and waits the full TTL; setup.md has the troubleshooting entry.
 
 Progress, 2026-11-08: R1 to R11 are merged; R12's documentation half is in a pull request; the R12 live run (two real machines) has not been run, so nothing here is released and the 0.2.0 tag waits for it and for the operator's yes.
 
