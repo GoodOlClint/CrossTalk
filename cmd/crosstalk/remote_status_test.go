@@ -415,10 +415,12 @@ func TestRemoteStatusNeverWrites(t *testing.T) {
 	for _, mode := range []string{"unconfigured", "absent_lock", "free_lock", "held_lock"} {
 		t.Run(mode, func(t *testing.T) {
 			home, _, state := statusHome(t, mode != "unconfigured")
-			if mode == "free_lock" || mode == "held_lock" {
+			if mode != "unconfigured" {
 				if err := os.MkdirAll(state, 0o700); err != nil {
 					t.Fatal(err)
 				}
+			}
+			if mode == "free_lock" || mode == "held_lock" {
 				if err := os.WriteFile(filepath.Join(state, "gateway.lock"), []byte("123\n"), 0o600); err != nil {
 					t.Fatal(err)
 				}
