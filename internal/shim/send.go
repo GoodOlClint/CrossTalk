@@ -79,8 +79,22 @@ func (st *AgentState) replyTarget(orig msg.Message) (string, string) {
 	return id, orig.ContextID
 }
 
-func askClosed(orig msg.Message) *mcpserver.Error {
-	return &mcpserver.Error{Code: mcpserver.CodeRejected, Reason: ReasonAskClosed, Message: "ask is closed; send your answer with send_message to " + orig.From}
+// notDeliveredHint targets a local sender by agent_id, which a rename or name
+// reuse cannot repoint; a remote sender is not named, because its alias can be
+// reassigned; any other key falls back to the display name.
+func notDeliveredHint(orig msg.Message, key string) string {
+	to := orig.From
+	switch {
+	case mcpserver.IsAgentID(key):
+		to = key
+	case receiver.IsRemoteKey(key):
+		return "Your reply was NOT delivered. The sender is on a paired host and its name may since have changed hands: find it in list_agents, check it is the same session, then send_message to it with the same text."
+	}
+	return "Your reply was NOT delivered. To get this text to the sender, call send_message with to " + strconv.Quote(to) + " and the same text."
+}
+
+func askClosed(orig msg.Message, key string) *mcpserver.Error {
+	return &mcpserver.Error{Code: mcpserver.CodeRejected, Reason: ReasonAskClosed, Message: "ask is closed; send your answer with send_message to " + orig.From, Hint: notDeliveredHint(orig, key)}
 }
 
 func (st *AgentState) askTask(messageID string) (taskID string, closed bool) {
@@ -543,16 +557,16 @@ func (s *Shim) Reply(ctx context.Context, from *mcpserver.Agent, messageID, text
 	if prev, state, ok := st.priorReply(taskID, orig.MessageID); ok {
 		switch {
 		case state == journal.StateClosed || prev.Text() != text && closed:
-			return mcpserver.Result{}, askClosed(orig)
+			return mcpserver.Result{}, askClosed(orig, key)
 		case prev.Text() != text:
-			return mcpserver.Result{}, &mcpserver.Error{Code: mcpserver.CodeRejected, Reason: ReasonAlreadyReplied, Message: "this ask already has a different reply " + prev.MessageID + "; send further answers with send_message to " + orig.From}
+			return mcpserver.Result{}, &mcpserver.Error{Code: mcpserver.CodeRejected, Reason: ReasonAlreadyReplied, Message: "this ask already has a different reply " + prev.MessageID + "; send further answers with send_message to " + orig.From, Hint: notDeliveredHint(orig, key)}
 		case state != journal.StateDelivered:
 			return st.completeReply(ctx, orig, prev, key, taskID, state)
 		}
 		return st.storedResult(prev), nil
 	}
 	if closed {
-		return mcpserver.Result{}, askClosed(orig)
+		return mcpserver.Result{}, askClosed(orig, key)
 	}
 	if addressable(key) && orig.Kind != msg.Ask && !st.rcv.RouteOpen(orig.MessageID) {
 		return mcpserver.Result{}, &mcpserver.Error{Code: mcpserver.CodeInvalid, Reason: ReasonNoSuchMessage, Hint: hintNoRouteExpired}
@@ -604,7 +618,7 @@ func (st *AgentState) completeReply(ctx context.Context, orig, r msg.Message, ke
 			err := hook(ctx, st, orig, r)
 			if errors.Is(err, ErrAskClosed) {
 				st.agent.Journal().Append(st.obligation(r, key, journal.StateClosed, false, taskID))
-				return mcpserver.Result{}, askClosed(orig)
+				return mcpserver.Result{}, askClosed(orig, key)
 			}
 			if err != nil {
 				res.State, res.Reason = adapter.Unknown, err.Error()

@@ -2,6 +2,7 @@ package shim
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -86,5 +87,47 @@ func TestReplyToExpiredInformIsNoSuchMessage(t *testing.T) {
 	}
 	if len(alice.got()) != 1 {
 		t.Fatalf("alice got %q", alice.got())
+	}
+}
+
+func TestAlreadyRepliedSaysNotDeliveredAndNamesSendMessage(t *testing.T) {
+	w := newWorld(t)
+	alice := w.claude(4001, "sess-alice", "alice")
+	w.codex.addThread("T-bob", "bob")
+	na := w.node(alice.pid, w.lb, nil)
+	nb := w.node(1, w.lb, nil)
+	nb.ok(thread("T-bob"), "receive_message", map[string]any{})
+	askID := na.ok(nil, "ask", send("bob", "question?"))["message_id"]
+	nb.ok(thread("T-bob"), "reply", map[string]any{"message_id": askID, "text": "first"})
+
+	isErr, out := nb.call(thread("T-bob"), "reply", map[string]any{"message_id": askID, "text": "second"})
+	hint, _ := out["hint"].(string)
+	if !isErr || out["reason"] != ReasonAlreadyReplied || !strings.Contains(hint, "NOT delivered") || !strings.Contains(hint, `send_message with to "`+alice.agentID()+`"`) {
+		t.Fatalf("already_replied result %v %v", isErr, out)
+	}
+	if len(alice.got()) != 1 {
+		t.Fatalf("alice got %q", alice.got())
+	}
+}
+
+func TestNotDeliveredHintTarget(t *testing.T) {
+	id := identity.AgentID("claude", "sess-alice")
+	for _, c := range []struct{ name, key, want string }{
+		{"alice", id, `to "` + id + `" and`},
+		{"alice-renamed", id, `to "` + id + `" and`},
+		{"Alice \"x\"\nnext", "local-user", `to "Alice \"x\"\nnext" and`},
+	} {
+		got := notDeliveredHint(msg.Message{From: c.name}, c.key)
+		if !strings.Contains(got, "NOT delivered") || !strings.Contains(got, c.want) {
+			t.Errorf("name %q key %q: %q lacks %q", c.name, c.key, got, c.want)
+		}
+	}
+}
+
+func TestNotDeliveredHintRemoteSenderNamesNoDestination(t *testing.T) {
+	key := "remote:abcdef/" + identity.AgentID("claude", "sess-alice")
+	got := notDeliveredHint(msg.Message{From: "alice@lab"}, key)
+	if !strings.Contains(got, "NOT delivered") || strings.Contains(got, "alice") || !strings.Contains(got, "list_agents") {
+		t.Fatalf("remote hint %q", got)
 	}
 }
