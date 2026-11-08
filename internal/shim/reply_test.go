@@ -123,3 +123,11 @@ func TestNotDeliveredHintTarget(t *testing.T) {
 		}
 	}
 }
+
+func TestNotDeliveredHintRemoteSenderNamesNoDestination(t *testing.T) {
+	key := "remote:abcdef/" + identity.AgentID("claude", "sess-alice")
+	got := notDeliveredHint(msg.Message{From: "alice@lab"}, key)
+	if !strings.Contains(got, "NOT delivered") || strings.Contains(got, "alice") || !strings.Contains(got, "list_agents") {
+		t.Fatalf("remote hint %q", got)
+	}
+}

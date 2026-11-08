@@ -80,11 +80,15 @@ func (st *AgentState) replyTarget(orig msg.Message) (string, string) {
 }
 
 // notDeliveredHint targets a local sender by agent_id, which a rename or name
-// reuse cannot repoint; any other sender key falls back to the display name.
+// reuse cannot repoint; a remote sender is not named, because its alias can be
+// reassigned; any other key falls back to the display name.
 func notDeliveredHint(orig msg.Message, key string) string {
 	to := orig.From
-	if mcpserver.IsAgentID(key) {
+	switch {
+	case mcpserver.IsAgentID(key):
 		to = key
+	case receiver.IsRemoteKey(key):
+		return "Your reply was NOT delivered. The sender is on a paired host and its name may since have changed hands: find it in list_agents, check it is the same session, then send_message to it with the same text."
 	}
 	return "Your reply was NOT delivered. To get this text to the sender, call send_message with to " + strconv.Quote(to) + " and the same text."
 }
