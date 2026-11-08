@@ -14,6 +14,7 @@ import (
 
 	"github.com/GoodOlClint/crosstalk/internal/adapter"
 	"github.com/GoodOlClint/crosstalk/internal/harness"
+	"github.com/GoodOlClint/crosstalk/internal/journal"
 	"github.com/GoodOlClint/crosstalk/internal/mcpserver"
 	"github.com/GoodOlClint/crosstalk/internal/msg"
 	"github.com/GoodOlClint/crosstalk/internal/registry"
@@ -43,8 +44,8 @@ type ReplyRetry struct {
 }
 
 const (
-	ObligationRejected    = "rejected"
-	ObligationUnreachable = "unreachable"
+	ObligationRejected    = journal.StateRejected
+	ObligationUnreachable = journal.StateUnreachable
 )
 
 // Transport carries a message to an agent served by a shim (A2A in
