@@ -42,6 +42,7 @@ func TestMain(m *testing.M) {
 	if os.Getenv("CROSSTALK_TEST_MAIN") == "1" {
 		os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 	}
+	os.Setenv("GORACE", strings.TrimSpace(os.Getenv("GORACE")+" atexit_sleep_ms=0"))
 	code := m.Run()
 	if builtMain.dir != "" {
 		os.RemoveAll(builtMain.dir)
