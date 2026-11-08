@@ -79,8 +79,12 @@ func (st *AgentState) replyTarget(orig msg.Message) (string, string) {
 	return id, orig.ContextID
 }
 
+func notDeliveredHint(orig msg.Message) string {
+	return `Your reply was NOT delivered. To get this text to the sender, call send_message with to "` + orig.From + `" and the same text.`
+}
+
 func askClosed(orig msg.Message) *mcpserver.Error {
-	return &mcpserver.Error{Code: mcpserver.CodeRejected, Reason: ReasonAskClosed, Message: "ask is closed; send your answer with send_message to " + orig.From}
+	return &mcpserver.Error{Code: mcpserver.CodeRejected, Reason: ReasonAskClosed, Message: "ask is closed; send your answer with send_message to " + orig.From, Hint: notDeliveredHint(orig)}
 }
 
 func (st *AgentState) askTask(messageID string) (taskID string, closed bool) {
@@ -545,7 +549,7 @@ func (s *Shim) Reply(ctx context.Context, from *mcpserver.Agent, messageID, text
 		case state == journal.StateClosed || prev.Text() != text && closed:
 			return mcpserver.Result{}, askClosed(orig)
 		case prev.Text() != text:
-			return mcpserver.Result{}, &mcpserver.Error{Code: mcpserver.CodeRejected, Reason: ReasonAlreadyReplied, Message: "this ask already has a different reply " + prev.MessageID + "; send further answers with send_message to " + orig.From}
+			return mcpserver.Result{}, &mcpserver.Error{Code: mcpserver.CodeRejected, Reason: ReasonAlreadyReplied, Message: "this ask already has a different reply " + prev.MessageID + "; send further answers with send_message to " + orig.From, Hint: notDeliveredHint(orig)}
 		case state != journal.StateDelivered:
 			return st.completeReply(ctx, orig, prev, key, taskID, state)
 		}

@@ -43,7 +43,7 @@ Tool names are bare here; your harness may prefix them.
 - `unpaired_by_peer`, `tls_pin_mismatch`, `gateway_not_running`: a paired host refuses this one, is not the host that was paired, or has no gateway running; tell your user.
 - `self`: pick another row.
 - `agent_held`: tell the user a second CrossTalk server may be installed.
-- `ask_closed`, `already_replied`, `no_such_message`: `send_message` to the sender.
+- `ask_closed`, `already_replied`: the `reply` text was NOT delivered; the hint gives the `send_message` call (to the sender, same text). `no_such_message`: `send_message` to the sender.
 - `unbound`: only `list_agents` works. Tell the user.
 - `not_ready`: retry once.
 - `too_large`, `too_many_pending`, `too_many_asks`: shorten the text or wait.
