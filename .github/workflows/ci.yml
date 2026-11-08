@@ -53,6 +53,64 @@ jobs:
         if: steps.scope.outputs.scope != 'docs'
         run: test -z "$(gofmt -l .)"
 
+  remote-e2e:
+    if: github.event_name != 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Classify change
+        id: scope
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -eu
+          scope="$(scripts/release-build.sh ci-scope "$BASE" "$HEAD")"
+          echo "scope=$scope" >> "$GITHUB_OUTPUT"
+          echo "change scope: $scope"
+      - uses: actions/setup-go@v7
+        if: steps.scope.outputs.scope != 'docs'
+        with:
+          go-version-file: go.mod
+      - name: Build linux binaries
+        if: steps.scope.outputs.scope != 'docs'
+        run: |
+          set -eu
+          mkdir -p bin
+          CGO_ENABLED=0 go build -trimpath -o bin/crosstalk ./cmd/crosstalk
+          CGO_ENABLED=0 go build -trimpath -o bin/remotee2e ./internal/remotee2e
+      - name: Two-container scenario
+        if: steps.scope.outputs.scope != 'docs'
+        env:
+          LOGS: ${{ github.workspace }}/e2e-logs
+        run: |
+          set -o pipefail
+          bash scripts/remote-e2e/run.sh bin 2>&1 | tee e2e-run.log
+          grep '^REMOTE_E2E ' e2e-run.log
+      - name: Scenario fails when pairing is broken
+        if: steps.scope.outputs.scope != 'docs'
+        env:
+          FAIL_PAIRING: "1"
+          LOGS: ${{ github.workspace }}/e2e-logs-broken
+        run: |
+          if bash scripts/remote-e2e/run.sh bin > e2e-broken.log 2>&1; then
+            echo "run.sh passed with a wrong pairing token" >&2
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v7
+        if: always() && steps.scope.outputs.scope != 'docs'
+        with:
+          name: remote-e2e-logs
+          path: |
+            e2e-logs
+            e2e-logs-broken
+            e2e-run.log
+            e2e-broken.log
+
   govulncheck:
     runs-on: ubuntu-latest
     steps:
