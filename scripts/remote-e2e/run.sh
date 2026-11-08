@@ -28,6 +28,7 @@ cleanup() {
 		docker exec "$c" rm -f /home/x/out/pair.out >/dev/null 2>&1 || true
 		rm -rf "$LOGS/${c%-"$RUN"}"
 		docker cp "$c:/home/x/out" "$LOGS/${c%-"$RUN"}" >/dev/null 2>&1 || true
+		rm -f "$LOGS/${c%-"$RUN"}/pair.out"
 		docker rm -f "$c" >/dev/null 2>&1 || true
 	done
 	if [ "$NET_MADE" = 1 ]; then docker network rm "$NET" >/dev/null 2>&1 || true; fi
@@ -91,6 +92,8 @@ N=$(dx $CB remotee2e writes | grep -o '"message_id"' | wc -l)
 dx $CA remotee2e call ask '{"to":"bob@hostb","text":"question","deadline_seconds":120}' | tee "$LOGS/ask.json"
 wait_for "ask injected on b" 30 sh -c "docker exec $CB remotee2e writes | grep -q question"
 ASK_ID=$(dx $CB remotee2e writes | jq -r '.[] | select(.text=="question") | .message_id')
+ASK_SENT=$(jq -r '.message_id' "$LOGS/ask.json")
+[ "$ASK_ID" = "$ASK_SENT" ] || { echo "receiver saw ask id $ASK_ID, sender sent $ASK_SENT" >&2; exit 1; }
 dx $CB remotee2e call reply "{\"message_id\":\"$ASK_ID\",\"text\":\"42\"}" | tee "$LOGS/reply.json"
 wait_for "reply injected on a" 30 sh -c "docker exec $CA remotee2e writes | jq -e 'any(.[]; .text==\"42\")'"
 T_REPLY=$(now)
@@ -102,7 +105,8 @@ for f in inform ask reply; do
 	[ "$(jq -r '.is_error' "$LOGS/$f.json")" = false ] || { echo "$f tool call reported an error" >&2; exit 1; }
 done
 [ "$(jq 'length' "$LOGS/a-writes-final.json")" -eq 1 ] || { echo "asker has wrong inject count" >&2; exit 1; }
-[ "$(jq --arg id "$ASK_ID" '[.[] | select(.text=="42" and .in_reply_to==$id and (.from | startswith("bob")) and .message_id!=$id)] | length' "$LOGS/a-writes-final.json")" -eq 1 ] || { echo "asker lacks exactly one reply to the ask" >&2; exit 1; }
+REPLY_ID=$(jq -r '.message_id' "$LOGS/reply.json")
+[ "$(jq --arg id "$ASK_SENT" --arg rid "$REPLY_ID" '[.[] | select(.text=="42" and .in_reply_to==$id and .from=="bob@hostb" and .message_id==$rid)] | length' "$LOGS/a-writes-final.json")" -eq 1 ] || { echo "asker lacks exactly one reply to the ask" >&2; exit 1; }
 [ "$(jq '[.[] | select(.text=="question")] | length' "$LOGS/b-writes-final.json")" -eq 1 ] || { echo "receiver injected the ask more than once" >&2; exit 1; }
 REPLY_S=$(echo "$T_REPLY - $T0" | bc)
 
