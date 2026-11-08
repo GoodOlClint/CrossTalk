@@ -19,9 +19,9 @@ Terms: **linger** is systemd's setting that keeps a user's service manager runni
 | 1 | The unit starts at login on the Mac | PENDING-OPERATOR | Plist written and not loaded: Mac networking is held (spike 16) |
 | 2 | VM: linger enabled | PASS | `sudo loginctl enable-linger <user>` then `loginctl show-user ... -p Linger` gives `Linger=yes`; the user manager started with no login |
 | 3 | VM: unit installed as a systemd user unit and running | PASS | `systemctl --user enable --now` on three units (the gateway under test, a stand-in peer gateway on a second `HOME`, a fake-harness agent); all `active` |
-| 4 | `remote status` sees the unit | PASS | `login unit: installed` at `~/.config/systemd/user/crosstalk-remote.service`; `gateway: running` |
+| 4 | `remote status` sees the unit | PASS | `login unit: installed` at `~/.config/systemd/user/crosstalk-remote.service`; `gateway: running`. `gateway: running` is lock plus TCP connect only (row 10), so inbound acceptance is shown by the ask and reply in spike 16 row 4, not by `status` |
 | 5 | VM reboot, unit up afterwards with no interactive login | PENDING-OPERATOR | `sudo systemctl reboot` denied by the permission classifier (live inference VM). Nothing was rebooted. The operator must allow it in the session's terminal |
-| 6 | Ask and reply across hosts after the reboot | PENDING-OPERATOR | Depends on row 5 and the Mac. Before the reboot, the same ask and reply passed between the two units on the VM (spike 16 row 15) |
+| 6 | Ask and reply across hosts after the reboot | PENDING-OPERATOR | Depends on row 5 and the Mac. Before the reboot, an ask and reply passed between the two unit-run gateways and the unit-run fake agent on the VM (spike 16 rows 4 and 15; a first run with foreground processes preceded it). Not a reboot test |
 | 7 | `remote enable` twice gives identical files | NOT RUN, blocked-on-R11 | |
 | 8 | `remote enable` over a user-edited or foreign unit refuses and writes nothing | NOT RUN, blocked-on-R11 | |
 | 9 | `remote disable` leaves no unit | NOT RUN, blocked-on-R11 | |

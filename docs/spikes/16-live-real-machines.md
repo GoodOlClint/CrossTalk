@@ -26,7 +26,7 @@ Terms: **gateway** is the `remote serve` process; **pairing** is the one-time `r
 | 1 | The signed binary | NOT RUN | The release binary is built and notarized in CI on a tag; only ad-hoc builds were used. Same code, different signature, which matters for the Mac filter below (a rule is per path and signature) |
 | 2 | `remote serve` in the foreground accepts, VM | PASS | `gateway listening on <ip redacted>:7745`; a Go TLS probe from the VM reached it (handshake 0.6 ms) |
 | 3 | `remote serve` in the foreground accepts, Mac | FAIL (stalled), PENDING-OPERATOR | The gateway binds and prints its start line, but no ClientHello arrives: the goroutine dump shows the handshake goroutine blocked in `readHandshakeBytes` while a client waits for the ServerHello. A VM client times out at 5 s; the Mac's own client does the same to its own LAN address |
-| 4 | `remote serve` as a login unit accepts, VM | PASS | `status` against the unit-run gateway after `systemctl --user enable --now`: `gateway: running`, peer `ok` (spike 19) |
+| 4 | `remote serve` as a login unit accepts, VM | PASS | Both gateways and the fake agent ran as systemd user units (main pids listed, no foreground process left). The second gateway's `status` completed a pinned TLS handshake into the first unit-run gateway (`peer ... ok`); an ask from the sender to the agent on the second gateway was `accepted`, the agent replied, and the reply arrived back through the first unit-run gateway, so each unit accepted inbound traffic. `status` alone (lock plus TCP connect) would not establish this; see spike 19 |
 | 5 | `remote serve` as a login unit accepts, Mac | NOT RUN | Mac networking blocked; launchd template is ready (spike 19) |
 | 6 | Pairing over the direct LAN, VM to VM stand-in | PASS | `paired with vma (...) at <ip redacted>:7745` / `paired with vmb (...)` |
 | 7 | Pairing over the direct LAN, Mac and VM, either direction | FAIL (stalled), PENDING-OPERATOR | Mac pairs, VM joins: `Post "https://<ip redacted>:7745/v1/pair": EOF` after about 7 s. VM pairs, Mac joins: the same error. Nothing was written on either side |
@@ -37,7 +37,7 @@ Terms: **gateway** is the `remote serve` process; **pairing** is the one-time `r
 | 12 | No System Settings change by the worker | PASS | None made; no firewall, Local Network or filter setting touched |
 | 13 | The exact macOS Local Network prompt or firewall setting is recorded | PARTIAL | No macOS Local Network dialog was identified and the screen cannot be read from the session (`screencapture` fails: could not create image from display). Recorded settings: Application Firewall on, stealth mode off, built-in and downloaded signed apps auto-allowed, the test binary reported as permitted. The blocker is not the Application Firewall |
 | 14 | Sleep and wake, pairing survives | NOT RUN | Operator ruling 2026-11-08: a manual test when the operator is home |
-| 15 | Ask and reply crossing hosts (R8 line, added) | PASS (stand-in) | Ask from `alice@vma` to `bob@vmb`; the fake agent replied; the reply arrived as an inform with `in_reply_to` set and text `spike pong`. Not shown across a Mac |
+| 15 | Ask and reply crossing hosts (R8 line, added) | PASS (stand-in) | First run with both gateways as foreground processes, repeated against the unit-run gateways (row 4). Ask from `alice@vma` to `bob@vmb`; the fake agent replied; the reply arrived as an inform with `in_reply_to` set and text `spike pong`. Not shown across a Mac |
 
 ## What stalled on the Mac, and how it was narrowed
 
