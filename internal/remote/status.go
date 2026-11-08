@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -103,6 +104,9 @@ func ProbePeer(h Host, p Peer) string {
 		if mismatch {
 			return "tls_pin_mismatch"
 		}
+		if isAlert(err) {
+			return "unpaired_by_peer"
+		}
 		return probeClass(err)
 	}
 	// TLS 1.3 finishes the client side before the server judges our
@@ -118,7 +122,10 @@ func ProbePeer(h Host, p Peer) string {
 		if errors.As(err, &ne) && ne.Timeout() {
 			return "ok"
 		}
-		return "unpaired_by_peer"
+		if isAlert(err) {
+			return "unpaired_by_peer"
+		}
+		return "unreachable"
 	}
 	return "ok"
 }
@@ -129,4 +136,20 @@ func probeClass(err error) string {
 		return "timeout"
 	}
 	return "unreachable"
+}
+
+// isAlert reports whether err is a TLS alert from the peer that refuses our
+// certificate, as opposed to a plain close, reset, timeout or an unrelated
+// alert such as a protocol version mismatch.
+func isAlert(err error) bool {
+	var oe *net.OpError
+	if !errors.As(err, &oe) || oe.Op != "remote error" {
+		return false
+	}
+	switch strings.TrimPrefix(oe.Err.Error(), "tls: ") {
+	case "bad certificate", "unsupported certificate", "revoked certificate", "expired certificate",
+		"unknown certificate", "unknown certificate authority", "certificate required", "handshake failure", "access denied":
+		return true
+	}
+	return false
 }

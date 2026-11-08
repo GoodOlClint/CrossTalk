@@ -412,10 +412,10 @@ func TestRemoteStatusExit(t *testing.T) {
 }
 
 func TestRemoteStatusNeverWrites(t *testing.T) {
-	for _, mode := range []string{"unconfigured", "absent_lock", "free_lock", "held_lock"} {
+	for _, mode := range []string{"unconfigured", "no_state_dir", "absent_lock", "free_lock", "held_lock"} {
 		t.Run(mode, func(t *testing.T) {
 			home, _, state := statusHome(t, mode != "unconfigured")
-			if mode != "unconfigured" {
+			if mode != "unconfigured" && mode != "no_state_dir" {
 				if err := os.MkdirAll(state, 0o700); err != nil {
 					t.Fatal(err)
 				}
@@ -547,5 +547,67 @@ func TestRemoteStatusProbeBudget(t *testing.T) {
 	got := remote.ProbePeer(h, remote.Peer{Alias: "slow", Address: l.Addr().String(), Fingerprint: peer.Fingerprint})
 	if elapsed := time.Since(start); elapsed > 2080*time.Millisecond {
 		t.Errorf("probe returned %q after %v, budget 2 s", got, elapsed)
+	}
+}
+
+func TestRemoteStatusPeerClosesWithoutAlert(t *testing.T) {
+	_, dir, _ := statusHome(t, true)
+	h, err := remote.LoadHost(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer, err := remote.LoadOrCreateHost(filepath.Join(t.TempDir(), "peer"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := statusListener(t)
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				s := tls.Server(c, &tls.Config{Certificates: []tls.Certificate{peer.Certificate}, MinVersion: tls.VersionTLS13, ClientAuth: tls.RequireAnyClientCert})
+				s.SetDeadline(time.Now().Add(3 * time.Second))
+				if s.Handshake() == nil {
+					c.Close()
+				}
+			}()
+		}
+	}()
+	got := remote.ProbePeer(h, remote.Peer{Alias: "closer", Address: l.Addr().String(), Fingerprint: peer.Fingerprint})
+	if got != "unreachable" {
+		t.Errorf("peer closed with no alert: got %q, want unreachable", got)
+	}
+}
+
+func TestRemoteStatusPeerTLS12OnlyIsUnreachable(t *testing.T) {
+	_, dir, _ := statusHome(t, true)
+	h, err := remote.LoadHost(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer, err := remote.LoadOrCreateHost(filepath.Join(t.TempDir(), "peer"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := statusListener(t)
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				s := tls.Server(c, &tls.Config{Certificates: []tls.Certificate{peer.Certificate}, MinVersion: tls.VersionTLS12, MaxVersion: tls.VersionTLS12, ClientAuth: tls.RequireAnyClientCert})
+				s.SetDeadline(time.Now().Add(3 * time.Second))
+				s.Handshake()
+			}()
+		}
+	}()
+	if got := remote.ProbePeer(h, remote.Peer{Alias: "old", Address: l.Addr().String(), Fingerprint: peer.Fingerprint}); got != "unreachable" {
+		t.Errorf("TLS 1.2-only peer: got %q, want unreachable", got)
 	}
 }
