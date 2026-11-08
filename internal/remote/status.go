@@ -146,10 +146,10 @@ func isAlert(err error) bool {
 	if !errors.As(err, &oe) || oe.Op != "remote error" {
 		return false
 	}
-	for _, a := range []string{"bad certificate", "unsupported certificate", "certificate revoked", "certificate expired", "unknown certificate", "certificate required", "handshake failure", "access denied"} {
-		if strings.Contains(oe.Err.Error(), a) {
-			return true
-		}
+	switch strings.TrimPrefix(oe.Err.Error(), "tls: ") {
+	case "bad certificate", "unsupported certificate", "revoked certificate", "expired certificate",
+		"unknown certificate", "unknown certificate authority", "certificate required", "handshake failure", "access denied":
+		return true
 	}
 	return false
 }
