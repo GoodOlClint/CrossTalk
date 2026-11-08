@@ -90,7 +90,7 @@ func TestCIJobGatedAndNotRequired(t *testing.T) {
 	if loc := regexp.MustCompile(`\n  [a-z]`).FindStringIndex(job[2:]); loc != nil {
 		job = job[:loc[0]+2]
 	}
-	for _, want := range []string{"release-build.sh ci-scope", "fetch-depth: 0", "timeout-minutes: 15", "if: always()", "FAIL_PAIRING"} {
+	for _, want := range []string{"release-build.sh ci-scope", "fetch-depth: 0", "timeout-minutes: 15", "if: always()", "FAIL_PAIRING", "remote join failed", "bad pairing proof"} {
 		if !strings.Contains(job, want) {
 			t.Errorf("remote-e2e job lacks %q", want)
 		}

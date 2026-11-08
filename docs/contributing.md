@@ -23,7 +23,7 @@ test -z "$(gofmt -l .)"
 
 ### The remote-e2e job
 
-CI also runs `remote-e2e` on Linux: two Docker containers on one bridge network pair through the real `crosstalk remote config`, `serve`, `pair` and `join`, then send one `send_message` inform and one `ask` with its `reply` between Fake-backed agents. It checks that the receiver injects the ask exactly once, the asker injects the reply exactly once, and the ask and reply finish in under 180 seconds. A second run joins with a wrong token and must fail. The workload is `internal/remotee2e`; the scenario is `scripts/remote-e2e/run.sh`.
+CI also runs `remote-e2e` on Linux: two Docker containers on one bridge network pair through the real `crosstalk remote config`, `serve`, `pair` and `join`, then send one `send_message` inform and one `ask` with its `reply` between Fake-backed agents. It checks that the receiver injects the ask exactly once, the asker injects the reply exactly once, and the ask and reply finish in under 180 seconds. A second run joins with a well-formed token carrying a wrong secret and must fail at the join, with the gateway refusing the pairing. The workload is `internal/remotee2e`; the scenario is `scripts/remote-e2e/run.sh`.
 
 It is skipped for changes that touch only docs or the marketplace files (the job still reports success). It is not a required check yet.
 

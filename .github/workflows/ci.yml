@@ -98,9 +98,11 @@ jobs:
           LOGS: ${{ github.workspace }}/e2e-logs-broken
         run: |
           if bash scripts/remote-e2e/run.sh bin > e2e-broken.log 2>&1; then
-            echo "run.sh passed with a wrong pairing token" >&2
+            echo "run.sh passed with a wrong pairing secret" >&2
             exit 1
           fi
+          grep -q 'remote join failed' e2e-broken.log
+          grep -q 'refused the pairing (403): bad pairing proof' e2e-broken.log
       - uses: actions/upload-artifact@v7
         if: always() && steps.scope.outputs.scope != 'docs'
         with:

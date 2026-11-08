@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Remote end-to-end scenario: two containers, real remote config/serve/pair/join, one inform, one ask and reply.
-# Usage: run.sh BIN_DIR (holds linux crosstalk and remotee2e binaries). FAIL_PAIRING=1 joins with a wrong token and must exit non-zero.
+# Usage: run.sh BIN_DIR (holds linux crosstalk and remotee2e binaries). FAIL_PAIRING=1 joins with a well-formed token carrying a wrong secret and must exit non-zero at the join.
 # Prints one line: REMOTE_E2E inform_seconds=N reply_seconds=N
 set -euo pipefail
 
@@ -75,7 +75,7 @@ T0=$(now)
 docker exec -d $CA sh -c 'exec crosstalk remote pair --alias hostb >/home/x/out/pair.out 2>/home/x/out/pair.err'
 wait_for "token" 30 docker exec $CA grep -q . /home/x/out/pair.out
 TOKEN=$(dx $CA head -n1 /home/x/out/pair.out)
-if [ "${FAIL_PAIRING:-0}" = 1 ]; then TOKEN=wrong-token; fi
+if [ "${FAIL_PAIRING:-0}" = 1 ]; then TOKEN="${TOKEN%:*}:$(head -c 43 /dev/zero | tr '\0' A)"; fi
 echo "$TOKEN" | docker exec -i $CB crosstalk remote join --alias hosta >"$LOGS/join.out" 2>"$LOGS/join.err" || { echo "remote join failed:" >&2; cat "$LOGS/join.err" >&2; exit 1; }
 wait_for "paired" 30 docker exec $CA grep -q "paired with" /home/x/out/pair.out
 T_PAIRED=$(now)
