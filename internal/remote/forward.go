@@ -35,6 +35,10 @@ const (
 // registered agent of this host.
 const ReasonNoSuchAgent = "no_such_agent"
 
+// ReasonResponseTooLarge: the loopback server answered, but its reply is over
+// the forwarding cap; the sender reads it as unknown, never as a cut-off result.
+const ReasonResponseTooLarge = "response_too_large"
+
 const (
 	forwardPrefix   = "/v1/a2a/"
 	maxForwardReply = 1 << 20
@@ -136,11 +140,22 @@ func (f *Forwarder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer resp.Body.Close()
+	reply, err := io.ReadAll(io.LimitReader(resp.Body, maxForwardReply+1))
+	if err != nil {
+		http.Error(w, "bad gateway", http.StatusBadGateway)
+		return
+	}
+	if len(reply) > maxForwardReply {
+		reject(sdk.NewError(sdk.ErrServerError, "response too large").WithDetails(map[string]any{
+			a2a.MetaKey: map[string]any{"state": "unknown", "reason": ReasonResponseTooLarge, "message_id": req.messageID},
+		}))
+		return
+	}
 	if ct := resp.Header.Get("Content-Type"); ct != "" {
 		w.Header().Set("Content-Type", ct)
 	}
 	w.WriteHeader(resp.StatusCode)
-	io.Copy(w, io.LimitReader(resp.Body, maxForwardReply))
+	w.Write(reply)
 }
 
 // attestedFrom validates the sender's Remote-* fields, each present exactly

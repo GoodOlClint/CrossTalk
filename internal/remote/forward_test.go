@@ -196,6 +196,7 @@ func (e *gwEnv) token() string {
 type agentEnv struct {
 	fake *adapter.Fake
 	srv  *a2a.Server
+	j    *journal.Journal
 }
 
 func startAgent(t *testing.T, stateDir, agentID string) *agentEnv {
@@ -223,7 +224,7 @@ func startAgent(t *testing.T, stateDir, agentID string) *agentEnv {
 	done := make(chan error, 1)
 	go func() { done <- srv.Serve(context.Background()) }()
 	t.Cleanup(func() { srv.Close(); <-done; j.Close() })
-	return &agentEnv{fake: fake, srv: srv}
+	return &agentEnv{fake: fake, srv: srv, j: j}
 }
 
 func injects(f *adapter.Fake, messageID string) int {
@@ -245,11 +246,13 @@ func TestTwoHostInform(t *testing.T) {
 		Handler: NewForwarder(g2.stateDir, agentsOf(map[string]string{targetAgent: bob.srv.URL()})),
 	})
 	g2.start()
-	sender := g2.pin("desk1")
-	if g1.host.Fingerprint == "" || g1.stateDir == g2.stateDir || g1.cfgDir == g2.cfgDir || g1.addr() == g2.addr() {
+	if g1.stateDir == g2.stateDir || g1.cfgDir == g2.cfgDir || g1.addr() == g2.addr() {
 		t.Fatal("hosts are not independent")
 	}
-	cl := g2.senderClient(sender)
+	if err := g2.peers.Upsert(Peer{Alias: "desk1", Address: g1.addr(), Fingerprint: g1.host.Fingerprint}); err != nil {
+		t.Fatal(err)
+	}
+	cl := g2.senderClient(g1.host)
 	id := msg.NewUUIDv7()
 	body := rpcBody("1", "SendMessage", sendParams(id, "hello across hosts", nil))
 	res := g2.post(cl, "/v1/a2a/"+targetAgent, remoteFields(), body)
@@ -263,6 +266,20 @@ func TestTwoHostInform(t *testing.T) {
 	w := bob.fake.Writes()
 	if w[0].Message.From != "Remote Alice@desk1" || !w[0].Delivery.VerifiedSender {
 		t.Fatalf("sender label %q verified %v, want %q from host 2's peers.json", w[0].Message.From, w[0].Delivery.VerifiedSender, "Remote Alice@desk1")
+	}
+	recs, err := bob.j.Records()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantKey := receiver.RemoteKey(g1.host.Fingerprint, senderAgent)
+	found := false
+	for _, r := range recs {
+		if r.Type == journal.TypeDedupe && r.MessageID == id && r.Sender == wantKey {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no dedupe record keyed %s: host 1's fingerprint is not the recorded sender", wantKey)
 	}
 	res = g2.post(cl, "/v1/a2a/"+targetAgent, remoteFields(), body)
 	if res.Status != 200 {
@@ -563,5 +580,23 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 			t.Fatalf("timed out waiting for %s", what)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestGatewayOversizedReplyIsDefiniteError(t *testing.T) {
+	big := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"jsonrpc":"2.0","id":"1","result":{"pad":"`+strings.Repeat("a", maxForwardReply)+`"}}`)
+	}))
+	t.Cleanup(big.Close)
+	e := forwardGateway(t, agentsOf(map[string]string{targetAgent: big.URL}))
+	cl := e.senderClient(e.pin("desk1"))
+	res := e.post(cl, "/v1/a2a/"+targetAgent, remoteFields(), rpcBody("1", "GetTask", map[string]any{"id": "t"}))
+	var v map[string]any
+	if err := json.Unmarshal(res.Body, &v); err != nil {
+		t.Fatalf("reply is not complete JSON: %v", err)
+	}
+	if _, ok := res.errCode(); !ok || res.Status != 200 || !res.hasReason(ReasonResponseTooLarge) || !strings.Contains(string(res.Body), `"state":"unknown"`) {
+		t.Fatalf("status %d body %.300s, want a JSON-RPC error unknown/%s", res.Status, res.Body, ReasonResponseTooLarge)
 	}
 }
