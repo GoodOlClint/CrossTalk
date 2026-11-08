@@ -994,3 +994,33 @@ func uninstallPurge(t *testing.T, bin string) (int, string) {
 	t.Helper()
 	return installRunCmd(t, "uninstall", "--purge", "--yes", "--bin-dir", bin)
 }
+
+func TestPurgeStopIsConfirmedAndFirst(t *testing.T) {
+	hostOS(t, func(t *testing.T, goos string) {
+		home, rec := unitSandbox(t, goos, "claude")
+		bin := filepath.Join(home, "bin")
+		if code, out := installRemote(t, bin); code != 0 {
+			t.Fatalf("install --remote: exit %d\n%s", code, out)
+		}
+		state := filepath.Join(home, ".local", "state", "crosstalk")
+		before, ran := installSnapshot(t, home), len(rec.all())
+		args := []string{"--purge", "--bin-dir", bin}
+		var out bytes.Buffer
+		if code := runInstall("uninstall", args, strings.NewReader(""), false, &out, &out); code != 2 {
+			t.Errorf("no terminal and no --yes: exit %d, want 2\n%s", code, out.String())
+		}
+		out.Reset()
+		if code := runInstall("uninstall", args, strings.NewReader("n\n"), true, &out, &out); code != 1 || !strings.Contains(out.String(), "stop the gateway") {
+			t.Errorf("declined first step: exit %d, want 1 after the gateway step\n%s", code, out.String())
+		}
+		if n := len(rec.all()); n != ran {
+			t.Errorf("service-manager commands ran without a confirmed step: %v", rec.all()[ran:])
+		}
+		if held, err := remote.GatewayLockHeld(state); err != nil || !held {
+			t.Errorf("gateway stopped by a refused or declined purge: held=%v err=%v", held, err)
+		}
+		if after := installSnapshot(t, home); fmt.Sprint(before) != fmt.Sprint(after) {
+			t.Errorf("HOME changed")
+		}
+	})
+}

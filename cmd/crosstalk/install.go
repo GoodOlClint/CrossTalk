@@ -200,6 +200,7 @@ func runInstall(mode string, args []string, in io.Reader, tty bool, stdout, stde
 			return 1
 		}
 	}
+	var stopFirst bool
 	if mode == "uninstall" && o.purge {
 		held, err := remote.GatewayLockHeld(stateDir)
 		if err != nil {
@@ -208,12 +209,7 @@ func runInstall(mode string, args []string, in io.Reader, tty bool, stdout, stde
 		}
 		if _, _, present, owned, _ := unitOwnership(home, cfgDir); held && present && owned {
 			if installKeep(all, targets, env, false) == "" {
-				unitStop(ctx)
-				held, err = remote.GatewayLockHeld(stateDir)
-				if err != nil {
-					fmt.Fprintf(stderr, "crosstalk %s: %v\n", mode, err)
-					return 1
-				}
+				stopFirst, held = true, false
 			} else {
 				held = false
 			}
@@ -236,6 +232,21 @@ func runInstall(mode string, args []string, in io.Reader, tty bool, stdout, stde
 	var groups []group
 	if mode != "uninstall" {
 		groups = append(groups, group{"crosstalk", []harness.Step{installBinaryStep(env.Bin, brewBin != "")}})
+	}
+	if stopFirst {
+		groups = append(groups, group{"gateway", []harness.Step{{
+			Title:  "stop the gateway",
+			Change: "stop the login unit that runs it; purge is refused if a gateway still holds gateway.lock afterwards",
+			Apply: func(ctx context.Context) error {
+				unitStop(ctx)
+				if held, err := remote.GatewayLockHeld(stateDir); err != nil {
+					return err
+				} else if held {
+					return errors.New(gatewayRunningMsg(stateDir))
+				}
+				return nil
+			},
+		}}})
 	}
 	for _, t := range targets {
 		var steps []harness.Step
