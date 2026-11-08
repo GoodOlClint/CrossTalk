@@ -49,6 +49,8 @@ const (
 	StateCompleted   = "completed"
 	StateFailed      = "failed"
 	StateRemoved     = "removed"
+	StateRejected    = "rejected"
+	StateUnreachable = "unreachable"
 )
 
 type Binding struct {
@@ -162,7 +164,11 @@ func unresolved(latest Record) bool {
 	case TypeRoute:
 		return latest.State == StateOpen
 	case TypeObligation:
-		return latest.State != StateDelivered && latest.State != StateClosed
+		switch latest.State {
+		case StateDelivered, StateClosed, StateRejected, StateUnreachable:
+			return false
+		}
+		return true
 	case TypeClaim:
 		return latest.Claimed
 	case TypeNudge:

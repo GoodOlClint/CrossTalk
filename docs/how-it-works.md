@@ -77,6 +77,8 @@ On a paired host, `list_agents` also shows that host's sessions as `name@host`, 
 
 Address a session on a paired host as `name@host` (or `agent_id@host`); `send_message` and `ask` work there, `command`, `claim` and `release` do not. A bare name never leaves this host: if only a paired host has a session called `bob`, the error says to use `bob@host`. A local name that itself contains `@` still resolves locally first. The send waits up to 5 seconds, not 2, for the far side to report delivery, and a gateway's acceptance alone is never reported as delivered. An ask's deadline runs on your own clock.
 
+A `reply` to an ask from a paired host goes back to that exact session, by its agent_id, not to whoever now holds its name. If the asker's host is asleep or its gateway is down, `reply` returns `remote_reply_pending` and the shim keeps trying while the session lives: after 60 seconds, then doubling to 10 minutes, and again when the session restarts. It resends the same message, so a reply that did arrive is never shown twice. It stops when the reply is delivered, when the asker's session is gone (`rejected`), or when your own clock passes the time you received the ask plus its deadline (24 hours when it had none); then it ends `unreachable`.
+
 ## Where to read more
 
 - [Design](design.md) is the full specification: schemas, state machine, test list.

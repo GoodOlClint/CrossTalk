@@ -590,48 +590,6 @@ func (w *world) reply(ask msg.Message, text string) (bool, map[string]any) {
 	return w.bob.call("reply", map[string]any{"message_id": ask.MessageID, "text": text})
 }
 
-func TestReplyReachesOriginalAsker(t *testing.T) {
-	t.Skip("R4: completeReply keeps a remote key pending until R8 builds the remote branch of forwardReply; this test delivered through the spike's OnReply stand-in. R8 re-pins it as TestTwoHostReplyAcrossDisconnect.")
-	w := newWorld(t)
-	m := w.askAndRetry()
-	isErr, out := w.reply(m, "42")
-	if isErr || out["state"] != "accepted" {
-		t.Fatalf("reply %v %v", isErr, out)
-	}
-	ws := w.alice.fc.Writes()
-	if len(ws) != 1 {
-		t.Fatalf("alice's harness has %d writes, want 1", len(ws))
-	}
-	got := ws[0].Message
-	if got.InReplyTo == nil || *got.InReplyTo != m.MessageID || got.Text() != "42" || ws[0].SessionRef != "T-alice" {
-		t.Fatalf("alice got %+v on %s", got, ws[0].SessionRef)
-	}
-	if n := countRecords(records(t, w.a.state, w.alice.id()), journal.TypeReceipt, got.MessageID); n != 1 {
-		t.Fatalf("alice's journal has %d receipt records for the reply, want 1", n)
-	}
-}
-
-func TestReplyNeverReachesNameReuser(t *testing.T) {
-	t.Skip("R4: completeReply keeps a remote key pending until R8 builds the remote branch of forwardReply; this test delivered through the spike's OnReply stand-in. R8 re-pins it as TestTwoHostReplyAcrossDisconnect.")
-	w := newWorld(t)
-	reuser := newNode(w.a, 13, "alice", "T-alice-2")
-	if reuser.id() == w.alice.id() {
-		t.Fatal("reuser has the original's agent_id")
-	}
-	t.Logf("original alice %s, second session %s (registered name %q)", w.alice.id(), reuser.id(), reuser.sh.Agent(reuser.id()).Agent().Name())
-	m := w.askAndRetry()
-	isErr, out := w.reply(m, "42")
-	if isErr || out["state"] != "accepted" {
-		t.Fatalf("reply %v %v", isErr, out)
-	}
-	if n := len(reuser.fc.Writes()); n != 0 {
-		t.Fatalf("second session got %d writes", n)
-	}
-	if n := len(w.alice.fc.Writes()); n != 1 {
-		t.Fatalf("original alice got %d writes, want 1", n)
-	}
-}
-
 func TestReplyToGoneAskerNotRedirected(t *testing.T) {
 	w := newWorld(t)
 	m := w.askAndRetry()
@@ -653,38 +611,5 @@ func TestReplyToGoneAskerNotRedirected(t *testing.T) {
 		if r.Type == journal.TypeObligation && r.InReplyTo == m.MessageID && r.State == journal.StateDelivered {
 			t.Fatalf("obligation journaled delivered: %+v", r)
 		}
-	}
-}
-
-func TestReplyPendingWhileAskerGatewayDown(t *testing.T) {
-	t.Skip("R4: completeReply keeps a remote key pending until R8 builds the remote branch of forwardReply; this test delivered through the spike's OnReply stand-in. R8 re-pins it as TestTwoHostReplyAcrossDisconnect.")
-	w := newWorld(t)
-	m := w.askAndRetry()
-	w.a.gw.kill()
-	isErr, out := w.reply(m, "42")
-	t.Logf("reply with A's gateway down: isErr=%v %v", isErr, out)
-	if out["state"] == "accepted" {
-		t.Fatalf("reply reported accepted with the gateway down: %v", out)
-	}
-	var replyID string
-	for _, r := range records(t, w.b.state, w.bob.id()) {
-		if r.Type == journal.TypeObligation && r.InReplyTo == m.MessageID {
-			replyID = r.MessageID
-		}
-	}
-	rs := records(t, w.b.state, w.bob.id())
-	if st := lastObligation(rs, replyID); st == journal.StateDelivered || st == "" {
-		t.Fatalf("obligation state %q while the gateway is down", st)
-	}
-	w.a.gw.start()
-	isErr, out = w.reply(m, "42")
-	if isErr || out["state"] != "accepted" {
-		t.Fatalf("retried reply %v %v", isErr, out)
-	}
-	if n := len(w.alice.fc.Writes()); n != 1 {
-		t.Fatalf("alice got %d writes, want 1", n)
-	}
-	if st := lastObligation(records(t, w.b.state, w.bob.id()), replyID); st != journal.StateDelivered {
-		t.Fatalf("obligation state %q after delivery", st)
 	}
 }

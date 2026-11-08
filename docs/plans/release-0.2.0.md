@@ -231,7 +231,7 @@ Reply, bob calls `reply(message_id, text)`:
 | Peer host down or asleep | `unreachable`, reason `timeout` or `unreachable`; `list_agents` `hosts` entry `reachable: false` | Nothing | Send again later; reply obligations retry (section 8) |
 | Peer gateway not running | `unreachable/gateway_not_running`, fast | Nothing | Start `remote serve` or `remote enable` there |
 | Connection drops after the gateway forwarded | `unknown/pending` | Message may be injected | No automatic resend of an inform; a reply retry is deduped by message_id |
-| This host unpaired the peer | `rejected/unpaired`: alias no longer in `peers.json` | — | Pair again |
+| This host unpaired the peer | `rejected/unpaired`: alias no longer in `peers.json`. A pending reply to that host is not rejected: it stays pending and ends `unreachable/reply_expired` at its limit (R8) | — | Pair again |
 | The peer unpaired this host | `rejected/unpaired_by_peer` (handshake refused) | Requests on already-open connections refused at the next request | Pair again |
 | Gateway restart mid-ask | Ask stays open on the asker; `GetTask` through the gateway resumes after restart (tasks are journal-backed) | Route keyed by (fingerprint, agent_id) in the journal survives | Nothing to do |
 | Peer address changed | `unreachable`; `list_agents` `hosts` entry `reachable: false`; `remote status` names the address it dialled | — | 0.2.0 assumes static IPs (operator ruling): run `remote config --bind` on the moved host, then pair and join again, which updates the address for the same fingerprint. Automatic address refresh by mDNS is 0.2.x |

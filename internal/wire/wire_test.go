@@ -58,6 +58,9 @@ type node struct {
 	w      *Wire
 	srv    *mcpserver.Server
 	cs     *mcp.ClientSession
+
+	shutdown func()
+	redo     func() *node
 }
 
 // newNode is one shim process serving the Codex thread T-<name>, with its
@@ -73,6 +76,19 @@ func newNode(t *testing.T, stateDir string, ppid int, name string) *node {
 // registering it; extra names further loaded threads that no shim serves.
 func newNodeIn(t *testing.T, stateDir, cfgDir string, ppid int, name, th string, extra ...string) *node {
 	t.Helper()
+	return newNodeOpt(t, nil, stateDir, cfgDir, ppid, name, th, extra...)
+}
+
+// restart stops n's shim and starts another on the same state dir and thread.
+func (n *node) restart() {
+	n.t.Helper()
+	n.shutdown()
+	m := n.redo()
+	*n = *m
+}
+
+func newNodeOpt(t *testing.T, mod func(*shim.Options), stateDir, cfgDir string, ppid int, name, th string, extra ...string) *node {
+	t.Helper()
 	fc := &fakeCodex{Fake: adapter.NewFake(adapter.Codex)}
 	fc.threads = []codex.LoadedThread{{Endpoint: "fake://" + th, ID: th, Name: name, Cwd: "/work/" + name, Status: "idle",
 		Session: adapter.SessionStatus{Loaded: true, Reachable: true}}}
@@ -85,7 +101,11 @@ func newNodeIn(t *testing.T, stateDir, cfgDir string, ppid int, name, th string,
 		t.Fatal(err)
 	}
 	hs := []harness.Harness{codex.NewHarness(codex.HarnessOptions{Adapter: fc, Directory: registry.New(stateDir)}), ch}
-	w, err := New(shim.Options{StateDir: stateDir, PPID: ppid, Harnesses: hs, RemoteConfigDir: cfgDir})
+	so := shim.Options{StateDir: stateDir, PPID: ppid, Harnesses: hs, RemoteConfigDir: cfgDir}
+	if mod != nil {
+		mod(&so)
+	}
+	w, err := New(so)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,15 +120,24 @@ func newNodeIn(t *testing.T, stateDir, cfgDir string, ppid int, name, th string,
 		t.Fatal(err)
 	}
 	n := &node{t: t, name: name, thread: th, codex: fc, w: w, srv: srv, cs: cs}
-	t.Cleanup(func() {
-		cs.Close()
-		if err := srv.Close(); err != nil {
-			t.Error(err)
-		}
-		if err := w.Shim().Close(); err != nil {
-			t.Error(err)
-		}
-	})
+	var once sync.Once
+	n.shutdown = func() {
+		once.Do(func() {
+			cs.Close()
+			if err := srv.Close(); err != nil {
+				t.Error(err)
+			}
+			if err := w.Shim().Close(); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	n.redo = func() *node {
+		m := newNodeOpt(t, mod, stateDir, cfgDir, ppid, name, th, extra...)
+		m.ok("receive_message", map[string]any{})
+		return m
+	}
+	t.Cleanup(n.shutdown)
 	return n
 }
 
