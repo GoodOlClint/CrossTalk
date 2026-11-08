@@ -87,7 +87,7 @@ func (h *rhost) serve() {
 	fw := remote.NewForwarder(h.state, h.registeredURL)
 	mux := remote.NewMux(fw, shim.RemoteSource(h.nodes[0].srv))
 	h.gw = remote.NewGateway(remote.GatewayConfig{
-		StateDir: h.state, Host: h.host, Bind: "127.0.0.1", Port: 0, Peers: h.peers, Limits: remote.DefaultLimits(),
+		StateDir: h.state, Host: h.host, Bind: "127.0.0.1", Port: 0, Peers: h.peers, Limits: testLimits(),
 		Log: func(string, ...any) {},
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			h.mu.Lock()
@@ -527,9 +527,7 @@ func TestRemoteSendStateMapping(t *testing.T) {
 		if str(out, "state") != "unknown" || str(out, "reason") != "pending" {
 			t.Errorf("%v", out)
 		}
-		if len(bob.codex.Writes()) != 1 {
-			t.Errorf("injects %d", len(bob.codex.Writes()))
-		}
+		waitFor(t, "the forwarded message to be injected", func() bool { return len(bob.codex.Writes()) == 1 })
 	})
 	t.Run("rejected by the gateway", func(t *testing.T) {
 		_, h2, alice, bob := twoHosts(t)
@@ -561,6 +559,7 @@ func TestRemoteSendStateMapping(t *testing.T) {
 	})
 	t.Run("unreachable tls_pin_mismatch", func(t *testing.T) {
 		h1, h2, alice, _ := twoHosts(t)
+		h1.peers.Remove("lab")
 		if err := h1.peers.Upsert(remote.Peer{Alias: "lab", Address: h2.addr(), Fingerprint: strings.Repeat("ab", 32)}); err != nil {
 			t.Fatal(err)
 		}
@@ -583,6 +582,7 @@ func TestRemoteSendStateMapping(t *testing.T) {
 	t.Run("unreachable timeout", func(t *testing.T) {
 		h1, _, alice, _ := twoHosts(t)
 		stalled := stallPeer(t)
+		h1.peers.Remove("lab")
 		if err := h1.peers.Upsert(remote.Peer{Alias: "lab", Address: stalled.Address, Fingerprint: stalled.Fingerprint}); err != nil {
 			t.Fatal(err)
 		}
@@ -620,4 +620,10 @@ func stallPeer(t *testing.T) remote.Peer {
 	}()
 	t.Cleanup(func() { close(stop); ln.Close() })
 	return remote.Peer{Address: ln.Addr().String(), Fingerprint: h.Fingerprint}
+}
+
+func testLimits() remote.Limits {
+	l := remote.DefaultLimits()
+	l.MaxPeerPerMinute = 100000
+	return l
 }

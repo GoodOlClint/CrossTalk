@@ -27,6 +27,8 @@ type Client struct {
 	// HTTP must have no Timeout: a default-wait SendMessage has no deadline
 	// other than ctx. nil means such a client.
 	HTTP *http.Client
+	// Headers are sent on every request in addition to the bearer token.
+	Headers http.Header
 }
 
 // Task is a task as a CrossTalk client sees it.
@@ -51,7 +53,13 @@ func (c *Client) connect(ctx context.Context, url, bearerToken string) (*a2aclie
 	if err != nil {
 		return nil, ctx, err
 	}
-	p := a2aclient.ServiceParams{"Authorization": {"Bearer " + bearerToken}}
+	p := a2aclient.ServiceParams{}
+	if bearerToken != "" {
+		p["Authorization"] = []string{"Bearer " + bearerToken}
+	}
+	for k, v := range c.Headers {
+		p[k] = v
+	}
 	if c.Name != "" {
 		p[SenderHeader] = []string{c.Name}
 	}

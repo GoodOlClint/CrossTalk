@@ -226,8 +226,11 @@ func (st *AgentState) deliver(ctx context.Context, m msg.Message) mcpserver.Resu
 	finish := func(to string, state adapter.State, reason string) mcpserver.Result {
 		st.outbound(m, to, state, reason, false)
 		res.State, res.Reason = state, reason
-		if reason == ReasonAmbiguousName {
+		switch reason {
+		case ReasonAmbiguousName:
 			res.Hint = hintAmbiguousName
+		case ReasonNoSuchAgent:
+			res.Hint = st.bareNameHint(ctx, m.To)
 		}
 		return res
 	}
@@ -241,9 +244,23 @@ func (st *AgentState) deliver(ctx context.Context, m msg.Message) mcpserver.Resu
 		}
 		return out, err
 	}
-	tgt, err := mcpserver.ResolveTarget(ctx, st.shim.reg, discover, m.To)
+	tgt, err := mcpserver.ResolveTarget(ctx, st.shim.reg, discover, st.shim.IsPairedAlias, m.To)
 	if err != nil {
 		return finish(m.To, adapter.Unreachable, err.Error())
+	}
+	local := tgt.Registered || len(tgt.Native) > 0
+	switch {
+	case tgt.Remote != nil && !local:
+		return st.deliverRemote(ctx, m, tgt.Remote, finish)
+	case tgt.Remote != nil:
+		if rid, ok := st.remoteCollision(ctx, tgt.Remote); ok {
+			lid := st.localAgentID(tgt)
+			res := finish(m.To, adapter.Rejected, ReasonAmbiguousName)
+			res.Hint = fmt.Sprintf(hintAmbiguousRemoteName, m.To, lid, tgt.Remote.Alias, lid, rid, tgt.Remote.Alias)
+			return res
+		}
+	case tgt.UnknownAlias != "":
+		return finish(m.To, adapter.Rejected, ReasonUnknownAlias)
 	}
 	if d := tgt.Desc; tgt.Registered {
 		if d.AgentID == st.agent.ID() {

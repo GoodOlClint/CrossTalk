@@ -85,28 +85,9 @@ func ProbePeer(h Host, p Peer) string {
 		return probeClass(err)
 	}
 	defer raw.Close()
-	mismatch := false
-	c := tls.Client(raw, &tls.Config{
-		Certificates:       []tls.Certificate{h.Certificate},
-		MinVersion:         tls.VersionTLS13,
-		MaxVersion:         tls.VersionTLS13,
-		InsecureSkipVerify: true,
-		VerifyConnection: func(cs tls.ConnectionState) error {
-			if len(cs.PeerCertificates) == 0 || Fingerprint(cs.PeerCertificates[0]) != p.Fingerprint {
-				mismatch = true
-				return errors.New("peer certificate does not match the pinned fingerprint")
-			}
-			return nil
-		},
-	})
+	c := tls.Client(raw, pinnedTLSConfig(h, p, nil))
 	raw.SetDeadline(deadline)
 	if err := c.HandshakeContext(ctx); err != nil {
-		if mismatch {
-			return "tls_pin_mismatch"
-		}
-		if isAlert(err) {
-			return "unpaired_by_peer"
-		}
 		return probeClass(err)
 	}
 	// TLS 1.3 finishes the client side before the server judges our
@@ -122,20 +103,18 @@ func ProbePeer(h Host, p Peer) string {
 		if errors.As(err, &ne) && ne.Timeout() {
 			return "ok"
 		}
-		if isAlert(err) {
-			return "unpaired_by_peer"
-		}
-		return "unreachable"
+		return probeClass(err)
 	}
 	return "ok"
 }
 
+// probeClass is Classify with a refused connection reported as unreachable:
+// the probe has no gateway_not_running state.
 func probeClass(err error) string {
-	var ne net.Error
-	if errors.As(err, &ne) && ne.Timeout() || errors.Is(err, context.DeadlineExceeded) {
-		return "timeout"
+	if r := Classify(err); r != ReasonGatewayNotRunning {
+		return r
 	}
-	return "unreachable"
+	return ReasonUnreachable
 }
 
 // isAlert reports whether err is a TLS alert from the peer that refuses our
@@ -148,7 +127,7 @@ func isAlert(err error) bool {
 	}
 	switch strings.TrimPrefix(oe.Err.Error(), "tls: ") {
 	case "bad certificate", "unsupported certificate", "revoked certificate", "expired certificate",
-		"unknown certificate", "unknown certificate authority", "certificate required", "handshake failure", "access denied":
+		"unknown certificate", "unknown certificate authority", "certificate required", "access denied":
 		return true
 	}
 	return false

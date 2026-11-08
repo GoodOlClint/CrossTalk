@@ -37,9 +37,12 @@ func (s *Server) addClaimTools() {
 }
 
 func (s *Server) claimTarget(ctx context.Context, a *Agent, name string) (registry.Descriptor, error) {
-	r, err := ResolveTarget(ctx, s.reg, s.backend.Discover, name)
+	r, err := ResolveTarget(ctx, s.reg, s.backend.Discover, aliasChecker(s.backend), name)
 	if err != nil {
 		return registry.Descriptor{}, err
+	}
+	if r.Remote != nil && !r.Registered {
+		return registry.Descriptor{}, &Error{Code: CodeRejected, Reason: "remote_kind", Hint: HintRemoteKind}
 	}
 	if !r.Registered {
 		return registry.Descriptor{}, rejected("no_such_agent")

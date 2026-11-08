@@ -38,6 +38,9 @@ Tool names are bare here; your harness may prefix them.
 - `native_inform_only`: that session has no CrossTalk binding. `send_message` still reaches a reachable one; retry `ask` after it binds. If CrossTalk is not installed there, tell the user.
 - `no_such_agent`: run `list_agents` again.
 - `ambiguous_name`: use `agent_id`.
+- `unknown_alias`: no paired host has that name after the `@`; `list_agents` shows the paired hosts.
+- `remote_native_unsupported`: that session on a paired host has no CrossTalk; pick a row with `crosstalk: true`.
+- `unpaired_by_peer`, `tls_pin_mismatch`, `gateway_not_running`: a paired host refuses this one, is not the host that was paired, or has no gateway running; tell your user.
 - `self`: pick another row.
 - `agent_held`: tell the user a second CrossTalk server may be installed.
 - `ask_closed`, `already_replied`, `no_such_message`: `send_message` to the sender.

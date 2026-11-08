@@ -24,16 +24,19 @@ type fetched struct {
 	done bool
 }
 
+func (s *Shim) remoteDir() (string, error) {
+	if s.opt.RemoteConfigDir != "" {
+		return s.opt.RemoteConfigDir, nil
+	}
+	return remote.ConfigDir()
+}
+
 // ListRemote asks every paired host for its listing, in parallel and under
 // one shared deadline, and returns what arrived. Nothing is cached.
 func (s *Shim) ListRemote(ctx context.Context) mcpserver.RemoteListing {
-	dir := s.opt.RemoteConfigDir
-	if dir == "" {
-		d, err := remote.ConfigDir()
-		if err != nil {
-			return mcpserver.RemoteListing{}
-		}
-		dir = d
+	dir, err := s.remoteDir()
+	if err != nil {
+		return mcpserver.RemoteListing{}
 	}
 	peers, err := remote.NewPeers(dir).List()
 	if err != nil {
