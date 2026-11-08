@@ -273,7 +273,7 @@ func (st *AgentState) deliver(ctx context.Context, m msg.Message) mcpserver.Resu
 		case err != nil:
 			state, reason := listingFailure(err)
 			res := finish(m.To, state, reason)
-			res.Hint = fmt.Sprintf(hintCollisionUnknown, m.To, tgt.Remote.Alias, tgt.Remote.Alias, lid)
+			res.Hint = joinHint(stallHint(err), fmt.Sprintf(hintCollisionUnknown, m.To, tgt.Remote.Alias, tgt.Remote.Alias, lid))
 			return res
 		case hit:
 			res := finish(m.To, adapter.Rejected, ReasonAmbiguousName)

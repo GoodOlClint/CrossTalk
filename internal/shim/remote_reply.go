@@ -98,8 +98,9 @@ func (st *AgentState) forwardRemoteReply(ctx context.Context, orig, r msg.Messag
 		res.State, res.Reason = adapter.State(o.State), o.Reason
 		return res
 	}
+	var stall string
 	pending := func(state adapter.State) mcpserver.Result {
-		res.State, res.Reason = state, ReasonRemoteReplyPending
+		res.State, res.Reason, res.Hint = state, ReasonRemoteReplyPending, stall
 		st.armReplyRetry(r.MessageID)
 		return res
 	}
@@ -134,6 +135,7 @@ func (st *AgentState) forwardRemoteReply(ctx context.Context, orig, r msg.Messag
 	if err != nil {
 		reason = err.Error()
 	}
+	stall = stallHint(err)
 	if !state.Injectable() {
 		state = adapter.Unknown
 	}

@@ -464,3 +464,32 @@ func TestUnnamedFallbackShortID(t *testing.T) {
 		}
 	}
 }
+
+func TestListAgentsHandshakeStallCarriesHint(t *testing.T) {
+	h1 := newRHost(t, 4001, "alice")
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop := make(chan struct{})
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			go func() { <-stop; c.Close() }()
+		}
+	}()
+	t.Cleanup(func() { close(stop); l.Close() })
+	addr := l.Addr().String()
+	if err := h1.peers.Upsert(remote.Peer{Alias: "slow", Address: addr, Fingerprint: strings.Repeat("ab", 32)}); err != nil {
+		t.Fatal(err)
+	}
+	out := h1.n.ok(nil, "list_agents", map[string]any{})
+	he := hostEntry(t, out, "slow")
+	want := "handshake timeout: no TLS handshake completed with " + addr + "; a host firewall or network filter (for example an application firewall such as Little Snitch) on either host may be holding the connection"
+	if he == nil || he["error"] != "timeout" || he["hint"] != want {
+		t.Fatalf("hosts entry %v, want error timeout and hint %q", he, want)
+	}
+}

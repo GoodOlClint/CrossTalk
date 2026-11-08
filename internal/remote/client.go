@@ -119,8 +119,26 @@ func (c *Client) httpClient() (*http.Client, *http.Transport) {
 // context.
 func (c *Client) HTTPClient() *http.Client {
 	hc, tr := c.httpClient()
-	hc.Transport = capBody{tr}
+	hc.Transport = capBody{stallWrap{tr, c.peer.Address}}
 	return hc
+}
+
+// stallWrap turns a request that failed in the TLS handshake into the same
+// *Error that Do returns, carrying a *HandshakeError.
+type stallWrap struct {
+	http.RoundTripper
+	addr string
+}
+
+func (s stallWrap) RoundTrip(r *http.Request) (*http.Response, error) {
+	ctx, stalled := traceHandshake(r.Context(), s.addr)
+	resp, err := s.RoundTripper.RoundTrip(r.WithContext(ctx))
+	if err != nil {
+		if he := stalled(err); he != nil {
+			return nil, &Error{Reason: ReasonTimeout, Err: he}
+		}
+	}
+	return resp, err
 }
 
 // capBody limits every response body to MaxResponse bytes, so a peer cannot
