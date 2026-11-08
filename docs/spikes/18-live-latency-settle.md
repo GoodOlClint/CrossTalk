@@ -28,8 +28,9 @@ Series D is **not** a pass for the S5 line. It measures the cost of the producti
 ## What the measurement supports
 
 - On a zero-latency path the whole remote send, including a fresh TLS handshake per call (session tickets are disabled by design) and name resolution, costs about 0.11 s. The settle poll ends at the first `GetTask` that leaves `submitted`, so it does not wait out its bound when the receiver is quick.
-- That puts about 1.9 s of the 2 s local bound, and about 4.9 s of the 5 s `RemoteSettle`, to the network and to the receiving harness. On a real LAN with a sleeping Wi-Fi radio the first packet can cost hundreds of milliseconds; only series A can say whether 2 s holds.
-- Recommendation for R7: **keep `RemoteSettle` at 5 s**. Do not lower it on this evidence. Revisit after series A: if its p90 is under 1 s the bound could drop to 3 s, and if any run in A ends `unknown/pending` the bound is too small for Wi-Fi.
+- `RemoteSettle` bounds only the `GetTask` poll, which starts after name resolution and the `SendMessage` post. The recorded `ms` covers all three phases, so these runs cannot say how much of the 5 s poll budget a send uses; they give an upper bound for the poll of about 0.11 s on this path. Phase timings (resolve, post, poll) would be needed for a budget figure, and the driver does not record them.
+- Only series A can say whether a Wi-Fi path needs more. A run that ends `unknown/pending` does not by itself show the bound is too short: `sendFailure` also returns pending when a connection drops after the request was written, and polling can stay pending when the gateway is unavailable or the caller cancels. Series A must record the error reason per run and count only a late `accepted` (re-checked with `GetTask` after the bound) as evidence for a longer bound.
+- Recommendation for R7: **keep `RemoteSettle` at 5 s**. This evidence neither supports lowering nor raising it.
 
 ## Surprises
 
