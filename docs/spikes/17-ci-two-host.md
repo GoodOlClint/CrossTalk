@@ -58,12 +58,12 @@ Each whole job (checkout to artifact upload) took 39 to 52 s in the first three 
 
 - **Static addresses work.** `docker run --ip` on a user-defined network with an explicit subnet gave stable addresses on the runner, so the plan's static-IP rule needs no workaround. Compose service names were not tried.
 - **No production change was needed** to pair through the real CLI in containers. `remote serve` needs only a descriptor in the shared state dir to forward to an agent, so a Fake-backed shim in the same `HOME` is enough; `remote serve` builds its own shim with the real Claude and Codex harnesses and did not mind having neither installed.
-- **Startup waits are short**: every run got past the readiness polls (0.2 s interval, 30 s limit) and the whole scenario, including pairing, took 9 to 19 s, so no wait came near the limit. Per-wait times were not recorded.
+- **Startup waits are short**: every run got past the readiness polls (0.2 s interval, 30 s limit) and the whole scenario, including pairing, took 9 to 21 s, so no wait came near the limit. Per-wait times were not recorded.
 - **Image build time varies 4x** (3.3, 6.7, 13.2 s) for a two-file `COPY` image, almost all of it pulling the base image. R10 should build with the runner's cache or pull a pinned base once.
 - **Token on stdout, hint on stderr**: `pair` prints the token as the first stdout line, so the script reads the first line of its output file; `join` reads the token from stdin, so a pipe works with no tty.
 - **What the times are**: elapsed time from pair start to the moment the script observed the delivery. Polling (0.2 s sleep between failed checks) can add delay, so they are observed figures, not a fixed resolution. The ask and reply time also includes the inform leg and its 3 s settle wait that run first, so it overstates the reply path alone; that is the conservative direction for the pass line.
 - **`actions/upload-artifact@v5` warns** that it targets Node 20 and is forced to Node 24. `ci.yml` already uses `checkout@v7` and `setup-go@v7`, so the version floor in the kickoff is behind; R10 should pick the current majors when it writes the job.
-- **Flakiness:** none in 3 CI runs and 2 local runs. Three runs is too few to bound it.
+- **Flakiness:** none in 7 CI runs and 3 local runs. That is too few to bound it.
 - **Reply leg**: needs R8 in the build. It is on by default now, and `run.sh` fails the job at 180 s or more. The ask and reply figure is about 3.4 s above the inform figure; `run.sh` sleeps 3 s after the inform before starting the ask, so the ask and reply itself took roughly 0.4 s.
 
 ## Gates
