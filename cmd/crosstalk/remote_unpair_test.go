@@ -55,7 +55,7 @@ func TestUnpairKnownAliasRemovesOnlyThatPeer(t *testing.T) {
 	if code != 0 || errs != "" {
 		t.Fatalf("exit %d stderr %q", code, errs)
 	}
-	if want := "unpaired beta; run crosstalk remote unpair desk on beta too\n"; out != want {
+	if want := unpairReminder("beta"); out != want {
 		t.Fatalf("stdout %q, want %q", out, want)
 	}
 	after, err := remote.NewPeers(dir).List()
@@ -110,7 +110,7 @@ func TestUnpairWithoutRemoteConfigStillRemoves(t *testing.T) {
 	if code != 0 || errs != "" {
 		t.Fatalf("exit %d stderr %q", code, errs)
 	}
-	if want := "unpaired alpha; run crosstalk remote unpair <this alias> on alpha too\n"; out != want {
+	if want := unpairReminder("alpha"); out != want {
 		t.Fatalf("stdout %q, want %q", out, want)
 	}
 	if ps, _ := remote.NewPeers(dir).List(); len(ps) != 2 {
@@ -223,5 +223,68 @@ func TestUnpairLeadingDashAlias(t *testing.T) {
 	}
 	if ps, _ := remote.NewPeers(dir).List(); len(ps) != 3 {
 		t.Fatalf("%d peers left, want 3", len(ps))
+	}
+}
+
+func unpairReminder(alias string) string {
+	return "unpaired " + alias + "; on " + alias + ", unpair the name that host lists for this host (see crosstalk remote status there)\n"
+}
+
+func onlyBetaEnv(t *testing.T) string {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	dir := filepath.Join(home, ".config", "crosstalk")
+	if err := remote.NewPeers(dir).Upsert(remote.Peer{Alias: "beta", Address: "192.0.2.1:7745", Fingerprint: fp(fpB)}); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+func TestUnpairAliasMatchIsExact(t *testing.T) {
+	for _, alias := range []string{"Beta", "BETA", "bet", "beta ", "b", "*"} {
+		dir := onlyBetaEnv(t)
+		before := peersJSON(t, dir)
+		code, out, errs := remoteRun(t, false, "unpair", alias)
+		if code != 1 || out != "" || !strings.Contains(errs, "no paired host") {
+			t.Errorf("unpair %q: exit %d stdout %q stderr %q", alias, code, out, errs)
+		}
+		if string(peersJSON(t, dir)) != string(before) {
+			t.Errorf("unpair %q changed peers.json", alias)
+		}
+	}
+}
+
+func TestUnpairEmptyAliasExits1AndChangesNothing(t *testing.T) {
+	dir := onlyBetaEnv(t)
+	before := peersJSON(t, dir)
+	code, out, errs := remoteRun(t, false, "unpair", "")
+	if code != 1 || out != "" || errs == "" {
+		t.Fatalf("exit %d stdout %q stderr %q", code, out, errs)
+	}
+	if string(peersJSON(t, dir)) != string(before) {
+		t.Error("an empty alias changed peers.json")
+	}
+}
+
+func TestUnpairReplacesPeersFileByRename(t *testing.T) {
+	dir := unpairEnv(t, false)
+	p := filepath.Join(dir, "peers.json")
+	before, err := os.Stat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code, _, errs := remoteRun(t, false, "unpair", "beta"); code != 0 {
+		t.Fatalf("exit %d %s", code, errs)
+	}
+	after, err := os.Stat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if os.SameFile(before, after) {
+		t.Error("peers.json was rewritten in place, not replaced by rename")
+	}
+	if tmp, _ := filepath.Glob(filepath.Join(dir, "peers.json.tmp*")); len(tmp) != 0 {
+		t.Errorf("temp files left: %v", tmp)
 	}
 }
