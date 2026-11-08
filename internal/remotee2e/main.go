@@ -138,10 +138,15 @@ func runAgent(name string) error {
 			From      string `json:"from"`
 			Kind      string `json:"kind"`
 			Text      string `json:"text"`
+			InReplyTo string `json:"in_reply_to"`
 		}
 		rows := []row{}
 		for _, c := range fc.Writes() {
-			rows = append(rows, row{c.Message.MessageID, c.Message.From, string(c.Message.Kind), c.Message.Parts[0].Text})
+			r := row{MessageID: c.Message.MessageID, From: c.Message.From, Kind: string(c.Message.Kind), Text: c.Message.Parts[0].Text}
+			if c.Message.InReplyTo != nil {
+				r.InReplyTo = *c.Message.InReplyTo
+			}
+			rows = append(rows, r)
 		}
 		json.NewEncoder(rw).Encode(rows)
 	})

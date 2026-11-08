@@ -95,8 +95,8 @@ func TestCIJobGatedAndNotRequired(t *testing.T) {
 			t.Errorf("remote-e2e job lacks %q", want)
 		}
 	}
-	if strings.Contains(job, "scope == 'docs'") && !strings.Contains(job, "scope != 'docs'") {
-		t.Error("remote-e2e job does not skip work for docs scope")
+	if n := strings.Count(job, "if: steps.scope.outputs.scope != 'docs'") + strings.Count(job, "&& steps.scope.outputs.scope != 'docs'"); n < 5 {
+		t.Errorf("remote-e2e job guards %d steps against docs scope, want setup-go, build, scenario, broken-pairing and upload (5)", n)
 	}
 	if _, err := os.Stat(filepath.Join(root(t), ".github/workflows/spike-s6.yml")); err == nil {
 		t.Error("spike-s6.yml still exists")
