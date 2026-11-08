@@ -51,6 +51,15 @@ func (w *Wire) SendRemote(ctx context.Context, from registry.Descriptor, host re
 	return id, state, err
 }
 
+// reasonErr's text is the reason code; Unwrap keeps the cause for the shim.
+type reasonErr struct {
+	reason string
+	cause  error
+}
+
+func (e *reasonErr) Error() string { return e.reason }
+func (e *reasonErr) Unwrap() error { return e.cause }
+
 func safeReason(err error) string {
 	if r := err.Error(); reasonRE.MatchString(r) {
 		return r
@@ -66,6 +75,10 @@ func sendFailure(err error, state adapter.State, wrote bool) (adapter.State, err
 	var ae *sdk.Error
 	if errors.As(err, &ae) {
 		return state, errors.New(safeReason(errors.New(remoteReason(err))))
+	}
+	var he *remote.HandshakeError
+	if errors.As(err, &he) {
+		return adapter.Unreachable, &reasonErr{remote.ReasonTimeout, he}
 	}
 	switch r := remote.Classify(err); r {
 	case remote.ReasonUnpairedByPeer:

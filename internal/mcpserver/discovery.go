@@ -43,6 +43,7 @@ type HostEntry struct {
 	Reachable bool   `json:"reachable"`
 	Agents    int    `json:"agents"`
 	Error     string `json:"error,omitempty"`
+	Hint      string `json:"hint,omitempty"`
 	Warning   string `json:"warning,omitempty"`
 }
 

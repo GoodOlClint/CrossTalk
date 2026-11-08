@@ -109,6 +109,16 @@ func pickRemote(rows []remote.AgentRow, ref string) (remote.AgentRow, string) {
 	return remote.AgentRow{}, ReasonNoSuchAgent
 }
 
+// stallHint is the handshake-stall text for err, built from local data only,
+// or "" when err is not a stalled handshake.
+func stallHint(err error) string {
+	var he *remote.HandshakeError
+	if errors.As(err, &he) {
+		return he.Error()
+	}
+	return ""
+}
+
 func listingFailure(err error) (adapter.State, string) {
 	var re *remote.Error
 	if errors.As(err, &re) {
@@ -157,7 +167,9 @@ func (st *AgentState) deliverRemote(ctx context.Context, m msg.Message, rr *mcps
 	host, peer, rows, err := st.shim.peerRows(ctx, rr.Alias)
 	if err != nil {
 		state, reason := listingFailure(err)
-		return finish(m.To, state, reason)
+		res := finish(m.To, state, reason)
+		res.Hint = stallHint(err)
+		return res
 	}
 	row, reason := pickRemote(rows, rr.Ref)
 	switch reason {
@@ -189,7 +201,7 @@ func (st *AgentState) deliverRemote(ctx context.Context, m msg.Message, rr *mcps
 	}
 	st.outboundTask(m, key, state, reason, false, taskID)
 	res.State, res.Reason = state, reason
-	res.Hint = st.countSend(key, state)
+	res.Hint = joinHint(stallHint(err), st.countSend(key, state))
 	return res
 }
 

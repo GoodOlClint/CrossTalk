@@ -96,6 +96,7 @@ func (s *Shim) ListRemote(ctx context.Context) mcpserver.RemoteListing {
 			if errors.As(res[i].err, &re) {
 				e.Error = re.Reason
 			}
+			e.Hint = stallHint(res[i].err)
 		default:
 			e.Reachable, e.Agents = true, len(res[i].rows)
 			for _, r := range res[i].rows {
