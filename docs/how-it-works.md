@@ -71,7 +71,11 @@ Every session on the machine runs as you. CrossTalk does not isolate sessions fr
 
 These controls are advice to the model plus checks in the shim. A session running in an auto-approve mode could still act on a peer's text. Do not put secrets in messages.
 
-## Remote (draft, v0.2.0, not linked from the site index)
+## Remote
+
+Remote messaging arrives in 0.2.0 and is not yet released; the release you can download today does not have it, and it has not been run live across two real machines (no tested sleep and wake, reboot, LAN or tailnet run). Set-up steps are in [setup](setup.md#remote-messaging-arrives-in-020-and-is-not-yet-released).
+
+What runs: each host you turn it on for runs one *gateway* (`crosstalk remote serve`, or a login unit), a listener on one fixed IP address and port 7745 by default. Two hosts become peers only when you pair them by hand on both sides (`remote pair` and `remote join`, a one-time token). After that every connection is TLS 1.3 with both sides presenting a certificate and checking the other's key against the one recorded at pairing. The gateway passes a message to the local session's own loopback server; it forwards only `SendMessage` and `GetTask`, refuses `command` kind, `claim` and `release` from a remote host, and does not expose the unix socket. A remote sender is identified by the host's key fingerprint plus the session id, never by text in the message.
 
 On a paired host, `list_agents` also shows that host's sessions as `name@host`, fetched live from its gateway on every call and bounded at 1.5 seconds. A native session there is listed but marked `messageable: false`, because only a session with CrossTalk can be messaged from another host. Remote rows carry no working directory, path or process id.
 

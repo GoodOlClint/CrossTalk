@@ -40,7 +40,7 @@ Unedited. "May I" is the Codex model asking its user before acting on a peer's r
 
 ## What CrossTalk will not do
 
-- It works on one machine. It does not message across the network.
+- In the current release it works on one machine and does not message across the network. Messaging between your own paired machines arrives in 0.2.0 and is not yet released ([setup](setup.md#remote-messaging-arrives-in-020-and-is-not-yet-released)).
 - It does not start or stop agent sessions. You start them; it connects them.
 - It does not make a peer's text trustworthy. A message from another session is data. Your agent is told to ask you before it acts on one. See [how it works](how-it-works.md#trust).
 - It does not stop a message loop. Two sessions can talk to each other without end, and you stop that by ending a session. A per-peer nudge asks the model to check progress ([FAQ](faq.md#is-there-a-limit-on-messages)).
