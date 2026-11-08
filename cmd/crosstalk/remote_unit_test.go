@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/user"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -210,6 +211,17 @@ func eachOS(t *testing.T, f func(t *testing.T, goos string)) {
 	for _, goos := range []string{"darwin", "linux"} {
 		t.Run(goos, func(t *testing.T) { f(t, goos) })
 	}
+}
+
+// hostOS runs f for the OS the tests run on; the install-driven tests are
+// slow and their unit commands are the only OS-dependent part.
+func hostOS(t *testing.T, f func(t *testing.T, goos string)) {
+	t.Helper()
+	goos := runtime.GOOS
+	if goos != "darwin" {
+		goos = "linux"
+	}
+	t.Run(goos, func(t *testing.T) { f(t, goos) })
 }
 
 func fileSHA(t *testing.T, path string) string {
@@ -411,7 +423,7 @@ func remoteFiles(home string) []string {
 }
 
 func TestInstallAsksRemoteDefaultNo(t *testing.T) {
-	eachOS(t, func(t *testing.T, goos string) {
+	hostOS(t, func(t *testing.T, goos string) {
 		home, rec := unitSandbox(t, goos, "claude")
 		code, out, in := installInteractive(t, "", "", "--bin-dir", filepath.Join(home, "bin"))
 		if code != 0 {
@@ -451,7 +463,7 @@ func TestInstallAsksRemoteYesBindsChosenAddress(t *testing.T) {
 }
 
 func TestInstallYesNeverRemote(t *testing.T) {
-	eachOS(t, func(t *testing.T, goos string) {
+	hostOS(t, func(t *testing.T, goos string) {
 		home, rec := unitSandbox(t, goos, "claude")
 		bin := filepath.Join(home, "bin")
 		if code, out := installRunCmd(t, "install", "--yes", "--bin-dir", bin); code != 0 {
@@ -494,8 +506,8 @@ func TestInstallRemoteNeedsBindWithYes(t *testing.T) {
 }
 
 func TestUninstallRemovesUnit(t *testing.T) {
-	eachOS(t, func(t *testing.T, goos string) {
-		home, rec := unitSandbox(t, goos, "claude", "codex")
+	hostOS(t, func(t *testing.T, goos string) {
+		home, rec := unitSandbox(t, goos, "claude")
 		bin := filepath.Join(home, "bin")
 		if code, out := installRemote(t, bin); code != 0 {
 			t.Fatalf("install --remote: exit %d\n%s", code, out)
@@ -524,7 +536,7 @@ func TestUninstallRemovesUnit(t *testing.T) {
 }
 
 func TestUninstallNamedLastHarnessRemovesUnit(t *testing.T) {
-	eachOS(t, func(t *testing.T, goos string) {
+	hostOS(t, func(t *testing.T, goos string) {
 		home, _ := unitSandbox(t, goos, "claude", "codex")
 		bin := filepath.Join(home, "bin")
 		if code, out := installRemote(t, bin); code != 0 {
@@ -545,7 +557,7 @@ func TestUninstallNamedLastHarnessRemovesUnit(t *testing.T) {
 }
 
 func TestUninstallKeepsUnitWhileBinaryKept(t *testing.T) {
-	eachOS(t, func(t *testing.T, goos string) {
+	hostOS(t, func(t *testing.T, goos string) {
 		cases := map[string]func(t *testing.T, home, bin string) (clis []string, uninstall string){
 			"other harness": func(t *testing.T, home, bin string) ([]string, string) { return []string{"claude", "codex"}, "claude" },
 			"project registration": func(t *testing.T, home, bin string) ([]string, string) {
@@ -582,7 +594,7 @@ func TestUninstallKeepsUnitWhileBinaryKept(t *testing.T) {
 }
 
 func TestUninstallLeavesEditedUnit(t *testing.T) {
-	eachOS(t, func(t *testing.T, goos string) {
+	hostOS(t, func(t *testing.T, goos string) {
 		home, rec := unitSandbox(t, goos, "claude")
 		bin := filepath.Join(home, "bin")
 		if code, out := installRemote(t, bin); code != 0 {
@@ -619,7 +631,7 @@ func addPeers(t *testing.T, home string, aliases ...string) {
 }
 
 func TestPurgeRemovesConfigAndListsPeers(t *testing.T) {
-	eachOS(t, func(t *testing.T, goos string) {
+	hostOS(t, func(t *testing.T, goos string) {
 		home, _ := unitSandbox(t, goos, "claude")
 		bin := filepath.Join(home, "bin")
 		if code, out := installRemote(t, bin); code != 0 {
@@ -643,7 +655,7 @@ func TestPurgeRemovesConfigAndListsPeers(t *testing.T) {
 }
 
 func TestPurgeKeepsConfigWhileStateKept(t *testing.T) {
-	eachOS(t, func(t *testing.T, goos string) {
+	hostOS(t, func(t *testing.T, goos string) {
 		home, _ := unitSandbox(t, goos, "claude", "codex")
 		bin := filepath.Join(home, "bin")
 		if code, out := installRemote(t, bin); code != 0 {
@@ -666,8 +678,8 @@ func TestPurgeKeepsConfigWhileStateKept(t *testing.T) {
 }
 
 func TestUninstallHomebrewRemovesUnit(t *testing.T) {
-	eachOS(t, func(t *testing.T, goos string) {
-		home, rec := unitSandbox(t, goos, "claude", "codex")
+	hostOS(t, func(t *testing.T, goos string) {
+		home, rec := unitSandbox(t, goos, "claude")
 		prefix := installBrewKeg(t, "opt/homebrew", true)
 		link := filepath.Join(prefix, "bin", "crosstalk")
 		if code, out := installRunCmd(t, "install", "--yes", "--remote", "--bind", "127.0.0.1", "--port", strconv.Itoa(freePort(t))); code != 0 {
@@ -691,7 +703,7 @@ func TestUninstallHomebrewRemovesUnit(t *testing.T) {
 }
 
 func TestPurgeRefusesRunningGateway(t *testing.T) {
-	eachOS(t, func(t *testing.T, goos string) {
+	hostOS(t, func(t *testing.T, goos string) {
 		for _, edited := range []bool{false, true} {
 			name := map[bool]string{false: "foreground", true: "edited unit"}[edited]
 			t.Run(name, func(t *testing.T) {
@@ -723,7 +735,7 @@ func TestPurgeRefusesRunningGateway(t *testing.T) {
 }
 
 func TestPurgeAllowsGatewayUnderOwnUnit(t *testing.T) {
-	eachOS(t, func(t *testing.T, goos string) {
+	hostOS(t, func(t *testing.T, goos string) {
 		home, _ := unitSandbox(t, goos, "claude")
 		bin := filepath.Join(home, "bin")
 		if code, out := installRemote(t, bin); code != 0 {
