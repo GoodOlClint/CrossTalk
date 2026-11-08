@@ -38,6 +38,8 @@ type Limits struct {
 	MaxPinnedConns, MaxPeerConcurrent, MaxPeerPerMinute                     int
 	MaxHandshaking, MaxUnenrolled                                           int
 	UnenrolledLife, PendingPoll, BindRetry, BindGiveUp                      time.Duration
+	StallWindow                                                             time.Duration
+	MaxStallAddrs                                                           int
 	// PairInterval is the gateway-wide gap between pairing attempts; negative disables it.
 	PairInterval time.Duration
 }
@@ -52,6 +54,7 @@ func DefaultLimits() Limits {
 		UnenrolledLife: 15 * time.Second, PendingPoll: time.Second,
 		BindRetry: 10 * time.Second, BindGiveUp: 60 * time.Second,
 		PairInterval: time.Second,
+		StallWindow:  time.Minute, MaxStallAddrs: 256,
 	}
 }
 

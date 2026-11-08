@@ -367,6 +367,8 @@ type JoinOptions struct {
 	Token   PairToken
 	Alias   string
 	Timeout time.Duration
+	// HandshakeTimeout bounds the TLS handshake alone; zero means 5 seconds.
+	HandshakeTimeout time.Duration
 }
 
 // JoinGateway is `remote join`: it redeems the token on the other host's
