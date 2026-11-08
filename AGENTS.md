@@ -43,6 +43,8 @@ The repo is public (the operator flipped it on 2026-11-04) at https://github.com
 
 Delivery (operator ruling, 2026-11-05): `main` is protected by a ruleset (required checks `test (ubuntu-latest)` and `test (macos-latest)`, a pull request for every change, no force-push or deletion; the operator can bypass). For 0.1.4 work, agents may push branches, open pull requests and merge them once CI is green without asking each time; release tags still need the operator's yes.
 
+Standing work permission (operator, 2026-11-07): the coordinator chooses the next v0.2.0 work and launches workers without asking each time, to keep development moving; implementation may go to Codex workers as well as Claude workers. Release tags and anything outside the repo still need the operator.
+
 ## Agent sessions on this repo
 
 Sessions working this repo (coordinator, workers, discussion sessions) message each other with CrossTalk (`list_agents`, `send_message`, `ask`, `reply`), not `hc send` (operator ruling, 2026-11-06): `hc send` types into the terminal as the operator and has cut into the operator's typing. `hc` stays for launching, waiting, reading screens and retiring terminals. A worker launch is checked with `list_agents`: the worker must show `crosstalk: true`, or the coordinator tells the operator before relying on it. A kickoff gives the coordinator's display name from the handoff file's CURRENT line as the `send_message` target.
