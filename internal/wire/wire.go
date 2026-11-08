@@ -345,16 +345,13 @@ func pollSettled(ctx context.Context, c *a2a.Client, url, tok, id string, bound 
 	for time.Now().Before(deadline) {
 		select {
 		case <-ctx.Done():
-			return id, adapter.Unknown, errors.New(ReasonPending)
+			return id, adapter.Unknown, pendingErr(stall)
 		case <-time.After(min(wait, time.Until(deadline))):
 		}
 		pctx, cancel := context.WithDeadline(ctx, deadline)
 		t, err := c.GetTask(pctx, url, tok, id)
 		cancel()
-		var he *remote.HandshakeError
-		if errors.As(err, &he) {
-			stall = he
-		}
+		stall = stallCause(err)
 		if err == nil && !settling(t.State) {
 			if t.Reason != "" && t.State != adapter.Accepted && t.State != adapter.Queued {
 				return id, t.State, errors.New(t.Reason)
@@ -363,10 +360,24 @@ func pollSettled(ctx context.Context, c *a2a.Client, url, tok, id string, bound 
 		}
 		wait = min(wait*2, 200*time.Millisecond)
 	}
-	if stall != nil {
-		return id, adapter.Unknown, &reasonErr{ReasonPending, stall}
+	return id, adapter.Unknown, pendingErr(stall)
+}
+
+// stallCause is the handshake stall in the latest poll error, nil when that
+// poll succeeded or failed another way.
+func stallCause(err error) error {
+	var he *remote.HandshakeError
+	if errors.As(err, &he) {
+		return he
 	}
-	return id, adapter.Unknown, errors.New(ReasonPending)
+	return nil
+}
+
+func pendingErr(stall error) error {
+	if stall != nil {
+		return &reasonErr{ReasonPending, stall}
+	}
+	return errors.New(ReasonPending)
 }
 
 func settling(s adapter.State) bool {

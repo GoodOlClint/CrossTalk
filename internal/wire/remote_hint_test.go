@@ -119,3 +119,27 @@ func TestPollSettledStallKeepsPendingAndCause(t *testing.T) {
 		t.Fatalf("cause %q, want %q", he.Error(), stallText(addr))
 	}
 }
+
+func TestPollSettledCallerDeadlineKeepsCause(t *testing.T) {
+	h1, h2, _, _ := twoHosts(t)
+	addr := silentListener(t, "", false)
+	peer := remote.Peer{Alias: "lab", Address: addr, Fingerprint: h2.host.Fingerprint}
+	c := &a2a.Client{HTTP: remote.NewClient(h1.host, peer).HTTPClient()}
+	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+	defer cancel()
+	_, _, err := pollSettled(ctx, c, "https://"+addr+"/v1/a2a/x", "", "m", 5*time.Second)
+	var he *remote.HandshakeError
+	if err == nil || err.Error() != ReasonPending || !errors.As(err, &he) {
+		t.Fatalf("err %v, want pending carrying a HandshakeError", err)
+	}
+}
+
+func TestStallCauseClearsOnRecovery(t *testing.T) {
+	stall := &remote.Error{Reason: remote.ReasonTimeout, Err: &remote.HandshakeError{Addr: "a"}}
+	if stallCause(stall) == nil {
+		t.Fatal("a handshake stall is not reported")
+	}
+	if stallCause(nil) != nil || stallCause(errors.New("other")) != nil {
+		t.Fatal("a successful or different later poll must clear the stall")
+	}
+}
