@@ -581,3 +581,33 @@ func TestRemoteStatusPeerClosesWithoutAlert(t *testing.T) {
 		t.Errorf("peer closed with no alert: got %q, want unreachable", got)
 	}
 }
+
+func TestRemoteStatusPeerTLS12OnlyIsUnreachable(t *testing.T) {
+	_, dir, _ := statusHome(t, true)
+	h, err := remote.LoadHost(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer, err := remote.LoadOrCreateHost(filepath.Join(t.TempDir(), "peer"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := statusListener(t)
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer c.Close()
+				s := tls.Server(c, &tls.Config{Certificates: []tls.Certificate{peer.Certificate}, MinVersion: tls.VersionTLS12, MaxVersion: tls.VersionTLS12, ClientAuth: tls.RequireAnyClientCert})
+				s.SetDeadline(time.Now().Add(3 * time.Second))
+				s.Handshake()
+			}()
+		}
+	}()
+	if got := remote.ProbePeer(h, remote.Peer{Alias: "old", Address: l.Addr().String(), Fingerprint: peer.Fingerprint}); got != "unreachable" {
+		t.Errorf("TLS 1.2-only peer: got %q, want unreachable", got)
+	}
+}

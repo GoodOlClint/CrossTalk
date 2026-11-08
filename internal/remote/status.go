@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -137,9 +138,18 @@ func probeClass(err error) string {
 	return "unreachable"
 }
 
-// isAlert reports whether err is a TLS alert sent by the peer, as opposed to
-// a plain close, reset or timeout.
+// isAlert reports whether err is a TLS alert from the peer that refuses our
+// certificate, as opposed to a plain close, reset, timeout or an unrelated
+// alert such as a protocol version mismatch.
 func isAlert(err error) bool {
 	var oe *net.OpError
-	return errors.As(err, &oe) && oe.Op == "remote error"
+	if !errors.As(err, &oe) || oe.Op != "remote error" {
+		return false
+	}
+	for _, a := range []string{"bad certificate", "unsupported certificate", "certificate revoked", "certificate expired", "unknown certificate", "certificate required", "handshake failure", "access denied"} {
+		if strings.Contains(oe.Err.Error(), a) {
+			return true
+		}
+	}
+	return false
 }
