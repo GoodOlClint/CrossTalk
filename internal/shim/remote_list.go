@@ -117,7 +117,7 @@ func RemoteSource(srv *mcpserver.Server) remote.AgentsSource {
 		for _, r := range rows {
 			name := r.Name
 			if name == "" {
-				name = "unnamed-" + r.AgentID[:6]
+				name = unnamedFallback(r.AgentID)
 			}
 			a := remote.AgentRow{AgentID: r.AgentID, Name: name, Harness: r.Harness, CrossTalk: r.CrossTalk, Reachable: r.Reachable, Status: r.Status, Messageable: r.CrossTalk}
 			if r.CrossTalk {
@@ -129,4 +129,11 @@ func RemoteSource(srv *mcpserver.Server) remote.AgentsSource {
 		}
 		return out
 	}
+}
+
+func unnamedFallback(agentID string) string {
+	if len(agentID) > 6 {
+		agentID = agentID[:6]
+	}
+	return "unnamed-" + agentID
 }

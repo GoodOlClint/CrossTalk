@@ -92,7 +92,7 @@ func cleanRow(r AgentRow) (AgentRow, bool) {
 
 func cleanStatus(s string) string {
 	s = strings.Map(func(c rune) rune {
-		if unicode.IsControl(c) || c == unicode.ReplacementChar {
+		if unicode.IsControl(c) || c == unicode.ReplacementChar || isBidi(c) {
 			return -1
 		}
 		return c
@@ -101,4 +101,9 @@ func cleanStatus(s string) string {
 		s = strings.ToValidUTF8(s[:maxStatusLen], "")
 	}
 	return s
+}
+
+// isBidi reports a Unicode bidirectional control: embeddings, overrides and isolates.
+func isBidi(c rune) bool {
+	return (c >= 0x202A && c <= 0x202E) || (c >= 0x2066 && c <= 0x2069)
 }

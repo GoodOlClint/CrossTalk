@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -279,4 +280,63 @@ func TestClientRejectsBadListings(t *testing.T) {
 			t.Fatalf("err %v, want unreachable", err)
 		}
 	})
+}
+
+func TestClientRefusesTLS12Server(t *testing.T) {
+	self, err := LoadOrCreateHost(newDir(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	srvHost, err := LoadOrCreateHost(newDir(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
+		Certificates: []tls.Certificate{srvHost.Certificate}, MaxVersion: tls.VersionTLS12, ClientAuth: tls.RequireAnyClientCert,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	served := make(chan struct{}, 4)
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				if err := c.(*tls.Conn).Handshake(); err == nil {
+					served <- struct{}{}
+					c.Write([]byte("HTTP/1.1 200 OK\r\nContent-Length: 15\r\n\r\n{\"agents\":[]}\n "))
+				}
+				c.Close()
+			}()
+		}
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	rows, err := NewClient(self, Peer{Alias: "old", Address: ln.Addr().String(), Fingerprint: srvHost.Fingerprint}).Agents(ctx)
+	if err == nil {
+		t.Fatalf("client talked to a TLS 1.2 server: rows %v", rows)
+	}
+	select {
+	case <-served:
+		t.Fatal("a TLS 1.2 handshake completed")
+	default:
+	}
+}
+
+func TestCleanStatusStripsControlAndBidi(t *testing.T) {
+	long := strings.Repeat("x", 100)
+	for in, want := range map[string]string{
+		"idle":     "idle",
+		"id\x07le": "idle",
+		"a‮b‪c⁦d⁩": "abcd",
+		long:       long[:maxStatusLen],
+	} {
+		if got := cleanStatus(in); got != want {
+			t.Errorf("cleanStatus(%q) = %q, want %q", in, got, want)
+		}
+	}
 }

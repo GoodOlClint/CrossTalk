@@ -456,3 +456,11 @@ func TestBrokenPeersFileWarnsAndKeepsLocalRows(t *testing.T) {
 		}
 	})
 }
+
+func TestUnnamedFallbackShortID(t *testing.T) {
+	for in, want := range map[string]string{"": "unnamed-", "ab": "unnamed-ab", "0123456789abcdef": "unnamed-012345"} {
+		if got := unnamedFallback(in); got != want {
+			t.Errorf("unnamedFallback(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

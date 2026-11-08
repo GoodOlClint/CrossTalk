@@ -72,6 +72,7 @@ func (c *Client) httpClient() (*http.Client, *http.Transport) {
 		TLSClientConfig: &tls.Config{
 			Certificates:       []tls.Certificate{c.host.Certificate},
 			MinVersion:         tls.VersionTLS13,
+			MaxVersion:         tls.VersionTLS13,
 			InsecureSkipVerify: true,
 			VerifyConnection: func(cs tls.ConnectionState) error {
 				if len(cs.PeerCertificates) == 0 || Fingerprint(cs.PeerCertificates[0]) != want {
