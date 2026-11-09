@@ -1,6 +1,6 @@
 # Codex app-server health (#113): measurement and change plan
 
-Status: plan for operator review. No code is changed by this document. Branch `plan-113-codex-health`, base `main` at 063358c.
+Status: approved by the operator on 2026-11-09 with the rulings under Operator rulings; ruling 6 changes section 3. Branch `plan-113-codex-health`, base `main` at 063358c.
 
 ## Problem
 
@@ -85,9 +85,9 @@ Recommendation: rank 1, `account/rateLimits/read`, reported as what it measures:
 
 - Fires when the target is a Codex session (registered descriptor with `harness_endpoint`, or a native Codex target with a binding endpoint) whose `backend` is `unreachable`. It does not fire on `reachable` or `unknown`, on `rejected`/`unreachable` delivery states, or for non-Codex targets. The text depends on the delivery state, because only `accepted` and `queued` confirm the thread has the message.
 - It changes no state and refuses nothing (same stance as ADR 0014); it is joined with any other hint by `joinHint`.
-- `accepted`/`queued` text (`hintCodexBackendDown`): "That Codex session's app-server cannot reach its OpenAI backend right now. The message is in the thread, but the session most likely cannot act on it, and an ask may get no reply until the network returns. Do not resend; tell your user."
-- `unknown` text (`hintCodexBackendDownUnknown`): "Delivery to that Codex session is unconfirmed, and its app-server also cannot reach its OpenAI backend right now. Do not resend blind: check receive_message for this message_id later, and tell your user." This keeps the existing no-blind-resend rule for `unknown` and makes no delivery claim.
-- Neither hint names `codex app-server daemon restart`: the probe is not proof of the outage, and a restart interrupts every Codex turn on that daemon. The restart advice lives only in the operator-facing install check (section 4).
+- `accepted`/`queued` text (`hintCodexBackendDown`): "That Codex session's app-server cannot reach its OpenAI backend right now. The message is in the thread, but the session may not act on it or reply until the network returns. Do not resend. Tell your user; restarting the Codex app-server (codex app-server daemon restart) may fix it, and it interrupts running Codex work."
+- `unknown` text (`hintCodexBackendDownUnknown`): "Delivery to that Codex session is unconfirmed, and its app-server also cannot reach its OpenAI backend right now. Do not resend blind: check receive_message for this message_id later. Tell your user; restarting the Codex app-server (codex app-server daemon restart) may fix it, and it interrupts running Codex work." This keeps the existing no-blind-resend rule for `unknown` and makes no delivery claim.
+- Both hints name `codex app-server daemon restart` as advice for the model to relay to its user, never to run itself (operator ruling 6, which reverses the review-driven removal). K8 names it too.
 - Placement: the two Codex hint sites in `internal/shim/send.go` `deliver` (registered branch next to `hintCodexNoEndpoint`, native branch next to `hintNativeOneWay`). The shim calls a harness-provided check rather than branching on Codex itself: an optional `harness.BackendChecker` interface (`Backend(ctx, endpoint) string`) on the harness, looked up by the target's harness name. The existing `d.Harness == Codex` check next to `hintCodexNoEndpoint` is precedent, but the new code should not add more of it.
 
 ### 4. `crosstalk install --check`
@@ -123,14 +123,14 @@ Each test fails before the change and passes after; test 7 is the end-to-end evi
 
 Estimate: PR 1 about half a day for a Sonnet worker; PR 2 and PR 3 about two hours each.
 
-## Open Questions (for the operator)
+## Operator rulings (2026-11-09)
 
-1. Field name and values: `backend: reachable | unreachable | unknown` (proposed, after review narrowed it from `health: ok | api_unreachable`), or a boolean, or fold it into `status`? A boolean cannot say "unknown".
-2. Custom model providers and API-key auth: the probe only knows the ChatGPT backend, so those threads are `unknown` (proposed). Is that enough, or does the operator run Codex on other providers often enough that rank 2 (a subscribed listener) should be planned now?
-3. Should a `backend: unreachable` target change the send outcome (for example `ask` returns `rejected/harness_offline` instead of `accepted`), or stay hint-only as the issue comment says (proposed: hint-only; the message is in the thread and will be acted on if the network returns before the turn gives up)?
-4. Remote rows: should a paired host's gateway export `backend` for its Codex rows (needs the ADR 0022 allowlist widened)? Proposed: not in this change.
-5. Probe cost: one `account/rateLimits/read` per endpoint per 30 s, only while someone runs `list_agents` or sends to a Codex session. Is a call to OpenAI's usage endpoint from CrossTalk acceptable (it is the same call the Codex TUI makes in the background), and is 30 s the right TTL?
-6. The model-facing hint no longer names `codex app-server daemon restart` (review finding 1); only the K8 install check does. Is that the right split?
+1. Field: `backend: reachable | unreachable | unknown`. Accepted as proposed.
+2. Custom providers and API-key auth: `unknown`. No subscribed listener is planned now.
+3. Hint only. A send is never refused because of the backend.
+4. Remote rows do not export `backend` in this change.
+5. The `account/rateLimits/read` probe runs at most once per endpoint per 30 s, and only for `list_agents` or a send to a Codex session. Accepted.
+6. Changed from the plan: the model-facing hint names the restart (`codex app-server daemon restart`) as advice to relay to the user. K8 keeps it too. Section 3 is updated.
 
 ## Review disposition
 
