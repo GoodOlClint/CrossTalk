@@ -34,14 +34,16 @@ const NudgeFirst = 30
 const nudgeText = "You have sent this peer %d messages since this server started. This is a count, not a finding. Check whether your last few messages added anything new or moved work forward: if not, you may stop sending and tell your user what is stuck; if work is progressing, carry on. An ask you hold still takes its reply."
 
 const (
-	hintNativeReachable   = "This session has no CrossTalk binding yet, so it takes no ask or command. send_message with the default kind reaches it; if CrossTalk is installed there, its first CrossTalk call binds it, and then ask works."
-	hintNativeUnreachable = "This session has no CrossTalk binding yet and its harness reports it unreachable, so nothing can reach it now. Check list_agents later; if CrossTalk is installed there, its first CrossTalk call binds it, and then ask works."
-	hintNativeOneWay      = "Delivered one way to a session with no CrossTalk binding. It cannot answer with reply, so any answer comes as a new message, addressed to your agent_id, and may never come or may wait on that session's user."
-	hintNoRouteUnbound    = "This session has no message with that id: check the message_id against receive_message. Use send_message to the sender."
-	hintNoRoutePreBind    = "That message_id may predate this session's binding, so it may never have reached this session, or its record may have been trimmed. If unsure, check the message_id against receive_message; if it is right, use send_message to the agent_id the message shows as from-agent-id (Claude) or from_agent_id (Codex), or to the sender's name if it shows none."
-	hintNoRouteExpired    = "That inform has no open reply route: it was not delivered, it was already answered, or it is over an hour old. Use send_message to the sender."
-	hintCodexNoEndpoint   = "This Codex session has no app-server endpoint CrossTalk can reach, so it can send but not receive. It was launched with --no-daemon or a -c config override, either of which gives it a private app-server, or it is a codex exec run, which never receives. Tell its user to restart Codex without --no-daemon or -c and put any setting in ~/.codex/config.toml."
-	hintAmbiguousName     = "Several sessions carry this name. Find the one you mean in list_agents and address it by agent_id."
+	hintNativeReachable         = "This session has no CrossTalk binding yet, so it takes no ask or command. send_message with the default kind reaches it; if CrossTalk is installed there, its first CrossTalk call binds it, and then ask works."
+	hintNativeUnreachable       = "This session has no CrossTalk binding yet and its harness reports it unreachable, so nothing can reach it now. Check list_agents later; if CrossTalk is installed there, its first CrossTalk call binds it, and then ask works."
+	hintNativeOneWay            = "Delivered one way to a session with no CrossTalk binding. It cannot answer with reply, so any answer comes as a new message, addressed to your agent_id, and may never come or may wait on that session's user."
+	hintNoRouteUnbound          = "This session has no message with that id: check the message_id against receive_message. Use send_message to the sender."
+	hintNoRoutePreBind          = "That message_id may predate this session's binding, so it may never have reached this session, or its record may have been trimmed. If unsure, check the message_id against receive_message; if it is right, use send_message to the agent_id the message shows as from-agent-id (Claude) or from_agent_id (Codex), or to the sender's name if it shows none."
+	hintNoRouteExpired          = "That inform has no open reply route: it was not delivered, it was already answered, or it is over an hour old. Use send_message to the sender."
+	hintCodexNoEndpoint         = "This Codex session has no app-server endpoint CrossTalk can reach, so it can send but not receive. It was launched with --no-daemon or a -c config override, either of which gives it a private app-server, or it is a codex exec run, which never receives. Tell its user to restart Codex without --no-daemon or -c and put any setting in ~/.codex/config.toml."
+	hintCodexBackendDown        = "That Codex session's app-server cannot reach its OpenAI backend right now. The message is in the thread, but the session may not act on it or reply until the network returns. Do not resend. Tell your user; restarting the Codex app-server (codex app-server daemon restart) may fix it, and it interrupts running Codex work."
+	hintCodexBackendDownUnknown = "Delivery to that Codex session is unconfirmed, and its app-server also cannot reach its OpenAI backend right now. Do not resend blind: check receive_message for this message_id later. Tell your user; restarting the Codex app-server (codex app-server daemon restart) may fix it, and it interrupts running Codex work."
+	hintAmbiguousName           = "Several sessions carry this name. Find the one you mean in list_agents and address it by agent_id."
 )
 
 // ErrAskClosed is what Options.OnReply returns when the ask's task reached a
@@ -181,6 +183,28 @@ func (st *AgentState) countSend(peer string, state adapter.State) string {
 	return fmt.Sprintf(nudgeText, n)
 }
 
+// backendHint is the hint for a send whose target's app-server cannot reach
+// its backend; it changes no state and refuses nothing.
+func (s *Shim) backendHint(ctx context.Context, h adapter.Harness, endpoint string, state adapter.State) string {
+	if endpoint == "" {
+		return ""
+	}
+	var text string
+	switch state {
+	case adapter.Accepted, adapter.Queued:
+		text = hintCodexBackendDown
+	case adapter.Unknown:
+		text = hintCodexBackendDownUnknown
+	default:
+		return ""
+	}
+	bc, ok := harness.Lookup(s.opt.Harnesses, h).(harness.BackendChecker)
+	if !ok || bc.Backend(ctx, endpoint) != harness.BackendUnreachable {
+		return ""
+	}
+	return text
+}
+
 func joinHint(a, b string) string {
 	if a == "" || b == "" {
 		return a + b
@@ -297,6 +321,9 @@ func (st *AgentState) deliver(ctx context.Context, m msg.Message) mcpserver.Resu
 		if reason == receiver.ReasonNoEndpoint || state == adapter.Unreachable && d.Harness == string(adapter.Codex) && d.HarnessEndpoint == nil {
 			res.Hint = hintCodexNoEndpoint
 		}
+		if d.HarnessEndpoint != nil {
+			res.Hint = joinHint(res.Hint, st.shim.backendHint(ctx, adapter.Harness(d.Harness), *d.HarnessEndpoint, state))
+		}
 		res.Hint = joinHint(res.Hint, st.countSend(d.AgentID, state))
 		return res
 	}
@@ -336,6 +363,7 @@ func (st *AgentState) deliver(ctx context.Context, m msg.Message) mcpserver.Resu
 	if reason == "" && (state == adapter.Accepted || state == adapter.Queued) {
 		res.Hint = hintNativeOneWay
 	}
+	res.Hint = joinHint(res.Hint, st.shim.backendHint(ctx, b.Harness, b.HarnessEndpoint, state))
 	res.Hint = joinHint(res.Hint, st.countSend(to, state))
 	return res
 }

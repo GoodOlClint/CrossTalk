@@ -48,8 +48,23 @@ func shortDir(t *testing.T) string {
 
 type fakeCodex struct {
 	*adapter.Fake
-	mu      sync.Mutex
-	threads []codex.LoadedThread
+	mu         sync.Mutex
+	threads    []codex.LoadedThread
+	backend    string
+	backendEps []string
+}
+
+func (f *fakeCodex) Backend(_ context.Context, endpoint string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.backendEps = append(f.backendEps, endpoint)
+	return f.backend
+}
+
+func (f *fakeCodex) setBackend(v string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.backend = v
 }
 
 func newFakeCodex() *fakeCodex { return &fakeCodex{Fake: adapter.NewFake(adapter.Codex)} }
