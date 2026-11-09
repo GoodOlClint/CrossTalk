@@ -36,12 +36,18 @@ type Adapter struct {
 	// InjectTimeout bounds one Inject; 0 means DefaultInjectTimeout.
 	InjectTimeout time.Duration
 	ClientInfo    appserver.ClientInfo
-	Directory     interface {
+	// RebindInterval is the least time between two endpoint lookups for one
+	// thread from Inject; 0 means DefaultRebindInterval.
+	RebindInterval time.Duration
+	Directory      interface {
 		List() ([]registry.Descriptor, error)
 	}
 
 	mu       sync.Mutex
 	bindings map[string]adapter.Binding
+	// rebindMu serializes Inject's endpoint lookups; lookedUp is guarded by mu.
+	rebindMu sync.Mutex
+	lookedUp map[string]time.Time
 }
 
 var _ adapter.Adapter = (*Adapter)(nil)
@@ -114,6 +120,10 @@ func (a *Adapter) connect(ctx context.Context, ep string) (*appserver.Client, er
 // and never answers cannot stall a session that lives elsewhere.
 var EndpointProbeTimeout = 5 * time.Second
 
+// DefaultRebindInterval bounds Inject's endpoint lookups to one per thread
+// per interval.
+const DefaultRebindInterval = 10 * time.Second
+
 type host struct {
 	endpoint string
 	version  string
@@ -182,6 +192,46 @@ func (a *Adapter) Register(ctx context.Context, threadID string) (adapter.Bindin
 	a.bindings[threadID] = b
 	a.mu.Unlock()
 	return b, nil
+}
+
+// rebind returns the endpoint now hosting threadID, other than failed, or ""
+// (none, several, or a lookup for the thread ran within RebindInterval). A
+// found endpoint replaces the adapter's cached binding; the caller's binding,
+// the journal key and the descriptor keep the bind-time value.
+func (a *Adapter) rebind(ctx context.Context, threadID, failed string) string {
+	a.rebindMu.Lock()
+	defer a.rebindMu.Unlock()
+	interval := a.RebindInterval
+	if interval == 0 {
+		interval = DefaultRebindInterval
+	}
+	a.mu.Lock()
+	b, last := a.bindings[threadID], a.lookedUp[threadID]
+	if b.HarnessEndpoint != "" && b.HarnessEndpoint != failed {
+		a.mu.Unlock()
+		return b.HarnessEndpoint
+	}
+	if time.Since(last) < interval {
+		a.mu.Unlock()
+		return ""
+	}
+	if a.lookedUp == nil {
+		a.lookedUp = map[string]time.Time{}
+	}
+	a.lookedUp[threadID] = time.Now()
+	a.mu.Unlock()
+	hs := a.hosts(ctx, threadID)
+	if len(hs) != 1 || hs[0].endpoint == failed {
+		return ""
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.bindings == nil {
+		a.bindings = map[string]adapter.Binding{}
+	}
+	a.bindings[threadID] = adapter.Binding{Harness: adapter.Codex, SessionRef: threadID, HarnessEndpoint: hs[0].endpoint, HarnessVersion: hs[0].version}
+	a.logger().Info("codex: thread rebound", "thread", threadID, "endpoint", hs[0].endpoint)
+	return hs[0].endpoint
 }
 
 // Status reads the thread on its registered endpoint, or on the single

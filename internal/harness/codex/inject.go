@@ -29,11 +29,18 @@ func (a *Adapter) Inject(ctx context.Context, m msg.Message, d adapter.Delivery)
 		return adapter.Unreachable, ErrNoThread
 	}
 	if ep == "" {
-		return adapter.Unreachable, ErrNoEndpoint
+		if ep = a.rebind(ctx, thread, ""); ep == "" {
+			return adapter.Unreachable, ErrNoEndpoint
+		}
 	}
 	c, err := a.connect(ctx, ep)
 	if err != nil {
-		return adapter.Unreachable, err
+		if nep := a.rebind(ctx, thread, ep); nep != "" {
+			c, err = a.connect(ctx, nep)
+		}
+		if err != nil {
+			return adapter.Unreachable, err
+		}
 	}
 	defer c.CloseContext(ctx)
 	if _, err := CheckVersion(c.ServerVersion()); err != nil {

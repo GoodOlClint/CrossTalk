@@ -11,6 +11,8 @@ import (
 
 	"github.com/GoodOlClint/crosstalk/internal/adapter"
 	"github.com/GoodOlClint/crosstalk/internal/harness/codex"
+	"github.com/GoodOlClint/crosstalk/internal/harness/codex/appserver/appservertest"
+	"github.com/GoodOlClint/crosstalk/internal/identity"
 	"github.com/GoodOlClint/crosstalk/internal/receiver"
 )
 
@@ -313,5 +315,44 @@ func TestAskToCodexWithoutEndpointIsRefusedInformStaysPullable(t *testing.T) {
 	res = na.ok(nil, "ask", send("eve", "question?"))
 	if res["state"] != "accepted" || res["reason"] != nil {
 		t.Fatalf("ask to reachable %v", res)
+	}
+}
+
+func TestCodexBoundWithoutEndpointRecoversWhenThreadLoads(t *testing.T) {
+	w := newWorld(t)
+	alice := w.claude(4001, "sess-alice", "alice")
+	srv := appservertest.New(t)
+	srv.AddThread(&appservertest.Thread{ID: "T-bob", Name: "bob", Cwd: "/work/bob"})
+	cx := &codex.Adapter{ControlSocket: srv.Endpoint(), RebindInterval: time.Nanosecond}
+	useCx := func(o *Options) { o.Harnesses = w.harnesses(cx) }
+	na := w.node(alice.pid, w.lb, useCx)
+	nb := w.node(1, w.lb, useCx)
+	nb.ok(thread("T-bob"), "receive_message", map[string]any{})
+	bob := identity.AgentID("codex", "T-bob")
+
+	res := na.ok(nil, "ask", send(bob, "question?"))
+	if res["state"] != "rejected" || res["reason"] != receiver.ReasonNoEndpoint {
+		t.Fatalf("ask before the thread loads %v", res)
+	}
+
+	srv.Mutate("T-bob", func(th *appservertest.Thread) { th.Loaded = true })
+	res = na.ok(nil, "ask", send(bob, "again?"))
+	if res["state"] != "accepted" || res["reason"] != nil || res["hint"] != nil {
+		t.Fatalf("ask after the thread loads %v", res)
+	}
+	if got := srv.Thread("T-bob").ToolOutputs; len(got) != 1 || !strings.Contains(got[0].Output, "again?") {
+		t.Fatalf("delivered %+v", got)
+	}
+	var row map[string]any
+	for _, r := range na.ok(nil, "list_agents", map[string]any{})["agents"].([]any) {
+		if r.(map[string]any)["agent_id"] == bob {
+			row = r.(map[string]any)
+		}
+	}
+	if row == nil || row["reachable"] != true || row["crosstalk"] != true {
+		t.Fatalf("list_agents row %v", row)
+	}
+	if d, ok := w.descriptor(bob); !ok || d.HarnessEndpoint != nil {
+		t.Fatalf("descriptor %+v: the bind-time endpoint is kept", d)
 	}
 }
