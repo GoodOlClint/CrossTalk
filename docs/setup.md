@@ -39,7 +39,9 @@ CrossTalk lets Claude Code and Codex sessions on one machine message each other 
 
 A Codex session launched with any `-c key=value` override on the command line can send but not receive: Codex then runs its own app server instead of the managed one, so the session has no endpoint CrossTalk can reach, its `list_agents` row shows an empty `cwd` and `reachable: false`, and a sender gets `unreachable` with a hint saying so. Put the setting in `~/.codex/config.toml` and start `codex` without `-c`. Flags such as `-s workspace-write`, `-a never` and `--add-dir` are fine.
 
-`codex --no-daemon` tabs can send and pull with `receive_message` but cannot receive delivered messages: the sender gets `unreachable`. To receive in such a tab, give the tab its own app server and tell CrossTalk where it is (not run live):
+`codex --no-daemon` tabs can send and pull with `receive_message` but cannot receive delivered messages: the sender gets `unreachable` ([known issue](faq.md#known-issue-why-can-my-codex-session-send-but-not-receive)). To receive in such a tab, give the tab its own app server and tell CrossTalk where it is (not run live):
+
+> Warning: plain `codex`, with settings in `~/.codex/config.toml`, receives with no extra steps. Use the commands below only if you must keep `--no-daemon`.
 
 ```sh
 S="$HOME/.codex/crosstalk-tab.sock"
@@ -58,7 +60,7 @@ env = { CROSSTALK_CODEX_ENDPOINTS = "unix:///Users/you/.codex/crosstalk-tab.sock
 
 Checked in a scratch `CODEX_HOME`: `codex mcp list` accepts this entry. Not checked in a live session.
 
-Then start the tab against that server:
+Then start the tab against that server. Do not add `--no-daemon` or `-c` to this command: either one makes the tab send-only again.
 
 ```sh
 codex --remote "unix://$S"
@@ -189,7 +191,7 @@ The macOS Local Network prompt: no such dialog was identified in the one trial o
 | Server failed to start (`ENOENT`), or the model says a CrossTalk tool "isn't available" with no error | The registered binary is gone or moved. Run `crosstalk install --check`; K5 names the registered path. Run `crosstalk reinstall` from the binary you want, then restart the session. Claude Code caches a failed server for up to 15 minutes while `claude mcp list` says Connected: run `/mcp` and reconnect in the same session. |
 | `agent_held` | A second CrossTalk server serves the session: a plugin from 0.1.2 that still starts its own server next to the installed one, or a project or local `crosstalk` entry. `crosstalk install --check` (K2) names it; update the plugin with `crosstalk install`, remove the extra entry, and restart. |
 | A `codex exec` row with empty `cwd` and `status` and `reachable: false` | An exec session has no app server CrossTalk can reach: it can send, never receive, and its row can linger. Pick the interactive row instead. A `claude -p` or `codex --no-daemon` asker cannot receive the answer. |
-| A Codex row with empty `cwd`, `reachable: false` after starting `codex -c ...` | Any `-c` override makes Codex run its own embedded app server instead of the managed daemon, on every platform, so CrossTalk cannot deliver to it. Put the setting in `~/.codex/config.toml` and start `codex` without `-c`. |
+| A Codex row with empty `cwd`, `reachable: false` after starting `codex -c ...` or `codex --no-daemon` | Either option makes Codex run its own embedded app server instead of the managed daemon, on every platform, so CrossTalk cannot deliver to it ([known issue](faq.md#known-issue-why-can-my-codex-session-send-but-not-receive)). Put the setting in `~/.codex/config.toml` and start plain `codex`. |
 | `crosstalk: false` | No CrossTalk call yet, or a stale list: the list is a snapshot, and a peer's first call can take a minute to show, so try `ask` anyway or list again. It gets `send_message` but not `ask` until then. A prompt like "who are you?" can trigger Claude's native agent list and leave the session unbound; ask it to call CrossTalk's `list_agents` instead. |
 | `native_inform_only` | The target has no CrossTalk binding. Use `send_message`; `ask` works after its first CrossTalk call. |
 | `K8 crosstalk FAIL` or `WARN` from `crosstalk install --check` | K8 only speaks when remote messaging is configured (`remote.json` exists; otherwise it prints `PASS remote not configured`). FAIL names a file CrossTalk refuses: `remote.json`, `host.key` or `peers.json` not mode 0600, or unreadable, or `host.crt` not matching `host.key`; fix the mode or run `crosstalk remote config` again. FAIL also when the gateway is not answering on `bind:port` while a login unit file exists, when the unit's hash differs from `unit_sha256` (edited or foreign), or when it runs a binary other than the installed one (run `crosstalk remote enable`). WARN on Linux with `Linger=no`, with the `loginctl enable-linger` command to run. WARN when the bind address is not on any interface of this host (laptop off its network), or the gateway is not answering and no login unit exists (foreground `crosstalk remote serve` is valid). |

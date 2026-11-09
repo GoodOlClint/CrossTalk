@@ -228,7 +228,7 @@ func TestReplyHintSeparatesPreBindFromUnknownID(t *testing.T) {
 	}
 }
 
-func TestUnreachableCodexWithoutEndpointHintsConfigOverride(t *testing.T) {
+func TestUnreachableCodexWithoutEndpointHintsNoDaemonOrConfigOverride(t *testing.T) {
 	w := newWorld(t)
 	alice := w.claude(4001, "sess-alice", "alice")
 	w.codex.addThread("T-bob", "bob")
@@ -246,7 +246,7 @@ func TestUnreachableCodexWithoutEndpointHintsConfigOverride(t *testing.T) {
 		t.Fatalf("send %v", res)
 	}
 	h, _ := res["hint"].(string)
-	for _, want := range []string{"-c", "config.toml", "send but not receive"} {
+	for _, want := range []string{"--no-daemon", "-c", "config.toml", "send but not receive", "restart"} {
 		if !strings.Contains(h, want) {
 			t.Fatalf("hint %q lacks %q", h, want)
 		}

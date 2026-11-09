@@ -12,7 +12,19 @@ From 0.2.0 you can pair your own machines (same user, a LAN or a tailnet) and me
 
 ## Do I have to start my agents a special way?
 
-No. `crosstalk install` registers the CrossTalk server with each harness once. After that, start `claude` and `codex` as you always do and restart any session that was already running. Two limits apply to Codex: a tab started with `codex --no-daemon` can send but not receive, and any `-c` override on the command line makes Codex start its own app server, which CrossTalk cannot reach, so that session is send-only (`-s`, `-a` and `--add-dir` do not). Put settings in `~/.codex/config.toml` instead. Details are in [setup](setup.md).
+No. `crosstalk install` registers the CrossTalk server with each harness once. After that, start `claude` and `codex` as you always do and restart any session that was already running. For Codex, start plain `codex`: some launch options make a session send-only (next question).
+
+## Known issue: why can my Codex session send but not receive?
+
+A Codex session receives only when the managed app server (Codex's shared background server) hosts it, because that server is the only place CrossTalk can deliver to. Three ways of starting Codex break receiving ([#112](https://github.com/GoodOlClint/CrossTalk/issues/112)):
+
+- `codex --no-daemon` runs the app server inside the terminal, with no endpoint anyone can reach.
+- Any `-c key=value` override on the command line makes Codex start its own app server instead of the managed one. `-s`, `-a` and `--add-dir` are fine.
+- `codex exec` runs one task with no app server CrossTalk can reach.
+
+Such a session can still send. But its `list_agents` row shows an empty `cwd` and `reachable: false`, and a message or `ask` sent to it comes back `unreachable`. To fix it, start plain `codex` and put every setting in `~/.codex/config.toml`.
+
+Workaround without a restart: the session can pull undelivered messages by calling `receive_message`, but nothing wakes it, so it sees them only when it polls. It cannot answer a pulled `ask` with `reply`: the ask closed as `unreachable` when it was sent, so `reply` is refused with `ask_closed` ([#114](https://github.com/GoodOlClint/CrossTalk/issues/114)). It answers with `send_message` to the sender instead, and that answer arrives as a new message, not linked to the ask. If you must keep `--no-daemon`, [setup](setup.md) describes an untested workaround that gives the tab its own app server.
 
 ## Is there a limit on messages?
 

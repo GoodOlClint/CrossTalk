@@ -40,7 +40,7 @@ const (
 	hintNoRouteUnbound    = "This session has no message with that id: check the message_id against receive_message. Use send_message to the sender."
 	hintNoRoutePreBind    = "That message_id may predate this session's binding, so it may never have reached this session, or its record may have been trimmed. If unsure, check the message_id against receive_message; if it is right, use send_message to the agent_id the message shows as from-agent-id (Claude) or from_agent_id (Codex), or to the sender's name if it shows none."
 	hintNoRouteExpired    = "That inform has no open reply route: it was not delivered, it was already answered, or it is over an hour old. Use send_message to the sender."
-	hintCodexNoEndpoint   = "This Codex session has no app-server endpoint CrossTalk can reach, usually because it was launched with a -c config override, so it can send but not receive. Tell its user to restart it without -c and put the setting in ~/.codex/config.toml."
+	hintCodexNoEndpoint   = "This Codex session has no app-server endpoint CrossTalk can reach, so it can send but not receive. It was launched with --no-daemon or a -c config override, either of which gives it a private app-server, or it is a codex exec run, which never receives. Tell its user to restart Codex without --no-daemon or -c and put any setting in ~/.codex/config.toml."
 	hintAmbiguousName     = "Several sessions carry this name. Find the one you mean in list_agents and address it by agent_id."
 )
 
