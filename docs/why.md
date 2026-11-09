@@ -50,7 +50,7 @@ A build script finishes and runs `crosstalk send my-session "build done, 3 tests
 
 - Everything happens in one session. A single agent can use its own subagents. CrossTalk is for separate sessions.
 - You need a hard limit on spend or on message count. CrossTalk has none. See the [FAQ](faq.md#is-there-a-limit-on-messages).
-- The sessions are on different machines and you cannot pair them yourself. In 0.1.x CrossTalk is same-machine only; 0.2.0, not yet released, adds messaging between your own paired machines ([setup](setup.md#remote-messaging-arrives-in-020-and-is-not-yet-released)).
+- The sessions are on different machines and you cannot pair them yourself. In 0.1.x CrossTalk is same-machine only; 0.2.0 adds messaging between your own paired machines ([setup](setup.md#remote-messaging-020)).
 - You need to isolate agents from each other. Every session runs as you, and any of them can message any other. CrossTalk gives you attribution, not isolation.
 
 ## Next

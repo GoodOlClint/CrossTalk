@@ -6,9 +6,9 @@ Claude Code and Codex, in any pairing: Claude to Claude, Codex to Codex, or acro
 
 ## Does it work across machines?
 
-Yes from 0.2.0, which is not yet released. With 0.1.x, both sessions must run on the same machine, as the same user.
+Yes from 0.2.0. With 0.1.x, both sessions must run on the same machine, as the same user.
 
-From 0.2.0 you can pair your own machines (same user, a LAN or a tailnet) and message `name@alias` across them. The limits: only `send_message`, `ask` and `reply` cross hosts (no `command`, `claim` or `release`); sessions on the other host that have no CrossTalk are listed but cannot be messaged; there is no relay, so a message to a sleeping host or a stopped gateway fails; each host needs a fixed IP address; and you pair each pair of hosts by hand. It is off unless you start it. See [setup](setup.md#remote-messaging-arrives-in-020-and-is-not-yet-released) and [how it works](how-it-works.md#remote). It has not been run live on two real machines yet.
+From 0.2.0 you can pair your own machines (same user, a LAN or a tailnet) and message `name@alias` across them. The limits: only `send_message`, `ask` and `reply` cross hosts (no `command`, `claim` or `release`); sessions on the other host that have no CrossTalk are listed but cannot be messaged; there is no relay, so a message to a sleeping host or a stopped gateway fails; each host needs a fixed IP address; and you pair each pair of hosts by hand. It is off unless you start it. See [setup](setup.md#remote-messaging-020) and [how it works](how-it-works.md#remote). It has been run live between two real machines over a Wi-Fi LAN, not yet over a tailnet.
 
 ## Do I have to start my agents a special way?
 

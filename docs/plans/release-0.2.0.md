@@ -4,7 +4,7 @@ Status: draft for the brownfield gate, 2026-11-06. No implementation until the o
 
 R12 stalled-handshake report (#83), 2026-11-08: the gateway logs one rate-limited address-only line, `join`, `status` and the library client `Client.Do` report a handshake timeout with a firewall hint (the shim's send, reply and listing carry it too, #99), `pair` prints a static note and waits the full TTL; setup.md has the troubleshooting entry.
 
-Progress, 2026-11-08: R1 to R11 are merged; R12's documentation half is in a pull request; the R12 live run (two real machines) has not been run, so nothing here is released and the 0.2.0 tag waits for it and for the operator's yes.
+Progress, 2026-11-08: R1 to R12 are merged; the R12 live run passed S2, S5 (Wi-Fi) and S7, with the tailnet and wired runs not run; the operator approved the 0.2.0 tag.
 
 Terms. **Host**: one of the user's own machines (laptop, desktop, homelab VM). **Shim**: the `crosstalk mcp` process a harness starts (ADR 0006). **Gateway**: the one network listener per host, run by `crosstalk remote serve`. **Peer host**: a host this host has paired with. **mTLS** (mutual TLS): an encrypted connection where both ends present a certificate. **Fingerprint**: the sha256 of a certificate's public key (SPKI, subject public key info), written as 64 lowercase hex. **Pinning**: accepting only a certificate whose fingerprint was recorded earlier, with no certificate authority. **Pairing**: the one-time exchange that records two hosts' fingerprints in each other's peers file. **Alias**: the short name a host is known by on its peers (default: the short hostname). **Tailnet**: a Tailscale private network; its addresses are in 100.64.0.0/10. **LAN**: the local network. **Principal**: the identity the receiver authorises. **Native session**: a harness session with no CrossTalk shim (`crosstalk: false`). **Login unit**: a launchd user agent (macOS) or systemd user unit (Linux) that starts a program at login. **Linger**: systemd's per-user setting that keeps user units running with nobody logged in. **Spike**: a small throwaway experiment that answers one unknown. **Slice**: one small pull request with its own tests. **DoD**: definition of done, what must be true, with evidence, for a slice to count. **Fails-before / passes-after**: the named test fails on the parent commit and passes on the slice's commit. **K1-K8**: the numbered checks `crosstalk install --check` prints. **S / M / L**: under 1 hour / about half a day / more than half a day.
 
@@ -284,7 +284,7 @@ New design §11 tests added by R12, each pinned by the slice tests above: 34 pin
 
 Sequencing: spikes S1 and S3 before R2; S4 before R8; S5 before R7; S7 before R11; S2 any time before R12; S6 alongside R1-R5. R1-R9 are serial (each touches the previous slice's code). R10 and R11 can run in parallel after R9. Rough size: about 12 to 16 worker-days including spikes and review rounds; the council's 14 (range 10 to 20) still holds, and it is not a delivery promise.
 
-Release: 0.2.0 tags after R12's live run passes. The live run has not been run (2026-11-08); the docs half of R12 says "arrives in 0.2.0 and is not yet released" until the operator flips that line at the tag. A final release tag still needs the operator's yes (AGENTS.md Delivery).
+Release: 0.2.0 tags after R12's live run passes. The live run passed on 2026-11-08 and the docs dropped "not yet released" in the version-0.2.0 pull request; the operator approved the tag (AGENTS.md Delivery).
 
 ## 12. Explicitly out
 

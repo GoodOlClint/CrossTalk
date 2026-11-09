@@ -25,7 +25,7 @@ func TestSetupDocCoversGaps(t *testing.T) {
 func TestSetupDocCoversGapsRemote(t *testing.T) {
 	doc := repoFile(t, "docs/setup.md")
 	for _, want := range []string{
-		"arrives in 0.2.0 and is not yet released", "has not been run live", "crosstalk remote unpair",
+		"arrives in 0.2.0", "has not been run over a tailnet", "crosstalk remote unpair",
 		"crosstalk remote config", "crosstalk remote serve", "crosstalk remote pair", "crosstalk remote join",
 		"crosstalk remote status", "crosstalk remote status --json", "crosstalk remote enable", "crosstalk remote disable",
 		"crosstalk install --remote", "crosstalk reinstall --remote",

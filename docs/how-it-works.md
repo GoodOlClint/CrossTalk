@@ -73,7 +73,7 @@ These controls are advice to the model plus checks in the shim. A session runnin
 
 ## Remote
 
-Remote messaging arrives in 0.2.0 and is not yet released; the release you can download today does not have it, and it has not been run live across two real machines (no tested sleep and wake, reboot, LAN or tailnet run). Set-up steps are in [setup](setup.md#remote-messaging-arrives-in-020-and-is-not-yet-released).
+Remote messaging arrives in 0.2.0. It was run live on 2026-11-08 between a Mac and a Linux VM over a Wi-Fi LAN with a build from main: pairing, messages in both directions, settle timing on Wi-Fi, and the login unit through a reboot (spikes S2, S5 and S7 in the release plan). It has not been run over a tailnet, over a wired LAN, or with the signed release binary. Set-up steps are in [setup](setup.md#remote-messaging-020).
 
 What runs: each host you turn it on for runs one *gateway* (`crosstalk remote serve`, or a login unit), a listener on one fixed IP address and port 7745 by default. Two hosts become peers only when you pair them by hand on both sides (`remote pair` and `remote join`, a one-time token). After that every connection is TLS 1.3 with both sides presenting a certificate and checking the other's key against the one recorded at pairing. The gateway passes a message to the local session's own loopback server; it forwards only `SendMessage` and `GetTask`, refuses `command` kind, `claim` and `release` from a remote host, and does not expose the unix socket. A remote sender is identified by the host's key fingerprint plus the session id, never by text in the message.
 
