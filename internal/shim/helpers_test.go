@@ -48,8 +48,40 @@ func shortDir(t *testing.T) string {
 
 type fakeCodex struct {
 	*adapter.Fake
-	mu      sync.Mutex
-	threads []codex.LoadedThread
+	mu         sync.Mutex
+	threads    []codex.LoadedThread
+	backend    string
+	backendEps []string
+	// customProvider marks session refs whose thread is not on the openai
+	// provider; Backend reports them unknown.
+	customProvider map[string]bool
+}
+
+var _ harness.BackendChecker = (*fakeCodex)(nil)
+
+func (f *fakeCodex) Backend(_ context.Context, endpoint, sessionRef string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.backendEps = append(f.backendEps, endpoint)
+	if f.customProvider[sessionRef] {
+		return harness.BackendUnknown
+	}
+	return f.backend
+}
+
+func (f *fakeCodex) setCustomProvider(sessionRef string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.customProvider == nil {
+		f.customProvider = map[string]bool{}
+	}
+	f.customProvider[sessionRef] = true
+}
+
+func (f *fakeCodex) setBackend(v string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.backend = v
 }
 
 func newFakeCodex() *fakeCodex { return &fakeCodex{Fake: adapter.NewFake(adapter.Codex)} }

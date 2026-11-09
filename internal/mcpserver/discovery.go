@@ -17,6 +17,7 @@ type Row struct {
 	Status    string  `json:"status"`
 	CrossTalk bool    `json:"crosstalk"`
 	Reachable bool    `json:"reachable"`
+	Backend   string  `json:"backend,omitempty"`
 	AgentID   string  `json:"agent_id"`
 	Role      string  `json:"role,omitempty"`
 	Owner     *string `json:"owner"`
@@ -116,7 +117,7 @@ func (s *Server) listAgents(ctx context.Context) ([]Row, []string) {
 	}
 	for _, ss := range sessions {
 		id := identity.AgentID(string(ss.Harness), ss.SessionRef)
-		rows[id] = &Row{Name: ss.Name, Harness: string(ss.Harness), Cwd: ss.Cwd, Status: ss.Status, Reachable: ss.Reachable, AgentID: id}
+		rows[id] = &Row{Name: ss.Name, Harness: string(ss.Harness), Cwd: ss.Cwd, Status: ss.Status, Reachable: ss.Reachable, Backend: ss.Backend, AgentID: id}
 	}
 
 	ds, err := s.reg.List()

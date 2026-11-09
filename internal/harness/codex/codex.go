@@ -49,6 +49,8 @@ type Adapter struct {
 	// lookedUp are guarded by mu.
 	rebinding map[string]chan struct{}
 	lookedUp  map[string]time.Time
+	backends  map[string]backendEntry
+	probes    map[string]*probeCall
 }
 
 var _ adapter.Adapter = (*Adapter)(nil)

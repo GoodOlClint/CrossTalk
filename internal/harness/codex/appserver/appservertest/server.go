@@ -40,6 +40,8 @@ type Thread struct {
 	// Status overrides the derived idle/active status when set (e.g. systemError).
 	Status               string
 	CanAcceptDirectInput *bool
+	// ModelProvider is thread/read's modelProvider; "" means "openai".
+	ModelProvider string
 	// Turns, oldest first.
 	Turns []appserver.Turn
 	// NotSteerable, when "review" or "compact", makes steer and start fail
@@ -76,6 +78,13 @@ type Server struct {
 	Hook func(conn int, method string, params json.RawMessage) Reply
 	// Greeting notifications are sent right after the initialize response.
 	Greeting []json.RawMessage
+	// Account is account/read's account type; "" means "chatgpt" and "none"
+	// makes the account null.
+	Account string
+	// RateLimitsErr, when set, is the error account/rateLimits/read returns.
+	RateLimitsErr *appserver.RPCError
+	// RateLimitsHang makes account/rateLimits/read never answer.
+	RateLimitsHang bool
 
 	ln      net.Listener
 	mu      sync.Mutex
@@ -295,11 +304,15 @@ func (s *Server) serve(conn int, c net.Conn) {
 		}
 		s.mu.Lock()
 		s.calls = append(s.calls, Call{Conn: conn, Method: r.Method, Params: r.Params})
+		hang := r.Method == "account/rateLimits/read" && s.RateLimitsHang
 		s.mu.Unlock()
 		if len(r.ID) == 0 {
 			if r.Method == "initialized" && initReq {
 				initialized = true
 			}
+			continue
+		}
+		if hang && initialized {
 			continue
 		}
 		var reply Reply
@@ -414,6 +427,19 @@ func (s *Server) handle(method string, raw json.RawMessage) (any, *appserver.RPC
 		return map[string]any{"data": ids, "nextCursor": nil}, nil
 	case "mcpServerStatus/list":
 		return map[string]any{"data": []any{}, "nextCursor": nil}, nil
+	case "account/read":
+		switch s.Account {
+		case "none":
+			return map[string]any{"account": nil, "requiresOpenaiAuth": true}, nil
+		case "":
+			return map[string]any{"account": map[string]any{"type": "chatgpt", "email": "a@example.com", "planType": "plus"}, "requiresOpenaiAuth": true}, nil
+		}
+		return map[string]any{"account": map[string]any{"type": s.Account}, "requiresOpenaiAuth": true}, nil
+	case "account/rateLimits/read":
+		if s.RateLimitsErr != nil {
+			return nil, s.RateLimitsErr
+		}
+		return map[string]any{"rateLimits": map[string]any{"limitId": "codex"}}, nil
 	}
 	t := s.threads[p.ThreadID]
 	if t == nil {
@@ -425,7 +451,10 @@ func (s *Server) handle(method string, raw json.RawMessage) (any, *appserver.RPC
 	}
 	switch method {
 	case "thread/read":
-		th := map[string]any{"id": t.ID, "cwd": t.Cwd, "status": status(t), "name": nil, "canAcceptDirectInput": true}
+		th := map[string]any{"id": t.ID, "cwd": t.Cwd, "status": status(t), "name": nil, "canAcceptDirectInput": true, "modelProvider": "openai"}
+		if t.ModelProvider != "" {
+			th["modelProvider"] = t.ModelProvider
+		}
 		if t.Name != "" {
 			th["name"] = t.Name
 		}
@@ -502,4 +531,10 @@ func (s *Server) handle(method string, raw json.RawMessage) (any, *appserver.RPC
 		return map[string]any{"turn": map[string]any{"id": id, "status": appserver.TurnInProgress, "items": []any{}}}, nil
 	}
 	return nil, &appserver.RPCError{Code: CodeMethodNotFound, Message: "method not found: " + method}
+}
+
+// BackendDownError is the error live codex-cli 0.167.0 returns from
+// account/rateLimits/read when the app-server cannot reach its backend.
+func BackendDownError() *appserver.RPCError {
+	return &appserver.RPCError{Code: -32603, Message: "failed to fetch codex rate limits: error sending request for url (https://chatgpt.com/backend-api/wham/usage)"}
 }

@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/GoodOlClint/crosstalk/internal/harness"
+	"github.com/GoodOlClint/crosstalk/internal/harness/codex/appserver"
 )
 
 var _ harness.Installer = (*Harness)(nil)
@@ -470,6 +471,34 @@ func installedVersion(env harness.InstallEnv) string {
 	return best
 }
 
+func (h *Harness) k9(ctx context.Context, env harness.InstallEnv) harness.CheckResult {
+	r := harness.CheckResult{ID: "K9", OK: true, WarnOnly: true}
+	a, ok := h.Threads.(*Adapter)
+	if !ok {
+		a = &Adapter{ControlSocket: filepath.Join(env.Home, appserver.ControlSocketRel)}
+	}
+	var up, unknown []string
+	for _, c := range a.checkBackends(ctx) {
+		switch c.state {
+		case harness.BackendReachable:
+			up = append(up, c.endpoint)
+		case harness.BackendUnreachable:
+			return harness.CheckResult{ID: "K9", WarnOnly: true, Detail: fmt.Sprintf("Codex app-server at %s cannot reach its OpenAI backend: %v. If Codex sessions hang on Reconnecting, restarting it (codex app-server daemon restart) may fix it; it interrupts running Codex turns.", c.endpoint, c.err)}
+		default:
+			unknown = append(unknown, c.endpoint)
+		}
+	}
+	switch {
+	case len(up)+len(unknown) == 0:
+		r.Detail = "no managed Codex app-server running"
+	case len(unknown) > 0:
+		r.Detail = "could not tell whether the Codex app-server reaches its OpenAI backend (" + strings.Join(unknown, ", ") + ")"
+	default:
+		r.Detail = "Codex app-server reaches its OpenAI backend (model availability not checked)"
+	}
+	return r
+}
+
 func (h *Harness) Checks(ctx context.Context, env harness.InstallEnv) []harness.CheckResult {
 	k1 := harness.CheckResult{ID: "K1"}
 	k2 := harness.CheckResult{ID: "K2"}
@@ -511,7 +540,7 @@ func (h *Harness) Checks(ctx context.Context, env harness.InstallEnv) []harness.
 	r, err := registered(ctx, env)
 	if err != nil {
 		k5.Detail, k6.Detail = err.Error(), "no registered server to start"
-		return []harness.CheckResult{k1, k2, k3, k5, k6}
+		return []harness.CheckResult{k1, k2, k3, k5, k6, h.k9(ctx, env)}
 	}
 	t := r.Transport
 	fi, serr := os.Stat(t.Command)
@@ -527,5 +556,5 @@ func (h *Harness) Checks(ctx context.Context, env harness.InstallEnv) []harness.
 	} else {
 		k6.OK, k6.Detail = true, "registered server lists the CrossTalk tools at "+env.Version
 	}
-	return []harness.CheckResult{k1, k2, k3, k5, k6}
+	return []harness.CheckResult{k1, k2, k3, k5, k6, h.k9(ctx, env)}
 }
