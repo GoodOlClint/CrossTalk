@@ -43,6 +43,7 @@ const (
 	ReasonJournal           = "journal"
 	ReasonRemoteKind        = "remote_kind"
 	ReasonIDInUse           = "message_id_in_use"
+	ReasonNoEndpoint        = "no_endpoint"
 )
 
 // RemoteKeyPrefix starts every host-scoped sender key; no local key (an
@@ -339,9 +340,13 @@ func (r *Receiver) receive(ctx context.Context, in Inbound, resume bool) Result 
 			return reject(ReasonJournal)
 		}
 	}
-	st, _ := r.ad.Inject(ctx, m, adapter.Delivery{Mode: m.Delivery, Target: self.Binding, VerifiedSender: in.Sender.Verified, SenderHarness: in.Sender.Harness})
+	st, err := r.ad.Inject(ctx, m, adapter.Delivery{Mode: m.Delivery, Target: self.Binding, VerifiedSender: in.Sender.Verified, SenderHarness: in.Sender.Harness})
 	if !st.Injectable() {
 		st = adapter.Unknown
+	}
+	var reason string
+	if m.Kind == msg.Ask && st == adapter.Unreachable && errors.Is(err, adapter.ErrNoEndpoint) {
+		st, reason = adapter.Rejected, ReasonNoEndpoint
 	}
 	resolveErr := r.j.ResolveFor(scope, m.MessageID, string(st))
 	dedupeErr := r.j.SetDedupeState(key, m.MessageID, string(st))
@@ -352,7 +357,7 @@ func (r *Receiver) receive(ctx context.Context, in Inbound, resume bool) Result 
 	if routed && (st == adapter.Rejected || st == adapter.Unreachable) {
 		r.closeRoute(rt)
 	}
-	return Result{MessageID: m.MessageID, State: st}
+	return Result{MessageID: m.MessageID, State: st, Reason: reason}
 }
 
 // admission runs the hop, policy and size checks and returns the first

@@ -11,6 +11,7 @@ import (
 
 	"github.com/GoodOlClint/crosstalk/internal/adapter"
 	"github.com/GoodOlClint/crosstalk/internal/harness/codex"
+	"github.com/GoodOlClint/crosstalk/internal/receiver"
 )
 
 func TestNativeInformOnlyCarriesHonestHint(t *testing.T) {
@@ -258,5 +259,59 @@ func TestUnreachableCodexWithoutEndpointHintsNoDaemonOrConfigOverride(t *testing
 	}
 	if h, _ := res["hint"].(string); strings.Contains(h, "config.toml") {
 		t.Fatalf("hint on a bound endpoint %q", h)
+	}
+}
+
+func TestAskToCodexWithoutEndpointIsRefusedInformStaysPullable(t *testing.T) {
+	w := newWorld(t)
+	alice := w.claude(4001, "sess-alice", "alice")
+	w.codex.addThread("T-bob", "bob")
+	w.codex.addThread("T-eve", "eve")
+	w.codex.SetBinding(adapter.Binding{Harness: adapter.Codex, SessionRef: "T-bob"})
+	na := w.node(alice.pid, w.lb, nil)
+	nb := w.node(1, w.lb, nil)
+	ne := w.node(1, w.lb, nil)
+	nb.ok(thread("T-bob"), "receive_message", map[string]any{})
+	ne.ok(thread("T-eve"), "receive_message", map[string]any{})
+	noEndpoint := adapter.Outcome{State: adapter.Unreachable, Err: codex.ErrNoEndpoint, NoWrite: true}
+	mailbox := func() []string {
+		var texts []string
+		for _, e := range nb.ok(thread("T-bob"), "receive_message", map[string]any{})["messages"].([]any) {
+			texts = append(texts, fmt.Sprint(e.(map[string]any)["text"]))
+		}
+		return texts
+	}
+	wantHint := func(res map[string]any) {
+		t.Helper()
+		h, _ := res["hint"].(string)
+		if !strings.Contains(h, "--no-daemon") || !strings.Contains(h, "config.toml") {
+			t.Fatalf("hint %q", h)
+		}
+	}
+
+	w.codex.ScriptInject(noEndpoint)
+	res := na.ok(nil, "ask", send("bob", "question?"))
+	if res["state"] != "rejected" || res["reason"] != receiver.ReasonNoEndpoint {
+		t.Fatalf("ask %v", res)
+	}
+	wantHint(res)
+	if got := mailbox(); len(got) != 0 {
+		t.Fatalf("refused ask is pullable: %v", got)
+	}
+
+	w.codex.ScriptInject(noEndpoint)
+	res = na.ok(nil, "send_message", send("bob", "fyi"))
+	if res["state"] != "unreachable" || res["reason"] == receiver.ReasonNoEndpoint {
+		t.Fatalf("send %v", res)
+	}
+	wantHint(res)
+	if got := mailbox(); len(got) != 1 || !strings.Contains(got[0], "fyi") {
+		t.Fatalf("inform not pullable: %v", got)
+	}
+
+	w.codex.ScriptInject(adapter.Outcome{State: adapter.Accepted})
+	res = na.ok(nil, "ask", send("eve", "question?"))
+	if res["state"] != "accepted" || res["reason"] != nil {
+		t.Fatalf("ask to reachable %v", res)
 	}
 }

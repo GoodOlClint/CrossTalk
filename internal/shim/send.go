@@ -294,7 +294,7 @@ func (st *AgentState) deliver(ctx context.Context, m msg.Message) mcpserver.Resu
 		state, reason, taskID := st.viaTransport(ctx, d, m)
 		st.outboundTask(m, d.AgentID, state, reason, false, taskID)
 		res.State, res.Reason = state, reason
-		if state == adapter.Unreachable && d.Harness == string(adapter.Codex) && d.HarnessEndpoint == nil {
+		if reason == receiver.ReasonNoEndpoint || state == adapter.Unreachable && d.Harness == string(adapter.Codex) && d.HarnessEndpoint == nil {
 			res.Hint = hintCodexNoEndpoint
 		}
 		res.Hint = joinHint(res.Hint, st.countSend(d.AgentID, state))
