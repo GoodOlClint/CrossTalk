@@ -51,6 +51,23 @@ func TestEnableRefusesOlderBinary(t *testing.T) {
 	}
 }
 
+func TestEnableChecksBinaryBeforeConfirming(t *testing.T) {
+	home, rec := unitSandbox(t, "linux")
+	bin := filepath.Join(home, ".local", "bin", "crosstalk")
+	withRunningVersion(t, "0.2.0")
+	fakeVersionBin(t, bin, "0.1.5")
+	code, out := enableCmd(t, "--bind", "127.0.0.1")
+	if code != 1 || !strings.Contains(out, "crosstalk reinstall") {
+		t.Errorf("enable without --yes and an older binary: exit %d, want 1 before any confirmation\n%s", code, out)
+	}
+	if _, err := os.Stat(remoteUnitPath(home)); !os.IsNotExist(err) {
+		t.Errorf("unit written despite refusal: %v", err)
+	}
+	if c := rec.all(); len(c) != 0 {
+		t.Errorf("commands ran: %v", c)
+	}
+}
+
 func TestEnableAcceptsEqualAndNewerBinary(t *testing.T) {
 	for _, got := range []string{"0.2.0", "0.2.1", "0.10.0"} {
 		t.Run(got, func(t *testing.T) {
@@ -80,6 +97,14 @@ func TestCheckUnitBinOrdering(t *testing.T) {
 		{"0.2.0-rc.1", "0.2.0", true},
 		{"0.2.0-rc.1", "0.2.0-rc.1", true},
 		{"0.2.0", "v0.2.0", true},
+		{"0.2.0-rc.10", "0.2.0-rc.9", false},
+		{"0.2.0-rc.9", "0.2.0-rc.10", true},
+		{"0.2.0-rc.1", "0.2.0-rc.1.1", true},
+		{"0.2.0-rc.1.1", "0.2.0-rc.1", false},
+		{"0.2.0-1", "0.2.0-rc", true},
+		{"0.2.0", "0.2.0+abc", true},
+		{"0.2.0+abc", "0.2.0", true},
+		{"0.2.1", "0.2.0+abc", false},
 	} {
 		dir := t.TempDir()
 		bin := filepath.Join(dir, "crosstalk")

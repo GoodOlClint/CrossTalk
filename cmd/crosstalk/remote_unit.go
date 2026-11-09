@@ -176,11 +176,40 @@ func compareVersions(a, b string) (c int, ok bool) {
 	case bpre == "":
 		return -1, true
 	}
-	return strings.Compare(apre, bpre), true
+	return comparePre(apre, bpre), true
+}
+
+func comparePre(a, b string) int {
+	x, y := strings.Split(a, "."), strings.Split(b, ".")
+	for i := 0; i < len(x) && i < len(y); i++ {
+		m, merr := strconv.Atoi(x[i])
+		n, nerr := strconv.Atoi(y[i])
+		switch {
+		case merr == nil && nerr == nil && m != n:
+			return cmpInt(m, n)
+		case merr == nil && nerr != nil:
+			return -1
+		case merr != nil && nerr == nil:
+			return 1
+		case merr != nil && nerr != nil && x[i] != y[i]:
+			return strings.Compare(x[i], y[i])
+		}
+	}
+	return cmpInt(len(x), len(y))
+}
+
+func cmpInt(a, b int) int {
+	if a < b {
+		return -1
+	}
+	if a > b {
+		return 1
+	}
+	return 0
 }
 
 func splitVersion(v string) (core [3]int, pre string, ok bool) {
-	v = strings.TrimPrefix(v, "v")
+	v, _, _ = strings.Cut(strings.TrimPrefix(v, "v"), "+")
 	v, pre, _ = strings.Cut(v, "-")
 	parts := strings.Split(v, ".")
 	if len(parts) != 3 {
