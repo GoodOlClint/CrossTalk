@@ -38,11 +38,11 @@ Report whether the app-server behind a Codex session reaches its OpenAI backend,
 - API-key accounts and custom model providers are `unknown`, as is a session whose app-server cannot be dialed. The API-key and custom-provider cases were not measured against a live server.
 - One extra `account/read` and one `account/rateLimits/read` per endpoint per 30 s, only for `list_agents` or a send to a Codex session.
 - Remote hosts do not export `backend`; a remote sender gets no backend hint.
-- Pinning tests: `internal/harness/codex/backend_test.go`, `backend_classify_test.go` (error frame fixture `testdata/ratelimits-backend-down.json`), `install_k9_test.go`, `internal/mcpserver/golden_test.go`, `internal/shim/backend_hint_test.go`. Not covered in CI: a live check against a private blocked app-server.
+- Pinning tests: `internal/harness/codex/backend_test.go`, `backend_classify_test.go` (error frame fixture `testdata/ratelimits-backend-down.json`), `install_k9_test.go`, `internal/mcpserver/golden_test.go`, `internal/shim/backend_hint_test.go`. Not covered in CI: the live check in the trial record.
 
 ## Trial record
 
 - Council verdict: none; the plan was reviewed once by Codex (adversarial review) and approved by the operator with six rulings.
 - Rests on: ADRs 0003, 0007, 0008, 0014 (provisional).
 - Commits: `git log --grep 'Provisional-ADR: 0025'` (none yet).
-- Outcome: not yet run live end to end.
+- Outcome: run live on 2026-11-09 with the branch binary's `list_agents` (Codex 0.167.0). A thread on a private app-server whose network was blocked showed `reachable: true, backend: unreachable`; a thread on the managed daemon showed `backend: reachable`. The send hint was not run live; the shim tests cover it.
