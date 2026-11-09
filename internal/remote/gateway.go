@@ -535,15 +535,22 @@ func (g *Gateway) enter(fp string) (func(), int) {
 	}, 0
 }
 
-// acquireGatewayLock takes gateway.lock without waiting and records this
-// pid in it so a second gateway can name the holder.
+const gatewayLockRetry = 50 * time.Millisecond
+
+// acquireGatewayLock takes gateway.lock, retrying once after gatewayLockRetry,
+// and records this pid in it so a second gateway can name the holder.
 func acquireGatewayLock(stateDir string) (func(), error) {
 	f, err := openLockFile(stateDir, "gateway.lock")
 	if err != nil {
 		return nil, err
 	}
 	path := filepath.Join(stateDir, "gateway.lock")
-	if err := unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
+	err = unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB)
+	if errors.Is(err, unix.EWOULDBLOCK) {
+		time.Sleep(gatewayLockRetry)
+		err = unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB)
+	}
+	if err != nil {
 		defer f.Close()
 		if errors.Is(err, unix.EWOULDBLOCK) {
 			b, _ := io.ReadAll(io.LimitReader(f, 32))
