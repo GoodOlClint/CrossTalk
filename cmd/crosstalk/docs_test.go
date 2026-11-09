@@ -76,3 +76,19 @@ func TestSetupDocCoversPairing(t *testing.T) {
 		}
 	}
 }
+
+func TestSetupDocCoversRemoteFirewallApprovalRefusal(t *testing.T) {
+	doc := repoFile(t, "docs/setup.md")
+	for _, want := range []string{
+		"inbound access on its port (default 7745) and outbound access to paired hosts",
+		"no per-firewall steps are given",
+		"has not approved CrossTalk tool calls lets an `ask` expire",
+		"`remote enable` refuses a binary older than the running one",
+		"crosstalk reinstall",
+		"brew upgrade crosstalk",
+	} {
+		if !strings.Contains(doc, want) {
+			t.Errorf("setup.md lacks %q", want)
+		}
+	}
+}
