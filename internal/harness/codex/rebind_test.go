@@ -1,7 +1,11 @@
 package codex_test
 
 import (
+	"context"
 	"errors"
+	"net"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -130,4 +134,93 @@ func TestInjectRebindsWhenBoundEndpointIsGone(t *testing.T) {
 	if got := moved.Thread(thread).ToolOutputs; len(got) != 1 {
 		t.Fatalf("tool outputs on moved server = %+v", got)
 	}
+}
+
+func TestInjectRebindsAcrossTwoMoves(t *testing.T) {
+	a1, b1, c1 := appservertest.New(t), appservertest.New(t), appservertest.New(t)
+	a1.AddThread(idleThread())
+	b1.AddThread(unloadedThread())
+	c1.AddThread(unloadedThread())
+	a := &codex.Adapter{ControlSocket: a1.Endpoint(), Endpoints: []string{b1.Endpoint(), c1.Endpoint()}, RebindInterval: time.Nanosecond}
+	b, err := a.Register(ctx(t), thread)
+	if err != nil || b.HarnessEndpoint != a1.Endpoint() {
+		t.Fatalf("Register = %+v, %v", b, err)
+	}
+	d := adapter.Delivery{Mode: msg.Immediate, VerifiedSender: true, Target: b}
+	for i, step := range []struct{ gone, next *appservertest.Server }{{a1, b1}, {b1, c1}} {
+		step.gone.Close()
+		load(step.next)
+		if st, err := a.Inject(ctx(t), message("x"), d); st != adapter.Accepted || err != nil {
+			t.Fatalf("move %d: Inject = %s, %v", i+1, st, err)
+		}
+		if got := step.next.Thread(thread).ToolOutputs; len(got) != 1 {
+			t.Fatalf("move %d: tool outputs = %+v", i+1, got)
+		}
+	}
+}
+
+func TestStalledLookupBlocksNeitherOtherThreadsNorCanceledSends(t *testing.T) {
+	old := codex.EndpointProbeTimeout
+	codex.EndpointProbeTimeout = 3 * time.Second
+	defer func() { codex.EndpointProbeTimeout = old }()
+	s := appservertest.New(t)
+	s.AddThread(unloadedThread())
+	a := &codex.Adapter{ControlSocket: s.Endpoint(), RebindInterval: time.Nanosecond}
+	d := bindUnhosted(t, a)
+	load(s)
+	if st, err := a.Inject(ctx(t), message("recover"), d); st != adapter.Accepted || err != nil {
+		t.Fatalf("recovery: %s, %v", st, err)
+	}
+
+	dir, err := os.MkdirTemp("", "cx")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	sock := filepath.Join(dir, "stall.sock")
+	ln, err := net.Listen("unix", sock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	accepted := make(chan net.Conn, 4)
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			accepted <- c
+		}
+	}()
+	a.Endpoints = []string{"unix://" + sock}
+	other := adapter.Delivery{Mode: msg.Immediate, VerifiedSender: true, Target: adapter.Binding{Harness: adapter.Codex, SessionRef: "019a0000-0000-7000-8000-0000000000ff"}}
+	stalled := make(chan struct{})
+	go func() {
+		a.Inject(context.Background(), message("x"), other)
+		close(stalled)
+	}()
+	select {
+	case c := <-accepted:
+		defer c.Close()
+	case <-time.After(2 * time.Second):
+		t.Fatal("lookup never reached the stalled endpoint")
+	}
+
+	start := time.Now()
+	if st, err := a.Inject(ctx(t), message("during"), d); st != adapter.Accepted || err != nil || time.Since(start) > time.Second {
+		t.Fatalf("recovered thread during a stalled lookup: %s, %v after %s", st, err, time.Since(start))
+	}
+	cctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	start = time.Now()
+	if st, _ := a.Inject(cctx, message("y"), other); st != adapter.Unreachable || time.Since(start) > time.Second {
+		t.Fatalf("canceled waiter: %s after %s", st, time.Since(start))
+	}
+	select {
+	case <-stalled:
+		t.Fatal("stalled lookup finished early; the test did not overlap it")
+	default:
+	}
+	<-stalled
 }

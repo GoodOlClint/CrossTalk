@@ -28,6 +28,9 @@ func (a *Adapter) Inject(ctx context.Context, m msg.Message, d adapter.Delivery)
 	if thread == "" {
 		return adapter.Unreachable, ErrNoThread
 	}
+	if cur := a.current(thread); cur != "" {
+		ep = cur
+	}
 	if ep == "" {
 		if ep = a.rebind(ctx, thread, ""); ep == "" {
 			return adapter.Unreachable, ErrNoEndpoint

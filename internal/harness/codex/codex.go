@@ -45,9 +45,10 @@ type Adapter struct {
 
 	mu       sync.Mutex
 	bindings map[string]adapter.Binding
-	// rebindMu serializes Inject's endpoint lookups; lookedUp is guarded by mu.
-	rebindMu sync.Mutex
-	lookedUp map[string]time.Time
+	// rebinding holds one token per thread while Inject looks it up; it and
+	// lookedUp are guarded by mu.
+	rebinding map[string]chan struct{}
+	lookedUp  map[string]time.Time
 }
 
 var _ adapter.Adapter = (*Adapter)(nil)
@@ -199,11 +200,29 @@ func (a *Adapter) Register(ctx context.Context, threadID string) (adapter.Bindin
 // found endpoint replaces the adapter's cached binding; the caller's binding,
 // the journal key and the descriptor keep the bind-time value.
 func (a *Adapter) rebind(ctx context.Context, threadID, failed string) string {
-	a.rebindMu.Lock()
-	defer a.rebindMu.Unlock()
 	interval := a.RebindInterval
 	if interval == 0 {
 		interval = DefaultRebindInterval
+	}
+	a.mu.Lock()
+	if ep := a.bindings[threadID].HarnessEndpoint; ep != "" && ep != failed {
+		a.mu.Unlock()
+		return ep
+	}
+	if a.rebinding == nil {
+		a.rebinding = map[string]chan struct{}{}
+	}
+	tok := a.rebinding[threadID]
+	if tok == nil {
+		tok = make(chan struct{}, 1)
+		a.rebinding[threadID] = tok
+	}
+	a.mu.Unlock()
+	select {
+	case tok <- struct{}{}:
+		defer func() { <-tok }()
+	case <-ctx.Done():
+		return ""
 	}
 	a.mu.Lock()
 	b, last := a.bindings[threadID], a.lookedUp[threadID]
@@ -232,6 +251,13 @@ func (a *Adapter) rebind(ctx context.Context, threadID, failed string) string {
 	a.bindings[threadID] = adapter.Binding{Harness: adapter.Codex, SessionRef: threadID, HarnessEndpoint: hs[0].endpoint, HarnessVersion: hs[0].version}
 	a.logger().Info("codex: thread rebound", "thread", threadID, "endpoint", hs[0].endpoint)
 	return hs[0].endpoint
+}
+
+// current is the endpoint the adapter last bound threadID to, or "".
+func (a *Adapter) current(threadID string) string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.bindings[threadID].HarnessEndpoint
 }
 
 // Status reads the thread on its registered endpoint, or on the single
