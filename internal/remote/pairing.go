@@ -5,7 +5,6 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -409,17 +408,7 @@ func JoinGateway(ctx context.Context, o JoinOptions) (Peer, error) {
 	tr := &http.Transport{
 		DisableKeepAlives:   true,
 		TLSHandshakeTimeout: hsTimeout,
-		TLSClientConfig: &tls.Config{
-			Certificates:       []tls.Certificate{o.Host.Certificate},
-			MinVersion:         tls.VersionTLS13,
-			InsecureSkipVerify: true,
-			VerifyConnection: func(cs tls.ConnectionState) error {
-				if len(cs.PeerCertificates) == 0 || Fingerprint(cs.PeerCertificates[0]) != t.Fingerprint {
-					return errors.New("the server's fingerprint does not match the token")
-				}
-				return nil
-			},
-		},
+		TLSClientConfig:     pinnedTLSConfig(o.Host, Peer{Fingerprint: t.Fingerprint}, nil),
 	}
 	defer tr.CloseIdleConnections()
 	body, err := json.Marshal(pairRequest{
@@ -442,7 +431,7 @@ func JoinGateway(ctx context.Context, o JoinOptions) (Peer, error) {
 		if he := stalled(err); he != nil {
 			return Peer{}, fmt.Errorf("remote: %w", he)
 		}
-		if strings.Contains(err.Error(), "bad certificate") {
+		if isAlert(err) {
 			return Peer{}, fmt.Errorf("remote: %s is not waiting for a pairing; run crosstalk remote pair there first", addr)
 		}
 		return Peer{}, fmt.Errorf("remote: %s: %w", addr, err)
