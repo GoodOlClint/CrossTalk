@@ -22,7 +22,9 @@ A Codex session receives only when the managed app server (Codex's shared backgr
 - Any `-c key=value` override on the command line makes Codex start its own app server instead of the managed one. `-s`, `-a` and `--add-dir` are fine.
 - `codex exec` runs one task with no app server CrossTalk can reach.
 
-Such a session can still send, and it can pull messages with `receive_message`. But its `list_agents` row shows an empty `cwd` and `reachable: false`, and a message or `ask` sent to it comes back `unreachable`, so it can never answer an `ask`. To fix it, start plain `codex` and put every setting in `~/.codex/config.toml`. If you must keep `--no-daemon`, [setup](setup.md) describes an untested workaround that gives the tab its own app server.
+Such a session can still send. But its `list_agents` row shows an empty `cwd` and `reachable: false`, and a message or `ask` sent to it comes back `unreachable`. To fix it, start plain `codex` and put every setting in `~/.codex/config.toml`.
+
+Workaround without a restart: the session can pull undelivered messages by calling `receive_message`, but nothing wakes it, so it sees them only when it polls. It cannot answer a pulled `ask` with `reply`: the ask closed as `unreachable` when it was sent, so `reply` is refused with `ask_closed`. It answers with `send_message` to the sender instead, and that answer arrives as a new message, not linked to the ask. If you must keep `--no-daemon`, [setup](setup.md) describes an untested workaround that gives the tab its own app server.
 
 ## Is there a limit on messages?
 
