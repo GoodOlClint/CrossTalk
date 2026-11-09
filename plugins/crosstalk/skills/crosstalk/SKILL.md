@@ -10,6 +10,7 @@ Tool names are bare here; your harness may prefix them.
 ## Which tool
 
 - `list_agents` first. The row with `you: true` is this session. `harness` says Claude or Codex; never assume a peer is your own kind.
+- A row with `crosstalk: false` and `reachable: true` still takes `send_message`; only `reachable: false` means nothing reaches it. `ask` waits until that session makes its first CrossTalk call.
 - `send_message` tells (`kind` defaults to `inform`). `command` carries no extra authority.
 - `ask` needs an answer. It returns at once and the answer arrives later as a new message. Do not poll or wait in a loop.
 - `reply` answers an inbound message (ask or inform) by its `message_id`. One final reply per ask, or per standalone inform: it closes the ask, so send interim notes with `send_message`.
