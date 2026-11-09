@@ -56,59 +56,63 @@ What was not measured: an app-server using an API key (not ChatGPT auth), an app
 | 4 | Thread status (`systemError`) or `canAcceptDirectInput` | free (already read) | n/a | n/a | measured: does not change, so no signal |
 | 5 | `~/.codex/app-server-daemon/daemon.stderr.log` (last resort) | file read + text matching of an unversioned log format | stale lines after recovery unless timestamped | immediate | daemon only; useless for other endpoints |
 
-Recommendation: rank 1, `account/rateLimits/read`. It is the only measured signal that a fresh, unsubscribed connection (what CrossTalk has) can see while the thread is idle or stuck, it costs one call on a connection already open, and it works for every endpoint kind. Rank 2 is the accurate per-thread signal but needs a persistent subscriber, which CrossTalk's design (no daemon, short connections) does not have; it is the escalation path if rank 1 proves too noisy. The daemon log is not needed: rank 1 works.
+Recommendation: rank 1, `account/rateLimits/read`, reported as what it measures: whether the app-server reaches its OpenAI backend, not whether the model will answer. It is the only measured signal that a fresh, unsubscribed connection (what CrossTalk has) can see while the thread is idle or stuck, it costs one call on a connection already open, and it works for every endpoint kind. Rank 2 is the accurate per-thread signal but needs a persistent subscriber, which CrossTalk's design (no daemon, short connections) does not have; it is the escalation path if rank 1 proves too noisy. The daemon log is not needed: rank 1 works.
 
 ## Change plan
 
 ### 1. Probe (Codex harness package only, ADR 0008)
 
 - `appserver.Client.RateLimits(ctx)` calls `account/rateLimits/read` with `{excludeResetCreditDetails: true}` (background-poll mode per the schema) and returns the raw error.
-- `codex.classifyHealth(err) string`: `nil` → `ok`; an `*RPCError` whose message contains `error sending request` or `Connection failed` → `api_unreachable`; anything else (other RPC errors, auth-mode refusals, timeout, ambiguous) → `unknown`.
-- Gate: only probe when the `initialize`d server's account is ChatGPT auth (`account/read` → `account.type == "chatgpt"`), because `wham/usage` is the ChatGPT backend. Otherwise `unknown`. (Open Question 2 covers custom providers.)
-- Bound: probe timeout 2 s (`HealthProbeTimeout`); a timeout yields `unknown`, never `api_unreachable`.
-- Cache: per normalized endpoint, in the Adapter, 30 s TTL (`HealthTTL`), so a `list_agents` followed by a send costs one probe. `ok` and `api_unreachable` are cached; `unknown` from a timeout is cached for the TTL too, so a stalled server does not add 2 s to every call.
-- Where it runs: `LoadedThreads` probes each endpoint once on the connection it already holds, concurrently with the `thread/read` calls (the client multiplexes calls by id). `Adapter.Health(ctx, endpoint)` serves the send path from the cache, opening a connection only on a miss.
+- `codex.classifyBackend(err) string`: `nil` → `reachable`; an `*RPCError` whose message contains `error sending request` or `Connection failed` → `unreachable`; anything else (other RPC errors, auth-mode refusals, timeout, ambiguous) → `unknown`.
+- What it claims: `reachable` means the app-server reached `chatgpt.com/backend-api` (the usage endpoint) in the last TTL; it does not mean the Responses endpoint or the model works. `unreachable` means a connection-level failure to that same backend host, which in the measured outage coincided with the Responses failure; it is strong evidence, not proof, that a turn will stall. A usage-only outage (usage endpoint down, Responses up) would report `unreachable` for a working session, and a Responses-only outage would report `reachable`; neither was measurable here (one proxy blocks both, as they share a host), and both are named as limits in the field's documentation.
+- Gate per endpoint: probe only when `account/read` says `account.type == "chatgpt"`, because `wham/usage` is the ChatGPT backend; otherwise every thread on that endpoint is `unknown`.
+- Gate per thread: apply the endpoint's result only to threads whose `thread/read` `modelProvider` is `openai` (the measured thread's value); a thread on any other provider is `unknown`, because the probe says nothing about its base URL.
+- Bound: probe timeout 2 s (`BackendProbeTimeout`); a timeout yields `unknown`, never `unreachable`.
+- Cache: per normalized endpoint, in the Adapter, 30 s TTL (`BackendTTL`), so a `list_agents` followed by a send costs one probe. `reachable` and `unreachable` are cached; `unknown` from a timeout is cached for the TTL too, so a stalled server does not add 2 s to every call.
+- Where it runs: `LoadedThreads` probes each endpoint once on the connection it already holds, concurrently with the `thread/read` calls (the client multiplexes calls by id). `Adapter.Backend(ctx, endpoint)` serves the send path from the cache, opening a connection only on a miss.
 
 ### 2. Schema (`list_agents` row)
 
-- `harness.Session` gains `Health string`; `mcpserver.Row` gains `Health string \`json:"health,omitempty"\``. Set from `LoadedThread.Health` for Codex sessions; empty (omitted) for Claude and Antigravity rows, so their output is unchanged.
-- Values: `ok`, `api_unreachable`, `unknown`.
-- `reachable` keeps its meaning (the thread accepts direct input). A row can be `reachable: true, health: api_unreachable`: messages are delivered into the thread and the session cannot act on them.
-- A Codex row from the descriptor directory only (thread not loaded on any endpoint) has no health; the field is omitted.
+- `harness.Session` gains `Backend string`; `mcpserver.Row` gains `Backend string \`json:"backend,omitempty"\``. Set from `LoadedThread.Backend` for Codex sessions; empty (omitted) for Claude and Antigravity rows, so their output is unchanged.
+- Values: `reachable`, `unreachable`, `unknown`. The name says what was measured (the hosting app-server's OpenAI backend), not a general health verdict.
+- `reachable` (the existing row field) keeps its meaning (the thread accepts direct input). A row can be `reachable: true, backend: unreachable`: messages are delivered into the thread and the session most likely cannot act on them.
+- A Codex row from the descriptor directory only (thread not loaded on any endpoint) has no `backend`; the field is omitted.
 - Remote rows (`RemoteRow`, ADR 0022) do not get the field in this change; the gateway allowlist struct is untouched (Open Question 4).
-- Design §3 diff (described, not applied): in the Discovery paragraph's row list, after `reachable: bool (...)`, add "`health` (Codex rows only: `ok`, `api_unreachable` when the hosting app-server's `account/rateLimits/read` fails to reach its backend, `unknown` when that cannot be told; cached 30 s per endpoint)".
-- Design §8 diff (described, not applied): in the `list_agents()` bullet add `health` to the listed fields; in the hint bullet add "A send to a Codex session whose app-server is `api_unreachable` keeps its state and carries a hint that the session cannot act on it until its app-server reaches its API again."
+- Design §3 diff (described, not applied): in the Discovery paragraph's row list, after `reachable: bool (...)`, add "`backend` (Codex rows on the `openai` provider with ChatGPT auth only: `reachable` or `unreachable` from the hosting app-server's `account/rateLimits/read`, which tests the ChatGPT backend and not the model itself; `unknown` when that cannot be told; cached 30 s per endpoint)".
+- Design §8 diff (described, not applied): in the `list_agents()` bullet add `backend` to the listed fields; in the hint bullet add "A send to a Codex session whose `backend` is `unreachable` keeps its state and carries a hint: for `accepted`/`queued`, that the session most likely cannot act on it until its app-server reaches its backend again; for `unknown`, that delivery is unconfirmed and the backend is down as well."
 
 ### 3. Hint on `send_message` / `ask`
 
-- Fires when the target is a Codex session (registered descriptor with `harness_endpoint`, or a native Codex target with a binding endpoint), the delivery state is `accepted`, `queued` or `unknown`, and `Health(endpoint)` is `api_unreachable`. It does not fire on `ok` or `unknown` health, on `rejected`/`unreachable` states, or for non-Codex targets.
+- Fires when the target is a Codex session (registered descriptor with `harness_endpoint`, or a native Codex target with a binding endpoint) whose `backend` is `unreachable`. It does not fire on `reachable` or `unknown`, on `rejected`/`unreachable` delivery states, or for non-Codex targets. The text depends on the delivery state, because only `accepted` and `queued` confirm the thread has the message.
 - It changes no state and refuses nothing (same stance as ADR 0014); it is joined with any other hint by `joinHint`.
-- Text (`hintCodexAPIUnreachable`): "That Codex session's app-server cannot reach its model API right now, so the message reached the thread but the session cannot act on it, and an ask will get no reply until the network returns. Do not resend. Tell your user; restarting the Codex app-server (codex app-server daemon restart) recovered it once, and it interrupts running Codex work."
-- Placement: the two Codex hint sites in `internal/shim/send.go` `deliver` (registered branch next to `hintCodexNoEndpoint`, native branch next to `hintNativeOneWay`). The shim calls a harness-provided check rather than branching on Codex itself: an optional `harness.HealthChecker` interface (`Health(ctx, endpoint) string`) on the harness, looked up by the target's harness name. The existing `d.Harness == Codex` check next to `hintCodexNoEndpoint` is precedent, but the new code should not add more of it.
+- `accepted`/`queued` text (`hintCodexBackendDown`): "That Codex session's app-server cannot reach its OpenAI backend right now. The message is in the thread, but the session most likely cannot act on it, and an ask may get no reply until the network returns. Do not resend; tell your user."
+- `unknown` text (`hintCodexBackendDownUnknown`): "Delivery to that Codex session is unconfirmed, and its app-server also cannot reach its OpenAI backend right now. Do not resend blind: check receive_message for this message_id later, and tell your user." This keeps the existing no-blind-resend rule for `unknown` and makes no delivery claim.
+- Neither hint names `codex app-server daemon restart`: the probe is not proof of the outage, and a restart interrupts every Codex turn on that daemon. The restart advice lives only in the operator-facing install check (section 4).
+- Placement: the two Codex hint sites in `internal/shim/send.go` `deliver` (registered branch next to `hintCodexNoEndpoint`, native branch next to `hintNativeOneWay`). The shim calls a harness-provided check rather than branching on Codex itself: an optional `harness.BackendChecker` interface (`Backend(ctx, endpoint) string`) on the harness, looked up by the target's harness name. The existing `d.Harness == Codex` check next to `hintCodexNoEndpoint` is precedent, but the new code should not add more of it.
 
 ### 4. `crosstalk install --check`
 
-- New warn-only check `K8` from the Codex harness `Checks`: dial the managed control socket; if no daemon is listening, K8 passes with detail "no managed Codex app-server running"; otherwise run the probe and report `ok` ("Codex app-server reaches its model API") or warn with "Codex app-server at <socket> cannot reach its model API: <error>. Restart it with codex app-server daemon restart." Endpoints from `CROSSTALK_CODEX_ENDPOINTS` are probed the same way, one line each.
+- New warn-only check `K8` from the Codex harness `Checks`: dial the managed control socket; if no daemon is listening, K8 passes with detail "no managed Codex app-server running"; otherwise run the probe and report `reachable` ("Codex app-server reaches its OpenAI backend"; model availability not checked) or warn with "Codex app-server at <socket> cannot reach its OpenAI backend: <error>. If Codex sessions hang on Reconnecting, restarting it (codex app-server daemon restart) recovered one observed case; it interrupts running Codex turns." Endpoints from `CROSSTALK_CODEX_ENDPOINTS` are probed the same way, one line each.
 - Warn-only, so a laptop offline at install time does not fail the install.
 
 ### 5. Tests that pin it
 
-1. `classifyHealth` table test: the measured `-32603 ... error sending request for url (...)` error → `api_unreachable`; success → `ok`; `-32600` and an unrelated `-32603` text → `unknown`; `ErrAmbiguous`/context deadline → `unknown`. The error frame is checked in as a fixture under `internal/harness/codex/testdata/` (it carries no account data; the healthy response does, so it is not checked in).
-2. Adapter test against the `appservertest` fake: rateLimits error → `LoadedThread.Health == api_unreachable`; success → `ok`; a non-ChatGPT `account/read` → `unknown` with no rateLimits call; a server that never answers rateLimits → `unknown` within `HealthProbeTimeout` and the listing still returns.
-3. Cache test: two `Health` calls inside the TTL make one RPC; after the TTL, two.
-4. `mcpserver` golden test: a Codex row carries `health`, a Claude row has no `health` key.
-5. Shim tests: registered Codex target, `accepted`, `api_unreachable` → hint present and state still `accepted`; same with `ok` → no hint; `unreachable` state → no health hint; hint joins with the nudge at the 30th send.
-6. Install check test: K8 warns on the fake's error, passes with no daemon, passes on `ok`.
-7. Manual live check (not CI): the probe runbook in this plan's Measurement section, against a private blocked app-server, showing `health: api_unreachable` in `list_agents` from a CrossTalk-bound session whose `CROSSTALK_CODEX_ENDPOINTS` names the private socket, and the hint on a send to it.
+1. `classifyBackend` table test: the measured `-32603 ... error sending request for url (...)` error → `unreachable`; success → `reachable`; `-32600` and an unrelated `-32603` text → `unknown`; `ErrAmbiguous`/context deadline → `unknown`. The error frame is checked in as a fixture under `internal/harness/codex/testdata/` (it carries no account data; the healthy response does, so it is not checked in).
+2. Adapter test against the `appservertest` fake: rateLimits error → `LoadedThread.Backend == unreachable`; success → `reachable`; a non-ChatGPT `account/read` → `unknown` with no rateLimits call; a thread with `modelProvider` other than `openai` on an unreachable endpoint → `unknown`; a server that never answers rateLimits → `unknown` within `BackendProbeTimeout` and the listing still returns.
+3. Cache test: two `Backend` calls inside the TTL make one RPC; after the TTL, two.
+4. `mcpserver` golden test: a Codex row carries `backend`, a Claude row has no `backend` key.
+5. Shim tests: registered Codex target, `accepted` + `unreachable` backend → `hintCodexBackendDown` and state still `accepted`; `queued` likewise; `unknown` delivery (ambiguous transport) + cached `unreachable` backend → `hintCodexBackendDownUnknown`, which contains no delivery claim; `reachable` backend → no hint; `unreachable` delivery state → no backend hint; the hint joins with the nudge at the 30th send.
+6. Install check test: K8 warns on the fake's error, passes with no daemon, passes on `reachable`.
+7. Manual live check (not CI): the probe runbook in this plan's Measurement section, against a private blocked app-server, showing `backend: unreachable` in `list_agents` from a CrossTalk-bound session whose `CROSSTALK_CODEX_ENDPOINTS` names the private socket, and the hint on a send to it.
 
 Each test fails before the change and passes after; test 7 is the end-to-end evidence for the PR body.
 
 ### 6. ADRs
 
-- New provisional ADR (next free number at implementation time; the #114 work on another branch may take 0025): "Codex host health from `account/rateLimits/read`, shown as a `list_agents` field and a send hint, never a refusal". Records the measurement, the ranking, and the rejected alternatives (subscription, turn polling, daemon log).
-- ADR 0003 (discovery): edit in place to name the `health` field on Codex rows (all ADRs are provisional, AGENTS.md).
+- New provisional ADR (next free number at implementation time; the #114 work on another branch may take 0025): "Codex backend reachability from `account/rateLimits/read`, shown as a `list_agents` field and a send hint, never a refusal". Records the measurement, the ranking, what the probe does not prove (usage-only and Responses-only outages), and the rejected alternatives (subscription, turn polling, daemon log).
+- ADR 0003 (discovery): edit in place to name the `backend` field on Codex rows (all ADRs are provisional, AGENTS.md).
 - ADR 0014: one sentence noting the send result now carries a second, non-refusing hint kind.
-- AGENTS.md Architecture: one clause naming the health field and the ADR.
+- AGENTS.md Architecture: one clause naming the `backend` field and the ADR.
 
 ### Sequencing
 
@@ -121,13 +125,16 @@ Estimate: PR 1 about half a day for a Sonnet worker; PR 2 and PR 3 about two hou
 
 ## Open Questions (for the operator)
 
-1. Field name and values: `health: ok | api_unreachable | unknown` (proposed), or a boolean `api_reachable`, or fold it into `status`? A boolean cannot say "unknown".
-2. Custom model providers and API-key auth: the probe only knows the ChatGPT backend. Accept `unknown` for those servers (proposed), or also try `model/list` with a refresh, which was measured as cached and therefore useless?
-3. Should an `api_unreachable` target change the send outcome (for example `ask` returns `rejected/harness_offline` instead of `accepted`), or stay hint-only as the issue comment says (proposed: hint-only; the message is in the thread and will be acted on if the network returns before the turn gives up)?
-4. Remote rows: should a paired host's gateway export `health` for its Codex rows (needs the ADR 0022 allowlist widened)? Proposed: not in this change.
+1. Field name and values: `backend: reachable | unreachable | unknown` (proposed, after review narrowed it from `health: ok | api_unreachable`), or a boolean, or fold it into `status`? A boolean cannot say "unknown".
+2. Custom model providers and API-key auth: the probe only knows the ChatGPT backend, so those threads are `unknown` (proposed). Is that enough, or does the operator run Codex on other providers often enough that rank 2 (a subscribed listener) should be planned now?
+3. Should a `backend: unreachable` target change the send outcome (for example `ask` returns `rejected/harness_offline` instead of `accepted`), or stay hint-only as the issue comment says (proposed: hint-only; the message is in the thread and will be acted on if the network returns before the turn gives up)?
+4. Remote rows: should a paired host's gateway export `backend` for its Codex rows (needs the ADR 0022 allowlist widened)? Proposed: not in this change.
 5. Probe cost: one `account/rateLimits/read` per endpoint per 30 s, only while someone runs `list_agents` or sends to a Codex session. Is a call to OpenAI's usage endpoint from CrossTalk acceptable (it is the same call the Codex TUI makes in the background), and is 30 s the right TTL?
-6. Should the hint name `codex app-server daemon restart` at all, given it interrupts every running Codex turn on that daemon?
+6. The model-facing hint no longer names `codex app-server daemon restart` (review finding 1); only the K8 install check does. Is that the right split?
 
 ## Review disposition
 
-(Filled after the cross-model review.)
+Codex adversarial review, one pass (`codex-companion.mjs adversarial-review --base main`), verdict needs-attention, 2 findings. Both fixed.
+
+1. [high] Usage-endpoint reachability does not establish model health: a usage-only outage would report a working session as down, a Responses-only outage as up, and ChatGPT auth does not say which provider a thread uses. **Fixed.** The field is renamed from `health: ok | api_unreachable` to `backend: reachable | unreachable | unknown` and documented as the OpenAI backend's reachability, not model availability; the probe applies only to threads whose `thread/read` `modelProvider` is `openai`, others are `unknown`; usage-only and Responses-only outages are named as limits in the plan, the ADR and the design text; the model-facing hint drops the restart advice and says "most likely"; adapter test 2 gains the non-`openai` provider case. The two outage variants cannot be provoked with a proxy (both endpoints share one host), so no measurement case was added for them.
+2. [medium] The hint claimed delivery for an `unknown` result. **Fixed.** The hint is now state-specific: `accepted`/`queued` get the delivery-confirming text, `unknown` gets a text that makes no delivery claim and keeps the no-blind-resend rule (check `receive_message` later). Shim test 5 gains the ambiguous-delivery + cached-unreachable case.
