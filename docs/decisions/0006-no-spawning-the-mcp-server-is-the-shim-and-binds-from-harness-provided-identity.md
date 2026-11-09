@@ -19,7 +19,7 @@ Every running session is listed by `list_agents` whether or not it has CrossTalk
 
 Role and owner are set at runtime by `claim` and `release` between registered agents, not by a launcher. `crosstalk run` is removed from v1.
 
-Built in main, arrives in 0.2.0 and is not yet released ([ADR 0021](0021-remote-transport-and-enrollment-a-user-started-per-host-gateway-with-pinned-mtls-and-two-sided-pairing.md)): one opt-in process outside the shim is allowed, the remote gateway `crosstalk remote serve`, which the user starts in a terminal or through a login unit the user turns on (`crosstalk remote enable`, `crosstalk install --remote`, or a yes to install's question, default no). Nothing is installed or started by default. The shim still spawns nothing: it neither starts nor supervises the gateway, and it works without one (it then cannot receive from other hosts).
+Built in 0.2.0 ([ADR 0021](0021-remote-transport-and-enrollment-a-user-started-per-host-gateway-with-pinned-mtls-and-two-sided-pairing.md)): one opt-in process outside the shim is allowed, the remote gateway `crosstalk remote serve`, which the user starts in a terminal or through a login unit the user turns on (`crosstalk remote enable`, `crosstalk install --remote`, or a yes to install's question, default no). Nothing is installed or started by default. The shim still spawns nothing: it neither starts nor supervises the gateway, and it works without one (it then cannot receive from other hosts).
 
 ## Rejected alternatives
 

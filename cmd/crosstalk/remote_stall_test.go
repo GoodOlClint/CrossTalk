@@ -132,7 +132,7 @@ func TestPairPrintsFirewallNote(t *testing.T) {
 func TestSetupDocStalledHandshake(t *testing.T) {
 	doc := repoFile(t, "docs/setup.md")
 	for _, want := range []string{
-		"arrives in 0.2.0 and is not yet released",
+		"arrives in 0.2.0",
 		"handshake not completed from", "handshake timeout",
 		"a host firewall or network filter", "Little Snitch",
 		"pair waits the full 10 minutes",
