@@ -185,7 +185,7 @@ func (st *AgentState) countSend(peer string, state adapter.State) string {
 
 // backendHint is the hint for a send whose target's app-server cannot reach
 // its backend; it changes no state and refuses nothing.
-func (s *Shim) backendHint(ctx context.Context, h adapter.Harness, endpoint string, state adapter.State) string {
+func (s *Shim) backendHint(ctx context.Context, h adapter.Harness, endpoint, sessionRef string, state adapter.State) string {
 	if endpoint == "" {
 		return ""
 	}
@@ -199,7 +199,7 @@ func (s *Shim) backendHint(ctx context.Context, h adapter.Harness, endpoint stri
 		return ""
 	}
 	bc, ok := harness.Lookup(s.opt.Harnesses, h).(harness.BackendChecker)
-	if !ok || bc.Backend(ctx, endpoint) != harness.BackendUnreachable {
+	if !ok || bc.Backend(ctx, endpoint, sessionRef) != harness.BackendUnreachable {
 		return ""
 	}
 	return text
@@ -322,7 +322,7 @@ func (st *AgentState) deliver(ctx context.Context, m msg.Message) mcpserver.Resu
 			res.Hint = hintCodexNoEndpoint
 		}
 		if d.HarnessEndpoint != nil {
-			res.Hint = joinHint(res.Hint, st.shim.backendHint(ctx, adapter.Harness(d.Harness), *d.HarnessEndpoint, state))
+			res.Hint = joinHint(res.Hint, st.shim.backendHint(ctx, adapter.Harness(d.Harness), *d.HarnessEndpoint, d.SessionRef, state))
 		}
 		res.Hint = joinHint(res.Hint, st.countSend(d.AgentID, state))
 		return res
@@ -363,7 +363,7 @@ func (st *AgentState) deliver(ctx context.Context, m msg.Message) mcpserver.Resu
 	if reason == "" && (state == adapter.Accepted || state == adapter.Queued) {
 		res.Hint = hintNativeOneWay
 	}
-	res.Hint = joinHint(res.Hint, st.shim.backendHint(ctx, b.Harness, b.HarnessEndpoint, state))
+	res.Hint = joinHint(res.Hint, st.shim.backendHint(ctx, b.Harness, b.HarnessEndpoint, b.SessionRef, state))
 	res.Hint = joinHint(res.Hint, st.countSend(to, state))
 	return res
 }

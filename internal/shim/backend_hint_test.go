@@ -118,3 +118,24 @@ func TestNoBackendHintForClaudeTarget(t *testing.T) {
 		t.Fatalf("hint %q", h)
 	}
 }
+
+func TestNoBackendHintForCustomProviderThread(t *testing.T) {
+	w, na := backendWorld(t)
+	w.codex.setBackend("unreachable")
+	w.codex.setCustomProvider("T-bob")
+	if h := hintOf(na.ok(nil, "send_message", send("bob", "hi"))); strings.Contains(h, backendMarker) {
+		t.Errorf("registered: hint %q", h)
+	}
+
+	w = newWorld(t)
+	alice := w.claude(4001, "sess-alice", "alice")
+	w.codex.addThread("T-eve", "eve")
+	w.codex.SetBinding(adapter.Binding{Harness: adapter.Codex, SessionRef: "T-eve", HarnessEndpoint: "fake://T-eve"})
+	w.codex.setBackend("unreachable")
+	w.codex.setCustomProvider("T-eve")
+	na = w.node(alice.pid, w.lb, nil)
+	res := na.ok(nil, "send_message", send("eve", "hi"))
+	if h := hintOf(res); res["state"] != "accepted" || strings.Contains(h, backendMarker) {
+		t.Errorf("native: send %v", res)
+	}
+}

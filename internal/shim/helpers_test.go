@@ -52,13 +52,30 @@ type fakeCodex struct {
 	threads    []codex.LoadedThread
 	backend    string
 	backendEps []string
+	// customProvider marks session refs whose thread is not on the openai
+	// provider; Backend reports them unknown.
+	customProvider map[string]bool
 }
 
-func (f *fakeCodex) Backend(_ context.Context, endpoint string) string {
+var _ harness.BackendChecker = (*fakeCodex)(nil)
+
+func (f *fakeCodex) Backend(_ context.Context, endpoint, sessionRef string) string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.backendEps = append(f.backendEps, endpoint)
+	if f.customProvider[sessionRef] {
+		return harness.BackendUnknown
+	}
 	return f.backend
+}
+
+func (f *fakeCodex) setCustomProvider(sessionRef string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.customProvider == nil {
+		f.customProvider = map[string]bool{}
+	}
+	f.customProvider[sessionRef] = true
 }
 
 func (f *fakeCodex) setBackend(v string) {

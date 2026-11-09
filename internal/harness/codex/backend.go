@@ -50,6 +50,26 @@ func probeBackend(ctx context.Context, c *appserver.Client) (string, error) {
 	return classifyBackend(err), err
 }
 
+type probeCall struct {
+	done  chan struct{}
+	state string
+}
+
+func (p *probeCall) wait(ctx context.Context) string {
+	select {
+	case <-p.done:
+		return p.state
+	case <-ctx.Done():
+		return harness.BackendUnknown
+	}
+}
+
+func doneProbe(state string) *probeCall {
+	p := &probeCall{done: make(chan struct{}), state: state}
+	close(p.done)
+	return p
+}
+
 func (a *Adapter) cachedBackend(ep string) (string, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -60,47 +80,83 @@ func (a *Adapter) cachedBackend(ep string) (string, bool) {
 	return e.state, true
 }
 
-// backendOn serves ep's backend state from the cache or probes it on c;
-// probes are serialized so one endpoint is probed once per TTL.
-func (a *Adapter) backendOn(ctx context.Context, ep string, c *appserver.Client) string {
-	if v, ok := a.cachedBackend(ep); ok {
-		return v
+// probe returns ep's backend state as a cached result, the probe already in
+// flight for ep, or a new probe on c. It takes ownership of c: a new probe
+// closes c when it finishes, otherwise c is closed before probe returns. The
+// probe runs detached from the caller's context, bounded by
+// BackendProbeTimeout, so its result is cached for later callers.
+func (a *Adapter) probe(ep string, c *appserver.Client) *probeCall {
+	a.mu.Lock()
+	if e, ok := a.backends[ep]; ok && time.Since(e.at) < BackendTTL {
+		a.mu.Unlock()
+		c.Close()
+		return doneProbe(e.state)
 	}
-	a.probeMu.Lock()
-	defer a.probeMu.Unlock()
-	if v, ok := a.cachedBackend(ep); ok {
-		return v
+	if p := a.probes[ep]; p != nil {
+		a.mu.Unlock()
+		c.Close()
+		return p
 	}
-	v, _ := probeBackend(ctx, c)
-	if ctx.Err() == nil {
+	p := &probeCall{done: make(chan struct{})}
+	if a.probes == nil {
+		a.probes = map[string]*probeCall{}
+	}
+	a.probes[ep] = p
+	a.mu.Unlock()
+	go func() {
+		state, _ := probeBackend(context.Background(), c)
+		c.Close()
 		a.mu.Lock()
 		if a.backends == nil {
 			a.backends = map[string]backendEntry{}
 		}
-		a.backends[ep] = backendEntry{state: v, at: time.Now()}
+		a.backends[ep] = backendEntry{state: state, at: time.Now()}
+		delete(a.probes, ep)
+		p.state = state
 		a.mu.Unlock()
-	}
-	return v
+		close(p.done)
+	}()
+	return p
 }
 
-// Backend is the cached backend state of the app-server at endpoint,
-// connecting only on a miss. An endpoint that cannot be dialed is unknown.
-func (a *Adapter) Backend(ctx context.Context, endpoint string) string {
+func (a *Adapter) endpointBackend(ctx context.Context, ep string) string {
+	if v, ok := a.cachedBackend(ep); ok {
+		return v
+	}
+	c, err := a.connect(ctx, ep)
+	if err != nil {
+		return harness.BackendUnknown
+	}
+	return a.probe(ep, c).wait(ctx)
+}
+
+// Backend is the backend state of the session sessionRef on the app-server
+// at endpoint. The endpoint's state is cached; the thread's provider is read
+// only when the endpoint is unreachable. Any failure is unknown.
+func (a *Adapter) Backend(ctx context.Context, endpoint, sessionRef string) string {
 	ep, err := appserver.NormalizeEndpoint(endpoint)
 	if err != nil {
 		return harness.BackendUnknown
 	}
-	if v, ok := a.cachedBackend(ep); ok {
-		return v
-	}
 	cctx, cancel := context.WithTimeout(ctx, EndpointProbeTimeout)
 	defer cancel()
+	state := a.endpointBackend(cctx, ep)
+	if state != harness.BackendUnreachable {
+		return state
+	}
+	if sessionRef == "" {
+		return harness.BackendUnknown
+	}
 	c, err := a.connect(cctx, ep)
 	if err != nil {
 		return harness.BackendUnknown
 	}
 	defer c.CloseContext(cctx)
-	return a.backendOn(cctx, ep, c)
+	th, err := c.ReadThread(cctx, sessionRef)
+	if err != nil || th.ModelProvider != openaiProvider {
+		return harness.BackendUnknown
+	}
+	return state
 }
 
 type backendCheck struct {
@@ -130,9 +186,9 @@ func (a *Adapter) checkBackends(ctx context.Context) []backendCheck {
 var _ harness.BackendChecker = (*Harness)(nil)
 
 // Backend implements harness.BackendChecker for adapters that can tell.
-func (h *Harness) Backend(ctx context.Context, endpoint string) string {
+func (h *Harness) Backend(ctx context.Context, endpoint, sessionRef string) string {
 	if b, ok := h.Threads.(harness.BackendChecker); ok {
-		return b.Backend(ctx, endpoint)
+		return b.Backend(ctx, endpoint, sessionRef)
 	}
 	return harness.BackendUnknown
 }

@@ -19,15 +19,22 @@ type LoadedThread struct {
 	// provider, else unknown.
 	Backend  string
 	provider string
+	dup      bool
 }
 
 // LoadedThreads lists every loaded thread on the known endpoints plus extra
 // (§3 Discovery). An endpoint that cannot be reached contributes nothing.
 // A thread loaded on more than one endpoint is listed once, unreachable
-// (§3 CQ10).
+// (§3 CQ10). Backend probes run concurrently and never delay thread
+// discovery; a probe unfinished when ctx ends leaves Backend unknown.
 func (a *Adapter) LoadedThreads(ctx context.Context, extra ...string) []LoadedThread {
 	var out []LoadedThread
 	idx := map[string]int{}
+	type span struct {
+		first, end int
+		p          *probeCall
+	}
+	var spans []span
 	for _, ep := range a.KnownEndpoints(extra...) {
 		c, err := a.connect(ctx, ep)
 		if err != nil {
@@ -39,14 +46,12 @@ func (a *Adapter) LoadedThreads(ctx context.Context, extra ...string) []LoadedTh
 			c.Close()
 			continue
 		}
-		be := make(chan string, 1)
-		go func() { be <- a.backendOn(ctx, ep, c) }()
 		first := len(out)
 		for _, id := range ids {
 			if i, ok := idx[id]; ok {
 				out[i].Session.Reachable = false
 				out[i].Endpoint = ""
-				out[i].Backend = harness.BackendUnknown
+				out[i].dup = true
 				continue
 			}
 			lt := LoadedThread{Endpoint: ep, ID: id}
@@ -59,14 +64,16 @@ func (a *Adapter) LoadedThreads(ctx context.Context, extra ...string) []LoadedTh
 			idx[id] = len(out)
 			out = append(out, lt)
 		}
-		state := <-be
-		for i := first; i < len(out); i++ {
+		spans = append(spans, span{first, len(out), a.probe(ep, c)})
+	}
+	for _, s := range spans {
+		state := s.p.wait(ctx)
+		for i := s.first; i < s.end; i++ {
 			out[i].Backend = harness.BackendUnknown
-			if out[i].provider == openaiProvider {
+			if !out[i].dup && out[i].provider == openaiProvider {
 				out[i].Backend = state
 			}
 		}
-		c.Close()
 	}
 	return out
 }

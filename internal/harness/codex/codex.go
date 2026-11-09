@@ -50,7 +50,7 @@ type Adapter struct {
 	rebinding map[string]chan struct{}
 	lookedUp  map[string]time.Time
 	backends  map[string]backendEntry
-	probeMu   sync.Mutex
+	probes    map[string]*probeCall
 }
 
 var _ adapter.Adapter = (*Adapter)(nil)
