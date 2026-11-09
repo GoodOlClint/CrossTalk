@@ -49,6 +49,21 @@ type Session struct {
 	Reachable  bool
 	HarnessPID int
 	Endpoint   string
+	// Backend is BackendReachable, BackendUnreachable or BackendUnknown for
+	// a session whose harness can tell; "" otherwise.
+	Backend string
+}
+
+const (
+	BackendReachable   = "reachable"
+	BackendUnreachable = "unreachable"
+	BackendUnknown     = "unknown"
+)
+
+// BackendChecker is implemented by a harness that can say whether the
+// service hosting a session at endpoint reaches its model backend.
+type BackendChecker interface {
+	Backend(ctx context.Context, endpoint string) string
 }
 
 // Self is the bound agent a harness renders or injects on behalf of.

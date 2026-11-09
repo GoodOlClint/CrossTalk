@@ -93,6 +93,9 @@ type Thread struct {
 	Name   *string      `json:"name"`
 	Cwd    string       `json:"cwd"`
 	Status ThreadStatus `json:"status"`
+	// ModelProvider is the provider id the thread runs on ("openai" for the
+	// built-in one); "" means the server did not say.
+	ModelProvider string `json:"modelProvider"`
 	// CanAcceptDirectInput is absent from the 0.166.0 generated schema; nil
 	// means the server did not say.
 	CanAcceptDirectInput *bool `json:"canAcceptDirectInput,omitempty"`
@@ -203,4 +206,28 @@ func (c *Client) InjectToolOutput(ctx context.Context, threadID, text string) (j
 			"type": "function_call_output", "name": "receive_message", "namespace": "crosstalk", "output": text,
 		}},
 	})
+}
+
+// AccountType returns the account/read account type ("chatgpt", "apiKey",
+// ...), or "" when the server has no account.
+func (c *Client) AccountType(ctx context.Context) (string, error) {
+	var r struct {
+		Account *struct {
+			Type string `json:"type"`
+		} `json:"account"`
+	}
+	if err := c.Call(ctx, "account/read", map[string]any{}, &r); err != nil {
+		return "", err
+	}
+	if r.Account == nil {
+		return "", nil
+	}
+	return r.Account.Type, nil
+}
+
+// RateLimits calls account/rateLimits/read and discards the result: the
+// server fetches it from the ChatGPT backend, so an error shows whether that
+// fetch worked.
+func (c *Client) RateLimits(ctx context.Context) error {
+	return c.Call(ctx, "account/rateLimits/read", map[string]any{"excludeResetCreditDetails": true}, nil)
 }

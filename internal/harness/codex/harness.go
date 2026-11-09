@@ -91,7 +91,7 @@ func (h *Harness) Discover(ctx context.Context) ([]harness.Session, error) {
 	var out []harness.Session
 	for _, t := range h.LoadedThreads(ctx) {
 		out = append(out, harness.Session{Harness: adapter.Codex, SessionRef: t.ID, Name: t.Name, Cwd: t.Cwd, Status: t.Status,
-			Reachable: t.Session.Reachable, Endpoint: t.Endpoint})
+			Reachable: t.Session.Reachable, Endpoint: t.Endpoint, Backend: t.Backend})
 	}
 	return out, nil
 }
