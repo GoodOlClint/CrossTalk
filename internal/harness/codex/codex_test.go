@@ -295,7 +295,7 @@ func TestInjectUnavailable(t *testing.T) {
 		r := newRig(t, nil)
 		d := r.delivery(true, mode)
 		d.Target.HarnessEndpoint = ""
-		if st, err := r.a.Inject(ctx(t), message("x"), d); st != adapter.Unreachable || !errors.Is(err, codex.ErrNoEndpoint) {
+		if st, err := r.a.Inject(ctx(t), message("x"), d); st != adapter.Unreachable || !errors.Is(err, codex.ErrNoEndpoint) || !errors.Is(err, adapter.ErrNoEndpoint) {
 			t.Fatalf("missing endpoint: %s, %v", st, err)
 		}
 		d = r.delivery(true, mode)

@@ -2,9 +2,14 @@ package adapter
 
 import (
 	"context"
+	"errors"
 
 	"github.com/GoodOlClint/crosstalk/internal/msg"
 )
+
+// ErrNoEndpoint is what Inject wraps when the target session has no harness
+// endpoint to deliver to; the receiver refuses an ask on it (§8).
+var ErrNoEndpoint = errors.New("no harness endpoint bound")
 
 type State string
 

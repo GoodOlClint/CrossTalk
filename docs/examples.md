@@ -121,6 +121,7 @@ Results carry a `reason` code and often a `hint` with the next step in plain wor
 - `no_such_agent`: no session has that name. Run `list_agents` again.
 - `ambiguous_name`: two sessions share the name. Address one by `agent_id`.
 - `native_inform_only`: you asked a session that has not used CrossTalk yet. Send a plain message. After its first CrossTalk call, `ask` works.
+- `no_endpoint`: you asked a Codex session that cannot receive (started with `--no-daemon`, `-c`, or `codex exec`). The ask was not stored; send a plain message, which it can pull.
 - `unreachable`: the message was not delivered.
 
 The [setup page](setup.md#if-something-is-wrong) has the install-time errors.

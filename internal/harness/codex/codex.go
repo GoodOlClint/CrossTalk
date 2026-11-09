@@ -21,7 +21,7 @@ const ReasonAmbiguousEndpoint = "ambiguous_endpoint"
 
 var (
 	ErrAmbiguousEndpoint = errors.New("codex: " + ReasonAmbiguousEndpoint)
-	ErrNoEndpoint        = errors.New("codex: no harness endpoint bound")
+	ErrNoEndpoint        = fmt.Errorf("codex: %w", adapter.ErrNoEndpoint)
 	ErrNoThread          = errors.New("codex: no thread id")
 )
 

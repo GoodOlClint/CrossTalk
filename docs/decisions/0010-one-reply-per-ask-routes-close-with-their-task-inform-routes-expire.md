@@ -41,3 +41,5 @@ Five advisors (Contrarian, First Principles, Expansionist, Outsider, Executor; S
 ## Council review 2026-11-06
 
 Sat: chair Claude (Opus 5.5), advisor A Codex 3c9b659b079700f3 (accuracy), advisor B Codex 93c0805d291aa89e (still right, merge, withdraw). Verdict: EDIT (byte-identical retry precedes inform expiry; expiry is swept, not re-armed). Decision unchanged. Status stays Provisional.
+
+Ask to a session with no endpoint (#114, operator ruling 2026-11-09): an `ask` whose target adapter reports `adapter.ErrNoEndpoint` (a Codex thread with no reachable app-server) is `rejected/no_endpoint` instead of `unreachable`. The receiver chain makes the refusal after the dispatch claim, so its route closes, its task fails, no deadline is armed and nothing enters the mailbox: a pulled ask could never be answered with `reply`, because its task had already failed. Accepted trade-off: an ask refused during a short window with no endpoint is not queued; the sender resends. `inform` and `command` are unchanged (`unreachable`, pullable).
