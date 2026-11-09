@@ -251,6 +251,9 @@ func (d dependencies) holds(r Record) bool {
 type Options struct {
 	Now       func() time.Time
 	Retention time.Duration
+	// BeforeAppend, when set, runs before each append; a non-nil error fails
+	// the append and writes nothing. Fault injection for tests.
+	BeforeAppend func(Record) error
 }
 
 type Replay struct {
@@ -274,7 +277,8 @@ type Journal struct {
 	idSenders map[string]map[string]bool
 	dispatch  map[string]*dispatchState
 	// repairTo is the file size to truncate back to before the next append, or -1.
-	repairTo int64
+	repairTo     int64
+	beforeAppend func(Record) error
 }
 
 var ErrClosed = errors.New("journal: closed")
@@ -326,7 +330,7 @@ func Open(stateDir, agentID string, binding Binding, opt Options) (*Journal, Rep
 	if err != nil {
 		return nil, Replay{}, err
 	}
-	j := &Journal{f: f, path: path, binding: binding, now: opt.Now, latest: map[string]Record{}, idSenders: map[string]map[string]bool{}, dispatch: map[string]*dispatchState{}, repairTo: -1}
+	j := &Journal{f: f, path: path, binding: binding, now: opt.Now, latest: map[string]Record{}, idSenders: map[string]map[string]bool{}, dispatch: map[string]*dispatchState{}, repairTo: -1, beforeAppend: opt.BeforeAppend}
 	for _, r := range kept {
 		j.index(r)
 	}
@@ -445,6 +449,11 @@ func (j *Journal) index(r Record) {
 func (j *Journal) appendLocked(r Record) (Record, error) {
 	if j.f == nil {
 		return Record{}, ErrClosed
+	}
+	if j.beforeAppend != nil {
+		if err := j.beforeAppend(r); err != nil {
+			return Record{}, err
+		}
 	}
 	if r.At.IsZero() {
 		r.At = j.now().UTC()

@@ -348,14 +348,18 @@ func (r *Receiver) receive(ctx context.Context, in Inbound, resume bool) Result 
 	if m.Kind == msg.Ask && st == adapter.Unreachable && errors.Is(err, adapter.ErrNoEndpoint) {
 		st, reason = adapter.Rejected, ReasonNoEndpoint
 	}
+	if routed && (st == adapter.Rejected || st == adapter.Unreachable) {
+		if err := r.closeRoute(rt); err != nil {
+			r.j.ResolveFor(scope, m.MessageID, string(adapter.Unknown))
+			r.j.SetDedupeState(key, m.MessageID, string(adapter.Unknown))
+			return Result{MessageID: m.MessageID, State: adapter.Unknown, Reason: ReasonJournal}
+		}
+	}
 	resolveErr := r.j.ResolveFor(scope, m.MessageID, string(st))
 	dedupeErr := r.j.SetDedupeState(key, m.MessageID, string(st))
 	if resolveErr != nil || dedupeErr != nil {
 		r.j.SetDedupeState(key, m.MessageID, string(adapter.Unknown))
 		return Result{MessageID: m.MessageID, State: adapter.Unknown, Reason: ReasonJournal}
-	}
-	if routed && (st == adapter.Rejected || st == adapter.Unreachable) {
-		r.closeRoute(rt)
 	}
 	return Result{MessageID: m.MessageID, State: st, Reason: reason}
 }
@@ -488,11 +492,14 @@ func (r *Receiver) openRoute(rt route) error {
 	return nil
 }
 
-func (r *Receiver) closeRoute(rt route) {
-	r.j.Append(rt.record(journal.StateClosed))
+func (r *Receiver) closeRoute(rt route) error {
+	if err := r.j.Append(rt.record(journal.StateClosed)); err != nil {
+		return err
+	}
 	r.mu.Lock()
 	r.routes = slices.DeleteFunc(r.routes, func(o route) bool { return o.Session == rt.Session && o.MessageID == rt.MessageID })
 	r.mu.Unlock()
+	return nil
 }
 
 // sweep removes expired inform routes, journals them closed, and returns
