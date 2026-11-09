@@ -132,14 +132,97 @@ func checkUnitBin(ctx context.Context, bin string) error {
 	if !fi.Mode().IsRegular() || fi.Mode().Perm()&0o111 == 0 {
 		return fmt.Errorf("%s is not an executable file", bin)
 	}
+	if running, err := installExecutable(); err == nil {
+		if ri, err := os.Stat(running); err == nil && os.SameFile(fi, ri) {
+			return nil
+		}
+	}
 	out, err := installRun(ctx, bin, "version")
 	if err != nil {
 		return fmt.Errorf("%s does not answer crosstalk version: %v", bin, err)
 	}
-	if v := strings.TrimSpace(string(out)); v != mcpserver.Version {
-		return fmt.Errorf("%s answers crosstalk version %q, want %s", bin, v, mcpserver.Version)
+	got := strings.TrimSpace(string(out))
+	if c, ok := compareVersions(got, mcpserver.Version); !ok || c < 0 {
+		fix := "run: crosstalk reinstall"
+		if _, _, brew := installHomebrew(bin); brew {
+			fix = "run: brew upgrade crosstalk"
+		}
+		return fmt.Errorf("%s answers crosstalk version %q, older than this crosstalk %s or not a version, so it may not have remote; update the install: %s", bin, got, mcpserver.Version, fix)
 	}
 	return nil
+}
+
+// compareVersions orders X.Y.Z[-pre] strings, with an optional leading v; a
+// prerelease sorts below its release. ok is false when either is not that form.
+func compareVersions(a, b string) (c int, ok bool) {
+	ac, apre, ok1 := splitVersion(a)
+	bc, bpre, ok2 := splitVersion(b)
+	if !ok1 || !ok2 {
+		return 0, false
+	}
+	for i := range ac {
+		if ac[i] != bc[i] {
+			if ac[i] < bc[i] {
+				return -1, true
+			}
+			return 1, true
+		}
+	}
+	switch {
+	case apre == bpre:
+		return 0, true
+	case apre == "":
+		return 1, true
+	case bpre == "":
+		return -1, true
+	}
+	return comparePre(apre, bpre), true
+}
+
+func comparePre(a, b string) int {
+	x, y := strings.Split(a, "."), strings.Split(b, ".")
+	for i := 0; i < len(x) && i < len(y); i++ {
+		m, merr := strconv.Atoi(x[i])
+		n, nerr := strconv.Atoi(y[i])
+		switch {
+		case merr == nil && nerr == nil && m != n:
+			return cmpInt(m, n)
+		case merr == nil && nerr != nil:
+			return -1
+		case merr != nil && nerr == nil:
+			return 1
+		case merr != nil && nerr != nil && x[i] != y[i]:
+			return strings.Compare(x[i], y[i])
+		}
+	}
+	return cmpInt(len(x), len(y))
+}
+
+func cmpInt(a, b int) int {
+	if a < b {
+		return -1
+	}
+	if a > b {
+		return 1
+	}
+	return 0
+}
+
+func splitVersion(v string) (core [3]int, pre string, ok bool) {
+	v, _, _ = strings.Cut(strings.TrimPrefix(v, "v"), "+")
+	v, pre, _ = strings.Cut(v, "-")
+	parts := strings.Split(v, ".")
+	if len(parts) != 3 {
+		return core, "", false
+	}
+	for i, p := range parts {
+		n, err := strconv.Atoi(p)
+		if err != nil || n < 0 {
+			return core, "", false
+		}
+		core[i] = n
+	}
+	return core, pre, true
 }
 
 // unitOwnership reads the unit file: present reports that it exists, owned
