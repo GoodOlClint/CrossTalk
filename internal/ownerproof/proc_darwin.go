@@ -75,7 +75,9 @@ const (
 	vstInoOff             = 24 + 8
 )
 
-func procInfo(call, pid, flavor int, arg uint64, buf []byte) (int, error) {
+var procInfo = rawProcInfo
+
+func rawProcInfo(call, pid, flavor int, arg uint64, buf []byte) (int, error) {
 	var p unsafe.Pointer
 	if len(buf) > 0 {
 		p = unsafe.Pointer(&buf[0])
@@ -118,24 +120,50 @@ func openers(path string) ([]int, error) {
 		if pid == self || pid <= 0 {
 			continue
 		}
-		fds, err := listFDs(pid)
-		if err != nil {
+		found, err := opensFile(pid, &st, vbuf)
+		if errors.Is(err, unix.ESRCH) {
 			continue
 		}
-		for i := 0; i+procFDInfoSize <= len(fds); i += procFDInfoSize {
-			if binary.NativeEndian.Uint32(fds[i+4:]) != proxFDTypeVnode {
-				continue
-			}
-			fd := int32(binary.NativeEndian.Uint32(fds[i:]))
-			n, err := procInfo(procInfoCallPIDFDInfo, pid, procPIDFDVnodeInfo, uint64(fd), vbuf)
-			if err != nil || n < vnodeFDInfoSize {
-				continue
-			}
-			if binary.NativeEndian.Uint32(vbuf[vstDevOff:]) == uint32(st.Dev) && binary.NativeEndian.Uint64(vbuf[vstInoOff:]) == st.Ino {
-				out = append(out, pid)
-				break
-			}
+		if err != nil {
+			return nil, fmt.Errorf("ownerproof: open files of %d: %w", pid, err)
+		}
+		if found {
+			out = append(out, pid)
 		}
 	}
 	return out, nil
+}
+
+// opensFile fails with ESRCH when pid is gone; any other failure means pid
+// could not be inspected.
+func opensFile(pid int, st *unix.Stat_t, vbuf []byte) (bool, error) {
+	fds, err := listFDs(pid)
+	if err != nil {
+		return false, err
+	}
+	for i := 0; i+procFDInfoSize <= len(fds); i += procFDInfoSize {
+		if binary.NativeEndian.Uint32(fds[i+4:]) != proxFDTypeVnode {
+			continue
+		}
+		fd := int32(binary.NativeEndian.Uint32(fds[i:]))
+		n, err := procInfo(procInfoCallPIDFDInfo, pid, procPIDFDVnodeInfo, uint64(fd), vbuf)
+		// ponytail: macOS answers EPERM for some fds of same-user system agents
+		// (measured: 1 to 34 vnode fds each in 8 agents on one host), so failing
+		// closed here would fail every proof. Such an fd is skipped: an opener
+		// whose only fd on the lock is one the kernel will not describe is not
+		// seen. Whole-process denial still fails closed above.
+		if errors.Is(err, unix.EBADF) || errors.Is(err, unix.EPERM) {
+			continue
+		}
+		if err != nil {
+			return false, err
+		}
+		if n < vnodeFDInfoSize {
+			return false, fmt.Errorf("short vnode info for fd %d", fd)
+		}
+		if binary.NativeEndian.Uint32(vbuf[vstDevOff:]) == uint32(st.Dev) && binary.NativeEndian.Uint64(vbuf[vstInoOff:]) == st.Ino {
+			return true, nil
+		}
+	}
+	return false, nil
 }

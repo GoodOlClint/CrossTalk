@@ -8,6 +8,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/GoodOlClint/crosstalk/internal/procstart"
 )
@@ -72,25 +73,78 @@ func openers(path string) ([]int, error) {
 	if err != nil {
 		return nil, err
 	}
-	self := os.Getpid()
+	self, uid := os.Getpid(), os.Geteuid()
 	var out []int
 	for _, e := range ents {
 		pid, err := strconv.Atoi(e.Name())
 		if err != nil || pid == self {
 			continue
 		}
-		fdDir := "/proc/" + e.Name() + "/fd"
-		fds, err := os.ReadDir(fdDir)
-		if err != nil {
+		mine, err := ownedBy("/proc/"+e.Name()+"/status", uid)
+		if gone(err) {
 			continue
 		}
-		for _, fd := range fds {
-			fi, err := os.Stat(fdDir + "/" + fd.Name())
-			if err == nil && os.SameFile(fi, target) {
-				out = append(out, pid)
-				break
-			}
+		if err != nil {
+			return nil, err
+		}
+		if !mine {
+			continue
+		}
+		found, err := opensFile("/proc/"+e.Name()+"/fd", target)
+		if gone(err) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("ownerproof: open files of %d: %w", pid, err)
+		}
+		if found {
+			out = append(out, pid)
 		}
 	}
 	return out, nil
+}
+
+// ownedBy reads the Uid line of /proc/<pid>/status (real, effective, saved,
+// filesystem): a non-dumpable process of this user has a root-owned /proc
+// entry, so the directory owner is not the test.
+func ownedBy(status string, uid int) (bool, error) {
+	b, err := os.ReadFile(status)
+	if err != nil {
+		return false, err
+	}
+	for line := range strings.SplitSeq(string(b), "\n") {
+		if v, ok := strings.CutPrefix(line, "Uid:"); ok {
+			for _, f := range strings.Fields(v) {
+				if f == strconv.Itoa(uid) {
+					return true, nil
+				}
+			}
+			return false, nil
+		}
+	}
+	return false, fmt.Errorf("ownerproof: no Uid line in %s", status)
+}
+
+var readFDDir = os.ReadDir
+
+func gone(err error) bool { return errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ESRCH) }
+
+func opensFile(fdDir string, target os.FileInfo) (bool, error) {
+	fds, err := readFDDir(fdDir)
+	if err != nil {
+		return false, err
+	}
+	for _, fd := range fds {
+		fi, err := os.Stat(fdDir + "/" + fd.Name())
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return false, err
+		}
+		if os.SameFile(fi, target) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
