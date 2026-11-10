@@ -116,3 +116,18 @@ func TestCwdBase(t *testing.T) {
 		}
 	}
 }
+
+func TestValidName(t *testing.T) {
+	bad := []string{"", strings.Repeat("a", 65), "a@b", "a\x00b", "a\nb", "a\x7fb", "0123456789abcdef", "inbox:x", "inbox:"}
+	for _, n := range bad {
+		if ValidName(n) == nil {
+			t.Errorf("ValidName(%q) = nil, want error", n)
+		}
+	}
+	good := []string{"CrossTalk Reviewer 3", strings.Repeat("a", 64), "0123456789ABCDEF", "0123456789abcde", "xinbox:y"}
+	for _, n := range good {
+		if err := ValidName(n); err != nil {
+			t.Errorf("ValidName(%q) = %v", n, err)
+		}
+	}
+}
