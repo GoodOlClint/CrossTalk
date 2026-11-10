@@ -91,9 +91,9 @@ func TestMailbox_UnissuedCursor_ExpectNoSettle(t *testing.T) {
 	m.Commit(th, "m2")
 	m.Commit(th, "m3")
 	m.Pull(th, "", 1)
-	m.Pull(th, "m99", 10)
+	m.Pull(th, "m3", 10)
 	if m.State(th, "m2") != Collecting {
-		t.Fatalf("a cursor never issued by a pull settled an entry: %v", m.State(th, "m2"))
+		t.Fatalf("a real entry id that no pull issued as a cursor settled an entry: %v", m.State(th, "m2"))
 	}
 }
 
@@ -190,25 +190,67 @@ func TestMailbox_PageLimit_ExpectMoreFlagAndSecondPullSettlesFirstPage(t *testin
 	}
 }
 
-func TestMailbox_ConcurrentPullAndListWithResponseWithheld_ExpectCollectingThenUnknown(t *testing.T) {
+func TestMailbox_LateReplyAfterUnknown_ExpectStaysUnknown_PendingClarificationA(t *testing.T) {
 	m, c := newMB()
+	m.Commit(th, "m1")
+	m.Pull(th, "", 10)
+	c.Advance(time.Minute)
+	m.Expire()
+	m.Resolve(th, "m1", Accepted)
+	if m.State(th, "m1") != Unknown {
+		t.Fatalf("Resolve moved unknown to %v", m.State(th, "m1"))
+	}
+}
+
+// The pull response is withheld by blocking inside AfterMark; list calls run while it is
+// blocked (order A) or before the pull starts (order B). Neither may settle the entry.
+func TestMailbox_ListWhilePullResponseWithheld_ExpectCollectingThenUnknown(t *testing.T) {
+	for _, order := range []string{"A-list-during-withheld-response", "B-list-before-pull"} {
+		t.Run(order, func(t *testing.T) {
+			m, c := newMB()
+			m.Commit(th, "m1")
+			marked, proceed := make(chan struct{}), make(chan struct{})
+			m.AfterMark = func() { close(marked); <-proceed }
+			done := make(chan struct{})
+			if order[0] == 'B' {
+				m.List(th)
+			}
+			go func() { defer close(done); m.Pull(th, "", 10) }()
+			<-marked
+			if order[0] == 'A' {
+				for i := 0; i < 5; i++ {
+					m.List(th)
+				}
+			}
+			if got := m.State(th, "m1"); got != Collecting {
+				t.Errorf("response withheld, entry is %v, want collecting", got)
+			}
+			close(proceed)
+			<-done
+			if got := m.State(th, "m1"); got != Collecting {
+				t.Errorf("after the response, entry is %v, want collecting", got)
+			}
+			c.Advance(time.Minute)
+			m.Expire()
+			if got := m.State(th, "m1"); got != Unknown {
+				t.Errorf("at the bound entry is %v, want unknown", got)
+			}
+		})
+	}
+}
+
+func TestMailbox_ConcurrentListsAndPull_ExpectNeverAccepted_RaceDetector(t *testing.T) {
+	m, _ := newMB()
 	m.Commit(th, "m1")
 	var wg sync.WaitGroup
 	for i := 0; i < 8; i++ {
 		wg.Add(1)
-		go func() { defer wg.Done(); m.Other(th) }()
+		go func() { defer wg.Done(); m.List(th) }()
 	}
-	var res PullResult
 	wg.Add(1)
-	go func() { defer wg.Done(); res = m.Pull(th, "", 10) }()
+	go func() { defer wg.Done(); m.Pull(th, "", 10) }()
 	wg.Wait()
-	_ = res // the response never reaches the model in this scenario
-	if m.State(th, "m1") != Collecting {
-		t.Fatalf("a concurrent list_agents settled the entry: %v", m.State(th, "m1"))
-	}
-	c.Advance(time.Minute)
-	m.Expire()
-	if m.State(th, "m1") != Unknown {
-		t.Fatalf("state %v", m.State(th, "m1"))
+	if m.State(th, "m1") == Accepted {
+		t.Fatal("a list call settled the entry")
 	}
 }

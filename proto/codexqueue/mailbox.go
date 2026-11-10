@@ -29,6 +29,14 @@ type entry struct {
 	collectedAt time.Time
 }
 
+// evidence is what a call offers as proof of receipt; every call, evidence or not, goes
+// through Mailbox.settle so a non-evidence call has the same path a real one would.
+type evidence struct {
+	cursor string
+	reply  string
+	token  string
+}
+
 type PullResult struct {
 	Entries []string
 	Next    string
@@ -46,6 +54,9 @@ type Mailbox struct {
 	tokens  int
 	entries map[string][]*entry
 	cursors map[string]map[string]bool
+	// AfterMark runs after a pull has marked entries collecting and released the lock,
+	// before the response is returned: the window where the response is in flight.
+	AfterMark func()
 }
 
 func NewMailbox(now func() time.Time, bound time.Duration) *Mailbox {
@@ -100,13 +111,11 @@ func (m *Mailbox) State(thread, id string) EntryState {
 	return -1
 }
 
-// Pull is receive_message. after must be a cursor an earlier pull for this thread issued;
-// it settles collecting entries at or before it. A pull without a cursor settles nothing.
-func (m *Mailbox) Pull(thread, after string, limit int) PullResult {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if after != "" && m.cursors[thread][after] {
-		if c := m.find(thread, after); c != nil {
+// settle applies the evidence rules; the caller holds the lock. Only a reply naming an
+// entry, a cursor an earlier pull issued, or an echoed token settles anything.
+func (m *Mailbox) settle(thread string, ev evidence) {
+	if ev.cursor != "" && m.cursors[thread][ev.cursor] {
+		if c := m.find(thread, ev.cursor); c != nil {
 			for _, e := range m.entries[thread] {
 				if e.seq <= c.seq && e.state == Collecting {
 					e.state = Accepted
@@ -114,6 +123,25 @@ func (m *Mailbox) Pull(thread, after string, limit int) PullResult {
 			}
 		}
 	}
+	if ev.reply != "" {
+		if e := m.find(thread, ev.reply); e != nil && e.state == Collecting {
+			e.state = Accepted
+		}
+	}
+	if ev.token != "" {
+		for _, e := range m.entries[thread] {
+			if e.state == Collecting && e.token == ev.token {
+				e.state = Accepted
+			}
+		}
+	}
+}
+
+// Pull is receive_message. after must be a cursor an earlier pull for this thread issued;
+// it settles collecting entries at or before it. A pull without a cursor settles nothing.
+func (m *Mailbox) Pull(thread, after string, limit int) PullResult {
+	m.mu.Lock()
+	m.settle(thread, evidence{cursor: after})
 	var res PullResult
 	res.Next = after
 	m.tokens++
@@ -139,6 +167,11 @@ func (m *Mailbox) Pull(thread, after string, limit int) PullResult {
 			m.cursors[thread][id] = true
 		}
 	}
+	hook := m.AfterMark
+	m.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 	return res
 }
 
@@ -152,28 +185,22 @@ func (m *Mailbox) Reply(thread, id string) error {
 	if e.state == Mailboxed {
 		return ErrNotCollected
 	}
-	if e.state == Collecting {
-		e.state = Accepted
-	}
+	m.settle(thread, evidence{reply: id})
 	return nil
 }
 
 func (m *Mailbox) Ack(thread, token string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	for _, e := range m.entries[thread] {
-		if e.state == Collecting && token != "" && e.token == token {
-			e.state = Accepted
-		}
-	}
+	m.settle(thread, evidence{token: token})
 }
 
-// Other is any call that is not evidence (list_agents, send_message, a second pull
-// without a cursor): it exists so tests can issue one concurrently.
-func (m *Mailbox) Other(thread string) {
+// List stands in for any call that is not evidence (list_agents, send_message): it takes
+// the same settle path with no evidence.
+func (m *Mailbox) List(thread string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	_ = m.entries[thread]
+	m.settle(thread, evidence{})
 }
 
 func (m *Mailbox) Expire() {

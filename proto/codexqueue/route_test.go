@@ -2,36 +2,58 @@ package codexqueue
 
 import "testing"
 
-func TestRoute_PartitionExhaustive_ExpectOneRowPerInputAndGuardAlone(t *testing.T) {
+// oracle is the plan 3.1 table written as plain nested conditions, independent of
+// Matches/Select, so the partition test compares two separately written formulations.
+func oracle(in RouteIn) int {
+	if in.PriorUnknown {
+		return 1
+	}
+	capable := in.Setting && in.GateOK && in.ClaimProcs == 1
+	if in.Ask && !in.AsksEnabled {
+		capable = false
+	}
+	switch {
+	case in.Hosts >= 2:
+		return 6
+	case in.Hosts == 1 && in.ClaimProcs == 0:
+		return 2
+	case in.Hosts == 1:
+		return 6
+	case in.ClaimProcs >= 2:
+		return 6
+	case !capable:
+		return 3
+	case in.Immediate && in.Verified:
+		return 5
+	}
+	return 4
+}
+
+func TestRoute_PartitionExhaustiveAgainstIndependentOracle_ExpectExactlyOneRowEqualToOracle(t *testing.T) {
+	n := 0
 	for _, prior := range []bool{false, true} {
 		for hosts := 0; hosts <= 3; hosts++ {
 			for procs := 0; procs <= 3; procs++ {
-				for _, setting := range []bool{false, true} {
-					for _, gate := range []bool{false, true} {
-						for _, immediate := range []bool{false, true} {
-							for _, verified := range []bool{false, true} {
-								for _, ask := range []bool{false, true} {
-									in := RouteIn{PriorUnknown: prior, Hosts: hosts, ClaimProcs: procs, Setting: setting, GateOK: gate, Immediate: immediate, Verified: verified, Ask: ask}
-									m := Matches(in)
-									if len(m) != 1 {
-										t.Fatalf("%+v matched rows %v, want exactly one", in, m)
-									}
-									if prior && m[0] != 1 {
-										t.Fatalf("%+v: prior unknown must match only row 1, got %v", in, m)
-									}
-									if !prior && m[0] == 1 {
-										t.Fatalf("%+v: row 1 matched without a prior unknown", in)
-									}
-									if got := Select(in).Row; got != m[0] {
-										t.Fatalf("%+v: Select row %d != Matches %d", in, got, m[0])
-									}
-								}
-							}
+				for mask := 0; mask < 32; mask++ {
+					in := RouteIn{PriorUnknown: prior, Hosts: hosts, ClaimProcs: procs,
+						Setting: mask&1 != 0, GateOK: mask&2 != 0, Immediate: mask&4 != 0, Verified: mask&8 != 0, Ask: mask&16 != 0}
+					for _, asks := range []bool{false, true} {
+						in.AsksEnabled = asks
+						n++
+						m := Matches(in)
+						if len(m) != 1 {
+							t.Fatalf("%+v matched rows %v, want exactly one", in, m)
+						}
+						if want := oracle(in); m[0] != want || Select(in).Row != want {
+							t.Fatalf("%+v: Matches %v Select %d oracle %d", in, m, Select(in).Row, want)
 						}
 					}
 				}
 			}
 		}
+	}
+	if n != 2*4*4*32*2 {
+		t.Fatalf("covered %d inputs", n)
 	}
 }
 

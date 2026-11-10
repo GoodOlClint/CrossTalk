@@ -5,15 +5,17 @@ Plan: [codex-no-daemon-queue.md](codex-no-daemon-queue.md), section 5 step 0b. A
 ## Bottom line
 
 - **No reject condition was seen.** Nothing in the prototype lets peer text reach operator input, lets a wake replay unintended work, or lets pending mail disappear. Every wake is a fixed row; every entry is pullable before any row exists; a lost wake never loses mail.
-- **66 tests pass** (`go test -race ./proto/...`; 16 more are route-table subtests), `go vet` clean, gofmt clean. Five of them touch the real kernel on this host: a non-blocking `flock` and the `lsof` opener list, against child processes standing in for the Codex process.
-- **The plan's state machines hold as written, with five clarifications needed** (section "Plan and ADR changes for steps 1 to 7"): a contradiction between "revoke on a foreign claim" and "ignore a foreign claim", the fate of a reply that arrives after `unknown`, what "readable" means for `unknown` entries, the owner-proof inference's transient-opener behaviour, and journal growth from `failed` generations.
+- **68 tests pass** (`go test -race ./proto/...`; 16 more are route-table subtests), `go vet` clean, gofmt clean. Six `TestReal_*` tests use the real kernel on this host (a non-blocking `flock`, and for four of them the `lsof` opener list, against child processes standing in for the Codex process); five of the six spawn children, and one (missing lock file) spawns none.
+- **The plan's state machines hold as written, with open clarifications** (section "Plan and ADR changes for steps 1 to 7"). The contradiction between "revoke on a foreign claim" and "ignore a foreign claim" is settled by the coordinator (ignored; revoke only by recheck) and fixed in plan 3.3 and ADR 0028 item 8. Still open: the fate of a reply that arrives after `unknown`, what "readable" means for `unknown` entries, the owner-proof inference's transient-opener behaviour, and journal growth from `failed` generations.
 - **The owner-proof inference works on a real kernel** and fails closed on every second-opener case tried.
 
 Terms. Entry: one message in a thread's mailbox. Generation: one wake row's lifecycle record (plan 3.4). Owner proof: plan 3.3's obligations. Verdict words: **holds** (works as the plan says), **needs plan change** (works, but the plan text must change), **unknown** (not established here). The Codex simulator in the tests encodes only what step 0 measured; it is not new evidence about Codex.
 
 ## Pre-registration
 
-Each test's expected result is in its name (`Test<Area>_<Situation>_Expect<Result>`), written before the implementation; the route table and the claim cases are tables of expected rows. The first full run after the implementation passed all 66. A mutation check showed the tests discriminate: removing the second-opener rule failed 4 tests (two fake, two real-kernel), and letting any state change be accepted failed the monotonic test.
+Each test's expected result is in its name (`Test<Area>_<Situation>_Expect<Result>`), written before the implementation; the route table and the claim cases are tables of expected rows. The first full run after the implementation passed. Test strength was then checked by mutation (a deliberate one-line break of the code, to see whether a test fails), and an independent verification found gaps that were fixed: the unissued-cursor test used a nonexistent entry id (now a real entry no pull issued); no test covered `unknown` becoming `accepted` (now pinned, named as pending Clarification A); the concurrent pull-and-list test depended on scheduling (now deterministic with channels, 200 of 200 runs fail under a "list settles" mutation); the route test never varied `AsksEnabled` and compared `Select` with `Matches`, which could not fail (now compared with an independently written oracle). Mutations now caught: removing the second-opener rule (4 tests), the monotonic rule, the issued-cursor check, `unknown` to `accepted`, a list call that settles, and ignoring `AsksEnabled`.
+
+Test-strength limits: the mailbox, generations, claims and route are in-memory models written by the same author as the tests, so they pin the plan's rules, not an independent implementation; the concurrency tests prove the settle rule ignores non-evidence calls, not how the real MCP server orders calls; the real-kernel tests cover one host (macOS, same user, `lsof`); and no mutation run covered the wake-generation or replay code beyond the named tests.
 
 ## Results per item
 
@@ -24,7 +26,7 @@ Each test's expected result is in its name (`Test<Area>_<Situation>_Expect<Resul
 | 3 | Causal delivery settlement | 14 | holds; two clarifications |
 | 4 | Concurrent pull and `list_agents`, response withheld | 1 (race detector on) | holds |
 | 5 | Per-(harness, thread) claims, two threads in one process | 6 | holds; one contradiction in the plan text |
-| 6 | Owner-proof inference and its failure cases | 12 fake + 5 real-kernel | holds, with stated limits |
+| 6 | Owner-proof inference and its failure cases | 12 fake + 6 real-kernel | holds, with stated limits |
 | 7 | Route table, prior-unknown guard, ambiguous owner | exhaustive partition + 15 rows | holds |
 | 8 | R183 (a) and (b) | 2 | holds (accepted outcomes) |
 
@@ -62,7 +64,7 @@ Clarification B: the plan says `unknown` is "readable", but the pull returns onl
 
 ### 4. Concurrent pull and `list_agents`: holds
 
-Test: eight concurrent non-evidence calls (the stand-in for `list_agents`) alongside the pull, the pull's response never reaching the model; run under the race detector. The entry is `collecting` afterwards, not `accepted`, and becomes `unknown` at the bound. Limit: the "concurrent call" is a method on the same mutex-guarded type, not the real MCP server; it proves the settlement rule ignores such calls, not that the server orders them as modelled.
+Test: the pull's response is withheld by blocking inside a hook after the entries are marked `collecting`; `list` calls (which take the same settle path as every call, with no evidence) run while it is blocked, and in a second order before the pull starts; the entry is `collecting` throughout and `unknown` at the bound. A separate race-detector test runs eight concurrent lists with a pull. Limit: the "concurrent call" is a method on the same mutex-guarded type, not the real MCP server; it proves the settlement rule ignores such calls, not that the server orders them as modelled.
 
 ### 5. Per-thread claims: holds, one contradiction in the plan text
 
@@ -75,7 +77,7 @@ Contradiction: plan 3.3 says a claim "for the same `session_id` arrives from a d
 
 Built as the step 0 inference: lock held by someone (non-blocking `flock` fails with EAGAIN), the shim's parent has the lock file open, and no other process has it open. Plus the live-ancestry check (transport pid up to the parent, matching pid and start time), the pooled-parent check, and the durable-claim path with the target check only.
 Fake-system results (12): owned thread bound; a body pid, start time or `CODEX_THREAD_ID` that disagrees with the transport is ignored; a body pid that matches the parent cannot stand in for transport ancestry; pid reuse (same pid, different start time) rejected; a sender outside the ancestry rejected; a durable claim for a thread the parent does not own rejected (lock free); lock held by another process while the parent has no fd rejected; the parent has the file open but the lock is free rejected; a second opener rejected; a pooled parent (`app-server` in its arguments) rejected; a second opener that appears after binding revokes it on recheck.
-Real-kernel results (5, macOS, this host): `flock` on a free file reports free, on a file a child holds reports held, and after `kill -9` of the holder reports free again; a missing lock file is an error, not "free"; with a child holding the lock and being the parent, the proof passes; with an added reader process that only opens the file, the proof fails with the second-opener error; with the parent only reading while another process holds the lock, it fails the same way; with the lock free and the parent only reading, it fails as lock-free.
+Real-kernel results (6 `TestReal_*` tests, macOS, this host): `flock` on a free file reports free, on a file a child holds reports held, and after `kill -9` of the holder reports free again; a missing lock file is an error, not "free"; with a child holding the lock and being the parent, the proof passes; with an added reader process that only opens the file, the proof fails with the second-opener error; with the parent only reading while another process holds the lock, it fails the same way; with the lock free and the parent only reading, it fails as lock-free.
 
 Limits, stated rather than hidden:
 
@@ -87,7 +89,7 @@ Limits, stated rather than hidden:
 
 ### 7. Route table: holds
 
-Built: `Select` and `Matches` over the plan 3.1 inputs. An exhaustive loop over every combination of prior-unknown, 0 to 3 hosts, 0 to 3 claim processes, setting, gate, immediacy, sender verification and ask (1024 inputs) shows each input matches exactly one row, a prior `unknown` matches only row 1, and no other input matches row 1. Fifteen named cases pin each row: a prior `unknown` beats a host and beats full capability; one host and no claim is the unchanged app-server route; setting off, no claim, a failing gate, `next_turn` without capability and an unverified sender without capability are all row 3 (`unreachable`, an ask `rejected/no_endpoint`), never silently `mailboxed`; `next_turn` and an unverified sender with capability are row 4 (mailbox, no wake); an immediate verified sender with capability is row 5 (mailbox and wake); two hosts, a host plus an owner-proven claim, and claims from two processes are row 6. An ask with capability but asks not yet enabled is row 3, matching "never reported present for an ask".
+Built: `Select` and `Matches` over the plan 3.1 inputs. An exhaustive loop over every combination of prior-unknown, 0 to 3 hosts, 0 to 3 claim processes, setting, gate, immediacy, sender verification and ask (2048 inputs, with `AsksEnabled` varied, compared with a separately written oracle) shows each input matches exactly one row, a prior `unknown` matches only row 1, and no other input matches row 1. Fifteen named cases pin each row: a prior `unknown` beats a host and beats full capability; one host and no claim is the unchanged app-server route; setting off, no claim, a failing gate, `next_turn` without capability and an unverified sender without capability are all row 3 (`unreachable`, an ask `rejected/no_endpoint`), never silently `mailboxed`; `next_turn` and an unverified sender with capability are row 4 (mailbox, no wake); an immediate verified sender with capability is row 5 (mailbox and wake); two hosts, a host plus an owner-proven claim, and claims from two processes are row 6. An ask with capability but asks not yet enabled is row 3, matching "never reported present for an ask".
 Note: the guard's input, "an earlier attempt ended `unknown`", is per message; the prototype takes it as a boolean, so the product needs a per-message lookup in the journal.
 
 ### 8. R183 (a) and (b): holds (accepted outcomes)
@@ -106,11 +108,11 @@ Limit: the simulator reproduces the two step 0 measurements (probes 6 and 9); it
 
 ## Plan and ADR changes for steps 1 to 7
 
-1. **Plan 3.3 revocation, ADR 0028 item 8:** delete "a claim for the same `session_id` arrives from a different process" as a revocation trigger; keep "ignored if bound elsewhere" and revocation by recheck only. Add a recheck debounce (two failed checks before revoking) and say the opener list is same-user only.
+1. **Plan 3.3 revocation, ADR 0028 item 8 (done in this branch, coordinator ruling):** a foreign claim is ignored; revocation only by recheck. Still open: add a recheck debounce (two failed checks before revoking) and say the opener list is same-user only.
 2. **Plan 3.2, ADR 0012 item 3 narrowing:** decide late evidence after `unknown` (recommended: a `reply` or an echoed token after `unknown` may move it to `accepted`, because both are causal; the monotonic rule then reads "never back to `mailboxed` or `collecting`"), and decide how an `unknown` entry is read (recommended: a pull flag that returns `unknown` entries without changing state).
 3. **Plan 3.4 and 3.6:** state that `failed` generations are journaled per attempt and may be coalesced (one `failed` record per thread until a success), and state the admitted bound's value as a named constant to be set at step 4. Add to the sender hint and the docs the two R183 consequences: a wake turn may carry the user's TUI-queued prompt (R183 (a)), and a crash can lose the only wake so an ask may time out (R183 (b)).
 4. **Plan 3.3 and step 1 tests:** replace the `F_GETLK` language in every remaining place with the inference (done for obligation 4 in this branch's first commit; check design §3 at build). Add test cases for the transient reader and the debounce. Prefer a raw `proc_info` opener read over an `lsof` shell-out, or record the shell-out as a `ponytail:` ceiling.
-5. **Plan step 2:** the cursor rule needs one more sentence: a cursor is valid only if an earlier pull for the same thread issued it (the prototype tracks issued cursors; a guessed id settles nothing).
+5. **Plan step 2 (minor):** plan 3.2 already says cursors come only from pull results; the prototype enforces it by tracking issued cursors, and a real entry id no pull issued settles nothing. Worth one clause in step 2's test list, no design change.
 6. **Plan 3.1 and step 5:** the prior-`unknown` guard is per message; the journal needs a per-message "any route ended `unknown`" lookup that the route table reads.
 7. **ADR 0007 and ADR 0012 item 3:** unchanged from the plan's own list; wording changes at build, not now.
-8. **ADR 0028 Trial record:** record the step 0b outcome (66 tests, no reject condition, the five clarifications above) when the plan is next revised.
+8. **ADR 0028 Trial record:** record the step 0b outcome (68 tests, no reject condition, the open clarifications above) when the plan is next revised.
