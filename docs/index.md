@@ -20,7 +20,7 @@ With CrossTalk, you tell your agent "ask the Codex session in the `api` repo whe
  you ◄── Claude Code session "docs" ◄── arrives as a new message ◄─────┘
 ```
 
-Each session gets seven tools: list the other sessions, tell one something, ask one something, answer, read missed messages, and claim or release a helper. The agent calls them the way it calls any tool. The message lands inside the other running session through that program's own inbound channel. CrossTalk does not type into a terminal and does not start a new process per message.
+Each session gets tools to list the other sessions, tell one something, ask one something, answer, read missed messages, claim or release a helper, and set its own name. The agent calls them the way it calls any tool. The message lands inside the other running session through that program's own inbound channel. CrossTalk does not type into a terminal and does not start a new process per message.
 
 ## See it work
 

@@ -38,7 +38,7 @@ The last line printed is `REMOTE_E2E inform_seconds=N reply_seconds=N`. Logs lan
 ## Where things are
 
 - `cmd/crosstalk`: the command line (`mcp`, `install`, `uninstall`, `reinstall`, `send`, `capture`, `version`).
-- `internal/mcpserver`: the seven tools the model sees.
+- `internal/mcpserver`: the tools the model sees.
 - `internal/shim`, `internal/receiver`, `internal/a2a`, `internal/udsingress`: the shim, the one receiver chain every inbound message passes through, and the two ingress points.
 - `internal/harness/claude`, `internal/harness/codex`: everything specific to one harness.
 - `internal/journal`, `internal/registry`: state on disk.
