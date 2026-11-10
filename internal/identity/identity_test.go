@@ -118,7 +118,7 @@ func TestCwdBase(t *testing.T) {
 }
 
 func TestValidName(t *testing.T) {
-	bad := []string{"", strings.Repeat("a", 65), "a@b", "a\x00b", "a\nb", "a\x7fb", "0123456789abcdef", "inbox:x", "inbox:"}
+	bad := []string{"", strings.Repeat("a", 65), "a@b", "a\x00b", "a\nb", "a\x7fb", "0123456789abcdef", "inbox:x", "inbox:", "worker ", " worker", " ", "\tworker"}
 	for _, n := range bad {
 		if ValidName(n) == nil {
 			t.Errorf("ValidName(%q) = nil, want error", n)
