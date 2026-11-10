@@ -68,7 +68,7 @@ func (b Binding) SameConversation(o Binding) bool {
 
 // Record is one journal line. Which fields are set depends on Type:
 //
-//	dedupe:     Sender, MessageID, State
+//	dedupe:     Sender, MessageID, State, Imported (set when the pre-bind store replayed the message)
 //	task:       TaskID, MessageID, ContextID, Principal, Kind, State
 //	            (submitted|working|completed|failed|canceled|removed), Delivery,
 //	            Reason, Text (an ask's reply), Deadline, Message (appended history)
@@ -103,6 +103,7 @@ type Record struct {
 	Count     int        `json:"count,omitempty"`
 	Text      string     `json:"text,omitempty"`
 	Deadline  *time.Time `json:"deadline,omitempty"`
+	Imported  bool       `json:"imported,omitempty"`
 	// Message is the normalized message a dedupe record was accepted with,
 	// kept so the mailbox can return it; on a task record it is the A2A
 	// message the change appended to the task's history.

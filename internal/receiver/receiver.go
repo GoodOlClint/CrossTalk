@@ -479,9 +479,15 @@ func (r *Receiver) unreserve() {
 }
 
 func (r *Receiver) openRoute(rt route) error {
+	return r.openRouteAt(rt, r.now().UTC())
+}
+
+// openRouteAt journals the route open at at, which Recover restores as
+// OpenedAt.
+func (r *Receiver) openRouteAt(rt route, at time.Time) error {
 	r.sweep()
 	rec := rt.record(journal.StateOpen)
-	rec.At = r.now().UTC()
+	rec.At = at
 	if err := r.j.Append(rec); err != nil {
 		return err
 	}
