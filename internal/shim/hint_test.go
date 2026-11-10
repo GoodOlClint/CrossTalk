@@ -1,9 +1,13 @@
 package shim
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -13,6 +17,7 @@ import (
 	"github.com/GoodOlClint/crosstalk/internal/harness/codex"
 	"github.com/GoodOlClint/crosstalk/internal/harness/codex/appserver/appservertest"
 	"github.com/GoodOlClint/crosstalk/internal/identity"
+	"github.com/GoodOlClint/crosstalk/internal/prebind"
 	"github.com/GoodOlClint/crosstalk/internal/receiver"
 )
 
@@ -159,17 +164,113 @@ func TestNoSuchMessageHintsAreTrueOnEveryPath(t *testing.T) {
 	}
 }
 
+func (w *world) token(agentID string) {
+	w.t.Helper()
+	dir := filepath.Join(w.state, "tokens")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		w.t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, agentID+".token"), []byte("tok-"+agentID+"\n"), 0o600); err != nil {
+		w.t.Fatal(err)
+	}
+}
+
+func (w *world) prebindFiles() []string {
+	w.t.Helper()
+	des, err := os.ReadDir(filepath.Join(w.state, "prebind"))
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		w.t.Fatal(err)
+	}
+	var out []string
+	for _, de := range des {
+		if strings.HasSuffix(de.Name(), ".jsonl") {
+			out = append(out, strings.TrimSuffix(de.Name(), ".jsonl"))
+		}
+	}
+	return out
+}
+
 func TestAcceptedNativeSendWarnsOneWay(t *testing.T) {
 	w := newWorld(t)
 	alice := w.claude(4001, "sess-alice", "alice")
 	w.claude(4002, "sess-bob", "bob")
+	w.token(alice.agentID())
 	na := w.node(alice.pid, nil, nil)
 	res := na.ok(nil, "send_message", send("bob", "fyi"))
 	if res["state"] != "accepted" {
 		t.Fatalf("send %v", res)
 	}
-	if h, _ := res["hint"].(string); !strings.Contains(h, "one way") || !strings.Contains(h, "wait on that session's user") || !strings.Contains(h, "cannot answer with reply") || !strings.Contains(h, "agent_id") {
+	h, _ := res["hint"].(string)
+	if !strings.Contains(h, "one way") || !strings.Contains(h, "wait on that session's user") || !strings.Contains(h, "agent_id") || !strings.Contains(h, "can answer with reply once it has used CrossTalk") || strings.Contains(h, "cannot answer with reply") || strings.Contains(h, "may not find") {
 		t.Fatalf("hint %q", h)
+	}
+}
+
+func TestNativeSendWritesPreBindEntryOnlyForAcceptedOrQueuedInform(t *testing.T) {
+	w := newWorld(t)
+	alice := w.claude(4001, "sess-alice", "alice")
+	w.claude(4002, "sess-bob", "bob")
+	w.token(alice.agentID())
+	for _, n := range []string{"acc", "que", "unk", "rej", "unr", "bnd"} {
+		w.codex.addThread("T-"+n, n)
+	}
+	na := w.node(alice.pid, w.lb, nil)
+	nb := w.node(1, w.lb, nil)
+	nb.ok(thread("T-bnd"), "receive_message", map[string]any{})
+
+	w.codex.ScriptInject(adapter.Outcome{State: adapter.Accepted}, adapter.Outcome{State: adapter.Queued}, adapter.Outcome{State: adapter.Unknown}, adapter.Outcome{State: adapter.Rejected}, adapter.Outcome{State: adapter.Unreachable, Err: errors.New("down")})
+	var want []string
+	for i, n := range []string{"acc", "que", "unk", "rej", "unr"} {
+		res := na.ok(nil, "send_message", send(n, "fyi"))
+		if i < 2 {
+			want = append(want, identity.AgentID("codex", "T-"+n))
+		} else if h, _ := res["hint"].(string); strings.Contains(h, "can answer with reply") {
+			t.Fatalf("%s hint %q", n, h)
+		}
+	}
+	na.ok(nil, "send_message", send("bnd", "to a registered session"))
+	na.ok(nil, "ask", send("bob", "q?"))
+	na.ok(nil, "ask", send("acc", "q?"))
+
+	got := w.prebindFiles()
+	slices.Sort(got)
+	slices.Sort(want)
+	if !slices.Equal(got, want) {
+		t.Fatalf("prebind files %v, want %v", got, want)
+	}
+	b, _ := os.ReadFile(filepath.Join(w.state, "prebind", want[0]+".jsonl"))
+	var e prebind.Entry
+	if err := json.Unmarshal(bytes.TrimSpace(b), &e); err != nil || e.Sender != alice.agentID() || e.Harness != "codex" || e.AgentID != want[0] || !strings.Contains(e.Message, "fyi") {
+		t.Fatalf("entry %+v %v", e, err)
+	}
+}
+
+func TestFailedPreBindWriteKeepsStateAndAddsHint(t *testing.T) {
+	w := newWorld(t)
+	alice := w.claude(4001, "sess-alice", "alice")
+	w.claude(4002, "sess-bob", "bob")
+	na := w.node(alice.pid, nil, nil)
+	res := na.ok(nil, "send_message", send("bob", "fyi"))
+	h, _ := res["hint"].(string)
+	if res["state"] != "accepted" || res["reason"] != nil && res["reason"] != "" {
+		t.Fatalf("send %v", res)
+	}
+	if !strings.Contains(h, "cannot answer with reply") || !strings.Contains(h, "may not find") || strings.Contains(h, "can answer with reply") {
+		t.Fatalf("hint %q", h)
+	}
+	if got := w.prebindFiles(); len(got) != 0 {
+		t.Fatalf("files %v", got)
+	}
+
+	w.token(alice.agentID())
+	for i := range prebind.MaxEntries {
+		if r := na.ok(nil, "send_message", send("bob", fmt.Sprint("m", i))); !strings.Contains(r["hint"].(string), "can answer with reply") {
+			t.Fatalf("send %d hint %q", i, r["hint"])
+		}
+	}
+	res = na.ok(nil, "send_message", send("bob", "over the cap"))
+	if h, _ := res["hint"].(string); res["state"] != "accepted" || !strings.Contains(h, "cannot answer with reply") || !strings.Contains(h, "may not find") {
+		t.Fatalf("capped send %v", res)
 	}
 }
 

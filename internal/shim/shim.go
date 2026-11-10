@@ -17,6 +17,7 @@ import (
 	"github.com/GoodOlClint/crosstalk/internal/journal"
 	"github.com/GoodOlClint/crosstalk/internal/mcpserver"
 	"github.com/GoodOlClint/crosstalk/internal/msg"
+	"github.com/GoodOlClint/crosstalk/internal/prebind"
 	"github.com/GoodOlClint/crosstalk/internal/registry"
 )
 
@@ -114,6 +115,7 @@ type Shim struct {
 	reg     *registry.Registry
 	ingress harness.NativeIngress
 	log     *slog.Logger
+	prebind *prebind.Store
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -154,6 +156,7 @@ func New(opt Options) (*Shim, error) {
 	if s.log == nil {
 		s.log = slog.Default()
 	}
+	s.prebind = prebind.New(opt.StateDir, prebind.Options{Now: opt.Now, Logger: s.log})
 	for _, h := range opt.Harnesses {
 		if ni, ok := h.(harness.NativeIngress); ok {
 			s.ingress = ni

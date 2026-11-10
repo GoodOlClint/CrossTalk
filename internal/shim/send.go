@@ -10,9 +10,11 @@ import (
 
 	"github.com/GoodOlClint/crosstalk/internal/adapter"
 	"github.com/GoodOlClint/crosstalk/internal/harness"
+	"github.com/GoodOlClint/crosstalk/internal/identity"
 	"github.com/GoodOlClint/crosstalk/internal/journal"
 	"github.com/GoodOlClint/crosstalk/internal/mcpserver"
 	"github.com/GoodOlClint/crosstalk/internal/msg"
+	"github.com/GoodOlClint/crosstalk/internal/prebind"
 	"github.com/GoodOlClint/crosstalk/internal/receiver"
 	"github.com/GoodOlClint/crosstalk/internal/registry"
 )
@@ -37,6 +39,8 @@ const (
 	hintNativeReachable         = "This session has no CrossTalk binding yet, so it takes no ask or command. send_message with the default kind reaches it; if CrossTalk is installed there, its first CrossTalk call binds it, and then ask works."
 	hintNativeUnreachable       = "This session has no CrossTalk binding yet and its harness reports it unreachable, so nothing can reach it now. Check list_agents later; if CrossTalk is installed there, its first CrossTalk call binds it, and then ask works."
 	hintNativeOneWay            = "Delivered one way to a session with no CrossTalk binding. It cannot answer with reply, so any answer comes as a new message, addressed to your agent_id, and may never come or may wait on that session's user."
+	hintNativeOneWayKept        = "Delivered one way to a session with no CrossTalk binding. It can answer with reply once it has used CrossTalk; until then, or if it never does, any answer comes as a new message, addressed to your agent_id, and may never come or may wait on that session's user."
+	hintPreBindNotKept          = "CrossTalk could not keep this message for that session's first CrossTalk call, so a reply from that session may not find it."
 	hintNoRouteUnbound          = "This session has no message with that id: check the message_id against receive_message. Use send_message to the sender."
 	hintNoRoutePreBind          = "That message_id may predate this session's binding, so it may never have reached this session, or its record may have been trimmed. If unsure, check the message_id against receive_message; if it is right, use send_message to the agent_id the message shows as from-agent-id (Claude) or from_agent_id (Codex), or to the sender's name if it shows none."
 	hintNoRouteExpired          = "That inform has no open reply route: it was not delivered, it was already answered, or it is over an hour old. Use send_message to the sender."
@@ -361,11 +365,28 @@ func (st *AgentState) deliver(ctx context.Context, m msg.Message) mcpserver.Resu
 	}
 	res = finish(to, state, reason)
 	if reason == "" && (state == adapter.Accepted || state == adapter.Queued) {
-		res.Hint = hintNativeOneWay
+		res.Hint = st.keepForBind(m, b, state)
 	}
 	res.Hint = joinHint(res.Hint, st.shim.backendHint(ctx, b.Harness, b.HarnessEndpoint, b.SessionRef, state))
 	res.Hint = joinHint(res.Hint, st.countSend(to, state))
 	return res
+}
+
+// keepForBind stores a delivered inform for the target's shim to replay when
+// it binds, and returns the one-way hint that matches whether it was kept.
+func (st *AgentState) keepForBind(m msg.Message, b adapter.Binding, state adapter.State) string {
+	body, err := json.Marshal(m)
+	if err == nil {
+		err = st.shim.prebind.Append(prebind.Entry{
+			AgentID: identity.AgentID(string(b.Harness), b.SessionRef), Harness: string(b.Harness), SessionRef: b.SessionRef,
+			Sender: st.agent.ID(), Message: string(body), DeliveredAt: st.shim.now(), State: string(state),
+		})
+	}
+	if err != nil {
+		st.shim.log.Warn("shim: pre-bind store write", "agent", st.agent.ID(), "message_id", m.MessageID, "err", err)
+		return joinHint(hintNativeOneWay, hintPreBindNotKept)
+	}
+	return hintNativeOneWayKept
 }
 
 func (s *Shim) Send(ctx context.Context, from *mcpserver.Agent, req mcpserver.SendRequest) (mcpserver.Result, error) {
