@@ -158,3 +158,18 @@ func opensFile(fdDir string, target os.FileInfo) (bool, error) {
 	}
 	return false, nil
 }
+
+func executableIs(pid int, path string) (bool, error) {
+	target, err := os.Stat(path)
+	if err != nil {
+		return false, err
+	}
+	fi, err := os.Stat("/proc/" + strconv.Itoa(pid) + "/exe")
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return false, ErrNoProcess
+		}
+		return false, err
+	}
+	return os.SameFile(fi, target), nil
+}
