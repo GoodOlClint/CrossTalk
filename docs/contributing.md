@@ -41,7 +41,7 @@ The last line printed is `REMOTE_E2E inform_seconds=N reply_seconds=N`. Logs lan
 - `internal/mcpserver`: the tools the model sees.
 - `internal/shim`, `internal/receiver`, `internal/a2a`, `internal/udsingress`: the shim, the one receiver chain every inbound message passes through, and the two ingress points.
 - `internal/harness/claude`, `internal/harness/codex`: everything specific to one harness.
-- `internal/journal`, `internal/registry`: state on disk.
+- `internal/journal`, `internal/registry`, `internal/prebind`: state on disk (journals, descriptors, role inbox files, the pre-bind store).
 - `plugins/crosstalk`: the plugin and the skill that teaches a model to use the tools.
 - `docs`: this site. `docs/design.md` is the specification and `docs/decisions` holds the decision records.
 

@@ -96,7 +96,7 @@ func TestSiteLinksPages(t *testing.T) {
 
 func TestSiteNamesEveryTool(t *testing.T) {
 	pages := repoFile(t, "docs/examples.md") + repoFile(t, "docs/how-it-works.md")
-	for _, tool := range []string{"list_agents", "send_message", "ask", "reply", "receive_message", "claim", "release"} {
+	for _, tool := range []string{"list_agents", "send_message", "ask", "reply", "receive_message", "claim", "release", "rename", "attach", "detach", "grant"} {
 		if !strings.Contains(pages, "`"+tool+"`") {
 			t.Errorf("examples.md and how-it-works.md never name `%s`", tool)
 		}

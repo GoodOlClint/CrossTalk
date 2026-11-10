@@ -30,6 +30,19 @@ type Result struct {
 	Reason    string        `json:"reason,omitempty"`
 	// Hint tells the model its next step; Reason stays the stable code.
 	Hint string `json:"hint,omitempty"`
+	// Inbox and Responder are set for a send to a role inbox: its name and
+	// the agent_id of the member that holds the message's reply route.
+	Inbox     string `json:"inbox,omitempty"`
+	Responder string `json:"responder,omitempty"`
+	// Copies is the outcome of each watcher's copy of an inform or ask to an inbox.
+	Copies []CopyResult `json:"copies,omitempty"`
+}
+
+// CopyResult is one watcher's copy of a message to an inbox.
+type CopyResult struct {
+	AgentID string        `json:"agent_id"`
+	State   adapter.State `json:"state"`
+	Reason  string        `json:"reason,omitempty"`
 }
 
 type MailboxEntry struct {
@@ -94,6 +107,15 @@ type AgentCloser interface {
 // registration publish succeeds and must not block.
 type Publisher interface {
 	Published(a *Agent)
+}
+
+// InboxNotifier is optionally implemented by a Backend that tells an inbox's
+// other members about a membership change. It runs after the change is
+// committed and the caller's lock is released; change completes the
+// sentence "session <name> ...", and st is the inbox
+// as the change left it.
+type InboxNotifier interface {
+	NotifyInbox(ctx context.Context, from *Agent, change string, st registry.InboxState)
 }
 
 var ErrCloseTimeout = errors.New("mcpserver: agent handlers did not stop")

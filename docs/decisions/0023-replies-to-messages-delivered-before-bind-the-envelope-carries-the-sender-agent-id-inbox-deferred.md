@@ -1,6 +1,6 @@
 # ADR 0023 — Replies to messages delivered before bind: the envelope carries the sender's agent_id, the pre-bind inbox is deferred
 
-- **Status:** Provisional (operator 2026-11-07)
+- **Status:** Provisional (operator 2026-11-07). The deferred pre-bind design below is built by [ADR 0026](0026-pre-bind-store-messages-delivered-before-a-session-binds-are-kept-and-replayed-so-reply-finds-them.md); the middle path in Decision stays in force.
 - **Date:** 2026-11-07
 - **Deciders:** operator + Claude (Opus 5.5) + Codex review
 - **Context source:** issue #41 (dogfood); PR #57 (pre-bind hint); triage of #41 part (b); operator ruling 2026-11-07 on the first draft of this ADR (PR #58): take the middle path, defer the inbox
@@ -16,8 +16,8 @@ The first draft of this ADR (PR #58) designed a pre-bind inbox that would make s
 ## Decision
 
 1. When the sender's shim injects a message into a session with no CrossTalk binding (the `tgt.Native` branch of `deliver`), the delivered message carries the sender's agent_id next to its name: in the Claude envelope as a `from-agent-id` attribute, in the Codex rendering as a `from_agent_id` field. Messages delivered through a receiver's own ingress are unchanged; they already have a reply route.
-2. The sender's one-way hint on such a delivery says the recipient cannot answer with `reply`, so any answer comes as a new message addressed to the sender's agent_id. The pre-bind hint that `reply` returns since PR #57 tells the model to `send_message` to the sender's agent_id shown in that message (`from-agent-id` in Claude, `from_agent_id` in Codex), not to the sender's name; the hint reads the same in both harnesses.
-3. Nothing else changes: no inbox, no new journal or route records, no routing change, no change to the MCP tool surface (design §8). `reply` to such a message still returns `no_such_message`.
+2. The sender's one-way hint on such a delivery says the recipient cannot answer with `reply`, so any answer comes as a new message addressed to the sender's agent_id; when the sender's shim kept the message in the pre-bind store, the hint says instead that the recipient can answer with `reply` once it has used CrossTalk (ADR 0026). The pre-bind hint that `reply` returns since PR #57 tells the model to `send_message` to the sender's agent_id shown in that message (`from-agent-id` in Claude, `from_agent_id` in Codex), not to the sender's name; the hint reads the same in both harnesses.
+3. Nothing else changes: no inbox, no new journal or route records, no routing change, no change to the MCP tool surface (design §8). `reply` to such a message returns `no_such_message` unless the pre-bind store replayed it (ADR 0026).
 
 Accepted loss: the answer reaches the sender as a new inform, not threaded as a reply to its message; the sender's ask machinery is not involved anyway, because only informs reach an unbound session.
 
@@ -72,4 +72,4 @@ Kept as written after two Codex review rounds (the second with no findings), so 
 - Rests on: ADRs 0004, 0006 (provisional). The deferred design rests also on ADRs 0009, 0010, 0021 and 0022.
 - Commits: `git log --grep 'Provisional-ADR: 0023'`.
 - Pinning test: the tests listed in Consequences.
-- Outcome: middle path being built; inbox deferred.
+- Outcome: middle path built; the deferred inbox is built as the pre-bind store by ADR 0026.

@@ -350,3 +350,27 @@ func TestBudgetKeepsJournalForWedgedDeadlineWorker(t *testing.T) {
 		t.Errorf("agent lock after the budget: %v", err)
 	}
 }
+
+func TestPreBindDrainRunsBeforePublish(t *testing.T) {
+	w := newWorld(t)
+	alice := w.claude(4001, "sess-alice", "alice")
+	w.codex.addThread("T-bob", "bob")
+	bob := bobTarget("T-bob")
+	id := storeEntry(t, w, time.Now(), alice, bob, time.Now().Add(-time.Minute), "waiting")
+	var routeOpen, published, ran bool
+	nb := w.node(1, w.lb, func(o *Options) {
+		o.StartA2A = func(_ context.Context, st *AgentState) (A2AListener, error) {
+			ran = true
+			routeOpen = st.Receiver().RouteOpen(id)
+			_, published = w.descriptor(bob.AgentID)
+			return A2AListener{}, nil
+		}
+	})
+	nb.ok(thread("T-bob"), "receive_message", map[string]any{})
+	if !ran || !routeOpen || published {
+		t.Fatalf("at bind time: hook ran %v, route open %v, descriptor published %v", ran, routeOpen, published)
+	}
+	if _, ok := w.descriptor(bob.AgentID); !ok {
+		t.Fatal("descriptor never published")
+	}
+}

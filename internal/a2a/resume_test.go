@@ -35,7 +35,7 @@ func submittedOnly(t *testing.T, kind msg.Kind) (*MemoryTaskStore, msg.Message) 
 	t.Helper()
 	ts := NewMemoryTaskStore()
 	m := msg.Message{MessageID: msg.NewUUIDv7(), ContextID: "ctx", Kind: kind, Parts: []msg.Part{{Type: "text", Text: "hello"}}}
-	if _, _, err := newStore(ts, slog.New(slog.DiscardHandler)).create(receiver.PrincipalLocalUser, m, encode(m), 32, 256); err != nil {
+	if _, _, err := newStore(ts, slog.New(slog.DiscardHandler)).create(receiver.PrincipalLocalUser, m, encode(m), inboxMark{}, 32, 256); err != nil {
 		t.Fatal(err)
 	}
 	return ts, m
@@ -88,7 +88,7 @@ func TestResumeUndecodableTaskIsUnknownJournal(t *testing.T) {
 	st := newStore(ts, slog.New(slog.DiscardHandler))
 	m := msg.Message{MessageID: msg.NewUUIDv7(), ContextID: "ctx", Kind: msg.Inform}
 	bad := &sdk.Message{ID: m.MessageID, ContextID: "ctx", Role: sdk.MessageRoleUser}
-	if _, _, err := st.create(receiver.PrincipalLocalUser, m, bad, 32, 256); err != nil {
+	if _, _, err := st.create(receiver.PrincipalLocalUser, m, bad, inboxMark{}, 32, 256); err != nil {
 		t.Fatal(err)
 	}
 	r := &countingReceiver{}

@@ -13,10 +13,12 @@ This is the plain-English version of the [design](design.md), which is the speci
 
 ## What one shim does for its session
 
-1. Gives the model these tools over MCP: `list_agents`, `send_message`, `reply`, `ask`, `receive_message`, `claim`, `release` and `rename`. The same tools appear in Claude Code and Codex.
+1. Gives the model these tools over MCP: `list_agents`, `send_message`, `reply`, `ask`, `receive_message`, `claim`, `release`, `rename`, `attach`, `detach` and `grant`. The same tools appear in Claude Code and Codex.
 2. Listens for messages from other shims. They arrive over A2A on a loopback address (`127.0.0.1`, reachable only from this machine). The shim also listens on a unix socket (a file-based local connection) that speaks Claude Code's own cross-session protocol, so Claude's native peers can reach it.
 3. Delivers into its own harness, as described under [delivery](#delivery).
 4. Keeps a journal. Every accepted message is written to a file under `~/.local/state/crosstalk/journal/` before anything acknowledges it. After a restart, the journal tells the shim what was already delivered, so a retry is not injected twice. This holds while the record is retained: resolved records older than 24 hours are dropped when the journal is next opened.
+
+A session can also hold a role inbox with `attach`, an address such as `inbox:coordinator` that more than one session holds at once. A send to it goes to the newest member, which answers, and every other member gets a copy that opens no reply route. Membership is kept in each member's descriptor and in the journal; the owner and the list of sessions allowed to attach are kept in one small file per inbox under `~/.local/state/crosstalk/inboxes/`.
 
 There is no daemon and no central router. Shims find each other from the harnesses' own session lists and from small descriptor files under `~/.local/state/crosstalk/agents/`.
 

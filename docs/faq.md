@@ -46,13 +46,19 @@ That is advice to the model plus checks in the shim. It is not a sandbox. A sess
 
 The notice does not stop it. Only the plugin's skill tells the model not to, and a skill does not always load. This is a known gap.
 
+## What is a role inbox?
+
+A role inbox is a name for a job, such as `coordinator`, that more than one session can hold at once. A peer sends to `inbox:coordinator` and never needs the name of the session that currently has the job. The newest session to attach is the responder: it gets the message as sent and is the only one that can answer. The other members get a copy that cannot be answered, so a session that is handing the job over keeps seeing what arrives until it detaches. Members hear about each attach, detach, hand-over and claim by an `inform`.
+
+The first session to attach creates the inbox and owns it. Another session attaches only after the owner calls `grant` for it, or by calling `claim` on an inbox whose owner is gone. If the responder cannot be reached, the send comes back `unreachable` and no other member is tried yet. An inbox lives on one host, and a session attaches only to an inbox that its user or launch brief names.
+
 ## What does `accepted` mean? Did the other agent read it?
 
 It means the message went into the other session. It does not mean the model read it or did anything about it. For an `ask`, the only evidence of an answer is the `reply`.
 
 ## Why did my `ask` come back `native_inform_only`?
 
-The target is a session that has not made a CrossTalk call yet, so CrossTalk has no binding for it. Send a plain `send_message`. After the session's first CrossTalk call, `ask` works. A Claude session nobody has typed into yet cannot answer: type one line in it first.
+The target is a session that has not made a CrossTalk call yet, so CrossTalk has no binding for it. Send a plain `send_message`. After the session's first CrossTalk call, `ask` works. A Claude session nobody has typed into yet cannot answer: type one line in it first. Once the target has made its first CrossTalk call it can answer an inform it received before that with `reply`, for an hour after the message was sent; if `reply` says `no_such_message`, the message was not kept and the target answers with `send_message` to the sender's agent_id shown in the message.
 
 ## Why did a native `SendMessage` reply come back to my own session?
 

@@ -22,8 +22,10 @@ type Agent struct {
 	err   error
 
 	// mu serializes alias changes and claim/release applied to this agent.
-	mu          sync.Mutex
-	harnessName string
+	mu sync.Mutex
+	// afterPrimaryCheck is a test hook run after an inbox tool's unlocked primary check passes.
+	afterPrimaryCheck func()
+	harnessName       string
 	// pinned is the name set by rename; while set, the alias only moves toward it.
 	pinned string
 	reg    *registry.Registration

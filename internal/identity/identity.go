@@ -69,8 +69,18 @@ func cwdBase(cwd string) string {
 
 const (
 	MaxNameBytes = 64
-	reservedName = "inbox:"
+	// InboxPrefix starts the address form of a role inbox and is reserved,
+	// in any case, in session names.
+	InboxPrefix = "inbox:"
 )
+
+// CutInbox returns the inbox name after an inbox: prefix, matched in any case.
+func CutInbox(s string) (string, bool) {
+	if len(s) >= len(InboxPrefix) && strings.EqualFold(s[:len(InboxPrefix)], InboxPrefix) {
+		return s[len(InboxPrefix):], true
+	}
+	return "", false
+}
 
 // ValidName reports why name cannot be a session alias: empty, over
 // MaxNameBytes, surrounding space (HTTP trims it from the A2A sender header),
@@ -82,7 +92,7 @@ func ValidName(name string) error {
 		return errors.New("name is empty")
 	case len(name) > MaxNameBytes:
 		return errors.New("name is longer than 64 bytes")
-	case strings.HasPrefix(strings.ToLower(name), reservedName):
+	case hasInboxPrefix(name):
 		return errors.New("name starts with the reserved prefix inbox:")
 	case strings.TrimSpace(name) != name:
 		return errors.New("name starts or ends with a space")
@@ -109,4 +119,9 @@ func isHex16(s string) bool {
 		}
 	}
 	return true
+}
+
+func hasInboxPrefix(s string) bool {
+	_, ok := CutInbox(s)
+	return ok
 }

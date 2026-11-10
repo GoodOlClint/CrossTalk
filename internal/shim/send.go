@@ -5,14 +5,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"time"
 
 	"github.com/GoodOlClint/crosstalk/internal/adapter"
 	"github.com/GoodOlClint/crosstalk/internal/harness"
+	"github.com/GoodOlClint/crosstalk/internal/identity"
 	"github.com/GoodOlClint/crosstalk/internal/journal"
 	"github.com/GoodOlClint/crosstalk/internal/mcpserver"
 	"github.com/GoodOlClint/crosstalk/internal/msg"
+	"github.com/GoodOlClint/crosstalk/internal/prebind"
 	"github.com/GoodOlClint/crosstalk/internal/receiver"
 	"github.com/GoodOlClint/crosstalk/internal/registry"
 )
@@ -24,6 +27,7 @@ const PrincipalCrossTalk = "crosstalk"
 const (
 	ReasonAskClosed      = "ask_closed"
 	ReasonAlreadyReplied = "already_replied"
+	ReasonInboxCopy      = "inbox_copy"
 )
 
 // NudgeFirst is the send count to one peer at which a result first asks the
@@ -37,6 +41,8 @@ const (
 	hintNativeReachable         = "This session has no CrossTalk binding yet, so it takes no ask or command. send_message with the default kind reaches it; if CrossTalk is installed there, its first CrossTalk call binds it, and then ask works."
 	hintNativeUnreachable       = "This session has no CrossTalk binding yet and its harness reports it unreachable, so nothing can reach it now. Check list_agents later; if CrossTalk is installed there, its first CrossTalk call binds it, and then ask works."
 	hintNativeOneWay            = "Delivered one way to a session with no CrossTalk binding. It cannot answer with reply, so any answer comes as a new message, addressed to your agent_id, and may never come or may wait on that session's user."
+	hintNativeOneWayKept        = "Delivered one way to a session with no CrossTalk binding. It can answer with reply once it has used CrossTalk; until then, or if it never does, any answer comes as a new message, addressed to your agent_id, and may never come or may wait on that session's user."
+	hintPreBindNotKept          = "CrossTalk could not keep this message for that session's first CrossTalk call, so a reply from that session may not find it."
 	hintNoRouteUnbound          = "This session has no message with that id: check the message_id against receive_message. Use send_message to the sender."
 	hintNoRoutePreBind          = "That message_id may predate this session's binding, so it may never have reached this session, or its record may have been trimmed. If unsure, check the message_id against receive_message; if it is right, use send_message to the agent_id the message shows as from-agent-id (Claude) or from_agent_id (Codex), or to the sender's name if it shows none."
 	hintNoRouteExpired          = "That inform has no open reply route: it was not delivered, it was already answered, or it is over an hour old. Use send_message to the sender."
@@ -286,6 +292,11 @@ func (st *AgentState) deliver(ctx context.Context, m msg.Message) mcpserver.Resu
 	if err != nil {
 		return finish(m.To, adapter.Unreachable, err.Error())
 	}
+	if r := tgt.Rejection; r != nil {
+		res := finish(m.To, adapter.Rejected, r.Reason)
+		res.Hint = r.Hint
+		return res
+	}
 	local := tgt.Registered || len(tgt.Native) > 0
 	switch {
 	case tgt.Remote != nil && !local:
@@ -307,25 +318,14 @@ func (st *AgentState) deliver(ctx context.Context, m msg.Message) mcpserver.Resu
 	case tgt.UnknownAlias != "":
 		return finish(m.To, adapter.Rejected, ReasonUnknownAlias)
 	}
+	if ib := tgt.Inbox; ib != nil {
+		return st.sendInbox(ctx, m, ib, finish)
+	}
 	if d := tgt.Desc; tgt.Registered {
 		if d.AgentID == st.agent.ID() {
 			return finish(d.AgentID, adapter.Rejected, ReasonSelf)
 		}
-		if st.outbound(m, d.AgentID, journal.StateSubmitted, "", true) != nil {
-			res.State, res.Reason = adapter.Unreachable, receiver.ReasonJournal
-			return res
-		}
-		state, reason, taskID := st.viaTransport(ctx, d, m)
-		st.outboundTask(m, d.AgentID, state, reason, false, taskID)
-		res.State, res.Reason = state, reason
-		if reason == receiver.ReasonNoEndpoint || state == adapter.Unreachable && d.Harness == string(adapter.Codex) && d.HarnessEndpoint == nil {
-			res.Hint = hintCodexNoEndpoint
-		}
-		if d.HarnessEndpoint != nil {
-			res.Hint = joinHint(res.Hint, st.shim.backendHint(ctx, adapter.Harness(d.Harness), *d.HarnessEndpoint, d.SessionRef, state))
-		}
-		res.Hint = joinHint(res.Hint, st.countSend(d.AgentID, state))
-		return res
+		return st.sendRegistered(ctx, m, d, d.AgentID)
 	}
 	if m.Kind != msg.Inform {
 		switch len(tgt.Native) {
@@ -361,11 +361,127 @@ func (st *AgentState) deliver(ctx context.Context, m msg.Message) mcpserver.Resu
 	}
 	res = finish(to, state, reason)
 	if reason == "" && (state == adapter.Accepted || state == adapter.Queued) {
-		res.Hint = hintNativeOneWay
+		res.Hint = st.keepForBind(m, b, state)
 	}
 	res.Hint = joinHint(res.Hint, st.shim.backendHint(ctx, b.Harness, b.HarnessEndpoint, b.SessionRef, state))
 	res.Hint = joinHint(res.Hint, st.countSend(to, state))
 	return res
+}
+
+// sendRegistered sends m to the shim-served agent d; peer is the key the
+// per-peer nudge counts the send under.
+func (st *AgentState) sendRegistered(ctx context.Context, m msg.Message, d registry.Descriptor, peer string) mcpserver.Result {
+	res := mcpserver.Result{MessageID: m.MessageID}
+	if st.outbound(m, d.AgentID, journal.StateSubmitted, "", true) != nil {
+		res.State, res.Reason = adapter.Unreachable, receiver.ReasonJournal
+		return res
+	}
+	state, reason, taskID := st.viaTransport(ctx, d, m)
+	st.outboundTask(m, d.AgentID, state, reason, false, taskID)
+	res.State, res.Reason = state, reason
+	if reason == receiver.ReasonNoEndpoint || state == adapter.Unreachable && d.Harness == string(adapter.Codex) && d.HarnessEndpoint == nil {
+		res.Hint = hintCodexNoEndpoint
+	}
+	if d.HarnessEndpoint != nil {
+		res.Hint = joinHint(res.Hint, st.shim.backendHint(ctx, adapter.Harness(d.Harness), *d.HarnessEndpoint, d.SessionRef, state))
+	}
+	res.Hint = joinHint(res.Hint, st.countSend(peer, state))
+	return res
+}
+
+// sendInbox sends m to the inbox's responder, its first member. An inform or
+// ask whose responder leg did not come back unreachable is also copied to
+// every other member except the sender; a command is never copied.
+func (st *AgentState) sendInbox(ctx context.Context, m msg.Message, ib *mcpserver.InboxTarget, finish func(string, adapter.State, string) mcpserver.Result) mcpserver.Result {
+	responder := ib.Members[0]
+	if responder.AgentID == st.agent.ID() {
+		return finish(responder.AgentID, adapter.Rejected, ReasonSelf)
+	}
+	m.Inbox = ib.Name
+	res := st.sendRegistered(ctx, m, responder, "inbox:"+ib.Name)
+	res.Inbox, res.Responder = ib.Name, responder.AgentID
+	if m.Kind == msg.Command || res.State == adapter.Unreachable {
+		return res
+	}
+	for _, d := range ib.Members[1:] {
+		if d.AgentID != st.agent.ID() {
+			res.Copies = append(res.Copies, st.sendCopy(ctx, m, d))
+		}
+	}
+	return res
+}
+
+// sendCopy sends the watcher d its copy of m, journaled as a leg of its own so
+// it never touches the outbound record that holds the responder leg.
+func (st *AgentState) sendCopy(ctx context.Context, m msg.Message, d registry.Descriptor) mcpserver.CopyResult {
+	m.InboxCopy = true
+	leg := func(state adapter.State, reason, taskID string) error {
+		return st.agent.Journal().Append(journal.Record{Type: journal.TypeLeg, MessageID: m.MessageID, To: d.AgentID, Kind: string(m.Kind), State: string(state), Reason: reason, TaskID: taskID, ContextID: m.ContextID})
+	}
+	if leg(journal.StateSubmitted, "", "") != nil {
+		return mcpserver.CopyResult{AgentID: d.AgentID, State: adapter.Unreachable, Reason: receiver.ReasonJournal}
+	}
+	state, reason, taskID := st.viaTransport(ctx, d, m)
+	if err := leg(state, reason, taskID); err != nil {
+		st.shim.log.Warn("shim: journal leg", "agent", st.agent.ID(), "message_id", m.MessageID, "err", err)
+	}
+	return mcpserver.CopyResult{AgentID: d.AgentID, State: state, Reason: reason}
+}
+
+var _ mcpserver.InboxNotifier = (*Shim)(nil)
+
+// NotifyInbox tells every member of the inbox but the caller what changed: an
+// inform copy, so it opens no reply route, from the caller's own identity.
+func (s *Shim) NotifyInbox(ctx context.Context, from *mcpserver.Agent, change string, in registry.InboxState) {
+	st, err := s.state(from)
+	if err != nil {
+		return
+	}
+	ds, err := s.reg.InboxMembers(in.Name)
+	if err != nil {
+		return
+	}
+	label := func(id string) string {
+		if id == "" {
+			return "none"
+		}
+		for _, m := range in.Members {
+			if m.AgentID == id {
+				return m.Name
+			}
+		}
+		return id
+	}
+	responder := ""
+	if len(in.Members) > 0 {
+		responder = in.Members[0].AgentID
+	}
+	text := fmt.Sprintf("Inbox %s: session %s %s. Owner: %s. Responder now: %s.", in.Name, from.Name(), change, label(in.Owner), label(responder))
+	for _, d := range ds {
+		if d.AgentID == from.ID() {
+			continue
+		}
+		m := st.newMessage("inbox:"+in.Name, msg.Inform, msg.Immediate, text)
+		m.Inbox = in.Name
+		st.sendCopy(ctx, m, d)
+	}
+}
+
+// keepForBind stores a delivered inform for the target's shim to replay when
+// it binds, and returns the one-way hint that matches whether it was kept.
+func (st *AgentState) keepForBind(m msg.Message, b adapter.Binding, state adapter.State) string {
+	body, err := json.Marshal(m)
+	if err == nil {
+		err = st.shim.prebind.Append(prebind.Entry{
+			AgentID: identity.AgentID(string(b.Harness), b.SessionRef), Harness: string(b.Harness), SessionRef: b.SessionRef,
+			Sender: st.agent.ID(), Message: string(body), DeliveredAt: st.shim.now(), State: string(state),
+		})
+	}
+	if err != nil {
+		st.shim.log.Warn("shim: pre-bind store write", "agent", st.agent.ID(), "message_id", m.MessageID, "err", err)
+		return joinHint(hintNativeOneWay, hintPreBindNotKept)
+	}
+	return hintNativeOneWayKept
 }
 
 func (s *Shim) Send(ctx context.Context, from *mcpserver.Agent, req mcpserver.SendRequest) (mcpserver.Result, error) {
@@ -541,6 +657,17 @@ func (st *AgentState) inbound(messageID string) (msg.Message, string, bool) {
 	return msg.Message{}, "", false
 }
 
+// inboxCopy reports whether messageID was delivered here as an inbox copy.
+func (st *AgentState) inboxCopy(messageID string) bool {
+	rs, err := st.agent.Journal().Records()
+	if err != nil {
+		return false
+	}
+	return slices.ContainsFunc(rs, func(r journal.Record) bool {
+		return r.Type == journal.TypeDedupe && r.MessageID == messageID && r.Copy
+	})
+}
+
 // addressable reports a reply key that names an agent, local or on a paired
 // host, as opposed to a principal such as local-user.
 func addressable(key string) bool { return mcpserver.IsAgentID(key) || receiver.IsRemoteKey(key) }
@@ -568,8 +695,15 @@ func (s *Shim) Reply(ctx context.Context, from *mcpserver.Agent, messageID, text
 	if err != nil {
 		return mcpserver.Result{}, err
 	}
+	// The drain takes the store lock, so it runs before replyMu is held.
+	if _, _, ok := st.inbound(messageID); !ok || st.rcv.ImportIncomplete(messageID) {
+		st.drainPreBind()
+	}
 	st.replyMu.Lock()
 	defer st.replyMu.Unlock()
+	if st.inboxCopy(messageID) {
+		return mcpserver.Result{}, &mcpserver.Error{Code: mcpserver.CodeRejected, Reason: ReasonInboxCopy}
+	}
 	orig, key, ok := st.inbound(messageID)
 	if !ok {
 		hint := hintNoRouteUnbound

@@ -21,6 +21,16 @@ type Target struct {
 	// UnknownAlias is the text after the last @ when nothing local matched and
 	// it is no paired alias.
 	UnknownAlias string
+	// Inbox is set when to had the inbox: prefix. It never carries a session.
+	Inbox *InboxTarget
+	// Rejection is the refusal for an inbox address that cannot be sent to.
+	Rejection *Error
+}
+
+// InboxTarget is a role inbox and its live members, responder first.
+type InboxTarget struct {
+	Name    string
+	Members []registry.Descriptor
 }
 
 // RemoteRef is a name or agent_id on a paired host.
@@ -75,6 +85,9 @@ func IsAgentID(s string) bool {
 // isAlias accepts also carries Remote; one that matches nothing locally and
 // ends in any other @ text carries UnknownAlias. isAlias may be nil.
 func ResolveTarget(ctx context.Context, reg *registry.Registry, discover func(context.Context) ([]Session, error), isAlias func(string) bool, to string) (Target, error) {
+	if name, ok := identity.CutInbox(to); ok {
+		return resolveInbox(reg, name)
+	}
 	t, err := resolveLocal(ctx, reg, discover, to)
 	if err != nil {
 		return t, err
@@ -86,6 +99,27 @@ func ResolveTarget(ctx context.Context, reg *registry.Registry, discover func(co
 		case !t.Registered && len(t.Native) == 0:
 			t.UnknownAlias = alias
 		}
+	}
+	return t, nil
+}
+
+// resolveInbox reads the inbox: prefix before any address split, so a value
+// with it never reaches name lookup, discovery or the paired-alias path.
+func resolveInbox(reg *registry.Registry, name string) (Target, error) {
+	if strings.Contains(name, "@") {
+		return Target{Rejection: rejected("remote_inbox_unsupported")}, nil
+	}
+	if err := registry.ValidInboxName(name); err != nil {
+		return Target{Rejection: rejected("invalid_inbox")}, nil
+	}
+	name = registry.CanonInbox(name)
+	ds, err := reg.InboxMembers(name)
+	if err != nil {
+		return Target{}, fmt.Errorf("registry: %w", err)
+	}
+	t := Target{Inbox: &InboxTarget{Name: name, Members: ds}}
+	if len(ds) == 0 {
+		t.Rejection = &Error{Code: CodeRejected, Reason: "no_such_agent", Hint: fmt.Sprintf("No session is attached to the inbox %s. Run list_agents to see which inboxes have members, or ask your user; a session joins an inbox with attach.", name)}
 	}
 	return t, nil
 }

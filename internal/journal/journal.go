@@ -34,6 +34,8 @@ const (
 	TypeOutbound   Type = "outbound"
 	TypeReceipt    Type = "receipt"
 	TypeNudge      Type = "nudge"
+	TypeAttach     Type = "attach"
+	TypeLeg        Type = "leg"
 )
 
 const (
@@ -68,10 +70,11 @@ func (b Binding) SameConversation(o Binding) bool {
 
 // Record is one journal line. Which fields are set depends on Type:
 //
-//	dedupe:     Sender, MessageID, State
+//	dedupe:     Sender, MessageID, State, Imported (set when the pre-bind store replayed the message), Inbox and Copy (a message that arrived through an inbox; Copy means a watcher's copy, which has no reply route)
 //	task:       TaskID, MessageID, ContextID, Principal, Kind, State
 //	            (submitted|working|completed|failed|canceled|removed), Delivery,
-//	            Reason, Text (an ask's reply), Deadline, Message (appended history)
+//	            Reason, Text (an ask's reply), Deadline, Message (appended history);
+//	            a copy's task has Kind inform, OrigKind the kind it was sent as, Copy and Inbox
 //	dispatch:   MessageID (State = dispatching), Sender (only for a remote sender's message: its host-scoped key)
 //	outcome:    MessageID, State, Sender (as dispatch)
 //	cancel:     MessageID, Sender (as dispatch)
@@ -80,6 +83,8 @@ func (b Binding) SameConversation(o Binding) bool {
 //	claim:      Owner (agent_id), Claimed
 //	outbound:   MessageID, To (agent_id, harness:session_ref, or an unresolved name), Kind, State, Reason, TaskID (far side's), ContextID; the first carries Message, whose deadline_seconds and sent_at fix an ask's deadline
 //	nudge:      To (the peer), Count (sends to it when the nudge fired); kept past retention, since it is the record of how often the nudge fires
+//	attach:     Inbox, Attached (false once detached or dropped); At is the attached_at of the membership
+//	leg:        MessageID, To (agent_id), Kind, State, Reason, TaskID; one inbox copy sent from this agent, kept apart from the outbound record that holds the responder leg
 //	receipt:    MessageID (an admitted inbound reply), InReplyTo (the outbound ask it answers), Sender (the ask's peer agent_id), ContextID (the ask's)
 type Record struct {
 	Type      Type       `json:"type"`
@@ -103,6 +108,11 @@ type Record struct {
 	Count     int        `json:"count,omitempty"`
 	Text      string     `json:"text,omitempty"`
 	Deadline  *time.Time `json:"deadline,omitempty"`
+	Imported  bool       `json:"imported,omitempty"`
+	Inbox     string     `json:"inbox,omitempty"`
+	Copy      bool       `json:"copy,omitempty"`
+	OrigKind  string     `json:"orig_kind,omitempty"`
+	Attached  bool       `json:"attached,omitempty"`
 	// Message is the normalized message a dedupe record was accepted with,
 	// kept so the mailbox can return it; on a task record it is the A2A
 	// message the change appended to the task's history.
@@ -131,6 +141,10 @@ func (r Record) key() string {
 		return "p\x00" + r.InReplyTo + "\x00" + r.MessageID
 	case TypeNudge:
 		return "n\x00" + r.To + "\x00" + strconv.Itoa(r.Count)
+	case TypeAttach:
+		return "a\x00" + r.Inbox
+	case TypeLeg:
+		return "l\x00" + r.MessageID + "\x00" + r.To
 	}
 	return "?\x00" + string(r.Type)
 }
@@ -163,7 +177,7 @@ func unresolved(latest Record) bool {
 		}
 	case TypeDispatch:
 		return true
-	case TypeOutcome, TypeOutbound:
+	case TypeOutcome, TypeOutbound, TypeLeg:
 		return latest.State == StateUnknown
 	case TypeRoute:
 		return latest.State == StateOpen
@@ -179,6 +193,8 @@ func unresolved(latest Record) bool {
 		return latest.Name != ""
 	case TypeNudge:
 		return true
+	case TypeAttach:
+		return latest.Attached
 	}
 	return false
 }

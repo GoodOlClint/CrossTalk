@@ -53,6 +53,7 @@ func (l *Loopback) Send(ctx context.Context, from, to registry.Descriptor, m msg
 		Ingress: receiver.A2A,
 		Message: m,
 		Sender:  receiver.Sender{Verified: true, AgentID: from.AgentID, Name: from.Name, Role: from.Role, Harness: from.Harness, PID: from.PID},
+		Inbox:   m.Inbox, InboxCopy: m.InboxCopy,
 	})
 	if res.Reason != "" {
 		return res.State, errors.New(res.Reason)

@@ -66,7 +66,7 @@ func TestOversizedMetadataRejectedBeforeTask(t *testing.T) {
 		t.Fatal(err)
 	}
 	st := newStore(ts, slog.New(slog.DiscardHandler))
-	if _, _, err := st.create("local-user", m, am, 32, 256); err == nil {
+	if _, _, err := st.create("local-user", m, am, inboxMark{}, 32, 256); err == nil {
 		t.Fatal("record over the journal line limit was accepted")
 	}
 	if len(st.pending()) != 0 {
