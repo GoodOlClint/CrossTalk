@@ -125,6 +125,7 @@ type Registration struct {
 	nameLock  *os.File
 	desc      Descriptor
 	published bool
+	released  bool
 }
 
 type Request struct {
@@ -243,6 +244,7 @@ func (g *Registration) ReleaseName() error {
 	if g.agentLock == nil {
 		return nil
 	}
+	g.released = true
 	err := removeIfInstance(g.reg.DescriptorPath(g.desc.AgentID), g.desc.InstanceID)
 	if g.nameLock != nil {
 		g.nameLock.Close()
@@ -257,7 +259,7 @@ func (g *Registration) ReleaseName() error {
 func (g *Registration) Rename(newName string) error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if g.agentLock == nil {
+	if g.agentLock == nil || g.released {
 		return ErrClosed
 	}
 	if newName == g.desc.Name {

@@ -475,3 +475,32 @@ func TestListSkipsSupersededAndKeepsItsFile(t *testing.T) {
 		t.Errorf("agent lock released: %v", err)
 	}
 }
+
+func TestRenameAfterReleaseNameRefused(t *testing.T) {
+	r := New(t.TempDir())
+	g, err := r.Acquire(Request{AgentID: "a1", HarnessName: "n", Harness: "claude", Cwd: "/w"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer g.Close()
+	if err := g.Publish(Descriptor{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.ReleaseName(); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.Rename("m"); !errors.Is(err, ErrClosed) {
+		t.Fatalf("Rename after ReleaseName = %v, want ErrClosed", err)
+	}
+	if _, err := os.Stat(r.DescriptorPath("a1")); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("Rename republished a released descriptor: %v", err)
+	}
+	other, err := r.Acquire(Request{AgentID: "a2", HarnessName: "m", Harness: "claude", Cwd: "/w"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	if other.Name() != "m" {
+		t.Errorf("name m still locked: %q", other.Name())
+	}
+}
