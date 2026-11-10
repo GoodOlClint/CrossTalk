@@ -103,20 +103,27 @@ func listFDs(pid int) ([]byte, error) {
 	}
 }
 
-func openers(path string) ([]int, error) {
-	var st unix.Stat_t
-	if err := unix.Stat(path, &st); err != nil {
-		return nil, &os.PathError{Op: "stat", Path: path, Err: err}
-	}
+func userPIDs() ([]int, error) {
 	procs, err := unix.SysctlKinfoProcSlice("kern.proc.uid", os.Geteuid())
 	if err != nil {
 		return nil, fmt.Errorf("ownerproof: list processes: %w", err)
 	}
+	pids := make([]int, 0, len(procs))
+	for _, kp := range procs {
+		pids = append(pids, int(kp.Proc.P_pid))
+	}
+	return pids, nil
+}
+
+func openersAmong(path string, pids []int) ([]int, error) {
+	var st unix.Stat_t
+	if err := unix.Stat(path, &st); err != nil {
+		return nil, &os.PathError{Op: "stat", Path: path, Err: err}
+	}
 	self := os.Getpid()
 	var out []int
 	vbuf := make([]byte, vnodeFDInfoSize)
-	for _, kp := range procs {
-		pid := int(kp.Proc.P_pid)
+	for _, pid := range pids {
 		if pid == self || pid <= 0 {
 			continue
 		}

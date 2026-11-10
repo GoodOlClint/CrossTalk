@@ -39,6 +39,11 @@ func TestMain(m *testing.M) {
 		if err != nil {
 			os.Exit(2)
 		}
+		if mode == "nodump" {
+			if err := nonDumpable(); err != nil {
+				os.Exit(4)
+			}
+		}
 		if mode == "hold" {
 			if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 				os.Exit(3)
@@ -132,10 +137,9 @@ func TestRealOpeners_HolderAndReaderChildren_ExpectBothSelfExcluded(t *testing.T
 	defer f.Close()
 	holder := startHelper(t, "hold", path)
 	reader := startHelper(t, "read", path)
-	other := lockFile(t)
-	startHelper(t, "read", other)
+	other := startHelper(t, "read", lockFile(t))
 	start := time.Now()
-	got, err := Openers(path)
+	got, err := OpenersAmong(path, []int{os.Getpid(), holder.pid, reader.pid, other.pid})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,14 +155,14 @@ func TestRealOpeners_HolderAndReaderChildren_ExpectBothSelfExcluded(t *testing.T
 func TestRealOpeners_SameNameDifferentInode_ExpectNotCounted(t *testing.T) {
 	supported(t)
 	path := lockFile(t)
-	startHelper(t, "read", path)
+	h := startHelper(t, "read", path)
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(path, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	got, err := Openers(path)
+	got, err := OpenersAmong(path, []int{h.pid})
 	if err != nil || len(got) != 0 {
 		t.Fatalf("openers of the new inode %v err=%v, want none", got, err)
 	}

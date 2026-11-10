@@ -78,4 +78,13 @@ func LockHeld(path string) (bool, error) { return lockHeld(path) }
 // Openers returns the pids of processes this user can inspect that have the
 // file at path open, matched by device and inode, excluding this process.
 // A process that exits or denies inspection mid-walk is skipped.
-func Openers(path string) ([]int, error) { return openers(path) }
+func Openers(path string) ([]int, error) {
+	pids, err := userPIDs()
+	if err != nil {
+		return nil, err
+	}
+	return openersAmong(path, pids)
+}
+
+// OpenersAmong is Openers over the given pids only, by the same rules.
+func OpenersAmong(path string, pids []int) ([]int, error) { return openersAmong(path, pids) }

@@ -64,23 +64,33 @@ func args(pid int) (string, []string, error) {
 	return exe, argv, nil
 }
 
-func openers(path string) ([]int, error) {
-	target, err := os.Stat(path)
+func userPIDs() ([]int, error) {
+	ents, err := os.ReadDir("/proc")
 	if err != nil {
 		return nil, err
 	}
-	ents, err := os.ReadDir("/proc")
+	var pids []int
+	for _, e := range ents {
+		if pid, err := strconv.Atoi(e.Name()); err == nil {
+			pids = append(pids, pid)
+		}
+	}
+	return pids, nil
+}
+
+func openersAmong(path string, pids []int) ([]int, error) {
+	target, err := os.Stat(path)
 	if err != nil {
 		return nil, err
 	}
 	self, uid := os.Getpid(), os.Geteuid()
 	var out []int
-	for _, e := range ents {
-		pid, err := strconv.Atoi(e.Name())
-		if err != nil || pid == self {
+	for _, pid := range pids {
+		if pid == self || pid <= 0 {
 			continue
 		}
-		mine, err := ownedBy("/proc/"+e.Name()+"/status", uid)
+		dir := "/proc/" + strconv.Itoa(pid)
+		mine, err := ownedBy(dir+"/status", uid)
 		if gone(err) {
 			continue
 		}
@@ -90,7 +100,7 @@ func openers(path string) ([]int, error) {
 		if !mine {
 			continue
 		}
-		found, err := opensFile("/proc/"+e.Name()+"/fd", target)
+		found, err := opensFile(dir+"/fd", target)
 		if gone(err) {
 			continue
 		}

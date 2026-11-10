@@ -12,6 +12,8 @@ import (
 	"sync/atomic"
 	"syscall"
 	"testing"
+
+	"github.com/GoodOlClint/crosstalk/internal/ownerproof"
 )
 
 const (
@@ -60,7 +62,42 @@ func startRealHelper(t *testing.T, mode, path string) int {
 		t.Fatalf("helper %s: %q %v", mode, line, err)
 	}
 	t.Cleanup(func() { stdin.Close(); cmd.Process.Kill(); cmd.Wait() })
+	addChild(t, cmd.Process.Pid)
 	return cmd.Process.Pid
+}
+
+// children are the processes a test started; the real-kernel proof reads
+// the open files of these only, never of unrelated host processes.
+var (
+	childrenMu sync.Mutex
+	children   = map[*testing.T][]int{}
+)
+
+func addChild(t *testing.T, pid int) {
+	childrenMu.Lock()
+	defer childrenMu.Unlock()
+	if _, ok := children[t]; !ok {
+		t.Cleanup(func() {
+			childrenMu.Lock()
+			defer childrenMu.Unlock()
+			delete(children, t)
+		})
+	}
+	children[t] = append(children[t], pid)
+}
+
+// scopedKernel is the real kernel with Openers limited to the test's own
+// children and this process.
+type scopedKernel struct {
+	Kernel
+	t *testing.T
+}
+
+func (k scopedKernel) Openers(path string) ([]int, error) {
+	childrenMu.Lock()
+	pids := append([]int{os.Getpid()}, children[k.t]...)
+	childrenMu.Unlock()
+	return ownerproof.OpenersAmong(path, pids)
 }
 
 func realClaims(t *testing.T, parentPID int, dir string) (*Claims, *fakeRegistrar) {
@@ -70,7 +107,7 @@ func realClaims(t *testing.T, parentPID int, dir string) (*Claims, *fakeRegistra
 		t.Fatal(err)
 	}
 	reg := &fakeRegistrar{}
-	return NewClaims(ClaimOptions{Parent: parent, LockDir: dir, Registrar: reg, Tries: 2, Interval: 1}), reg
+	return NewClaims(ClaimOptions{Sys: scopedKernel{t: t}, Parent: parent, LockDir: dir, Registrar: reg, Tries: 2, Interval: 1}), reg
 }
 
 func realLock(t *testing.T) (dir, path string) {
@@ -142,6 +179,7 @@ func TestRealProof_HolderKilled_ExpectRevokedOnRecheck(t *testing.T) {
 	if line, _ := bufio.NewReader(out).ReadString('\n'); line != "ready\n" {
 		t.Fatalf("helper: %q", line)
 	}
+	addChild(t, cmd.Process.Pid)
 	c, _ := realClaims(t, cmd.Process.Pid, dir)
 	if err := c.AcceptDurable(context.Background(), claim("T1")); err != nil {
 		t.Fatal(err)
