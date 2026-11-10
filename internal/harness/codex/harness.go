@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 
 	"github.com/GoodOlClint/crosstalk/internal/adapter"
 	"github.com/GoodOlClint/crosstalk/internal/harness"
@@ -41,6 +42,9 @@ type Harness struct {
 	Threads
 	claims ClaimsConfig
 	logger *slog.Logger
+
+	mu    sync.Mutex
+	route *wakeRoute
 }
 
 var _ harness.Harness = (*Harness)(nil)

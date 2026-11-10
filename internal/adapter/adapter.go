@@ -85,3 +85,11 @@ type Adapter interface {
 type MailSignaler interface {
 	MailSignal(ctx context.Context, m msg.Message, d Delivery) error
 }
+
+// PullSignaler is optionally implemented by an adapter that wants to know a
+// pull of target's mailbox ran. The receiver calls MailPulled after every
+// successful pull, outside its pull lock; more is the pull's drain flag, and
+// mailboxed lists the message ids whose entries are mailboxed when called.
+type PullSignaler interface {
+	MailPulled(ctx context.Context, target Binding, more bool, mailboxed func() ([]string, error)) error
+}
