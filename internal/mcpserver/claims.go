@@ -6,6 +6,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/GoodOlClint/crosstalk/internal/identity"
 	"github.com/GoodOlClint/crosstalk/internal/journal"
 	"github.com/GoodOlClint/crosstalk/internal/msg"
 	"github.com/GoodOlClint/crosstalk/internal/registry"
@@ -22,7 +23,7 @@ type claimOut struct {
 func (s *Server) addClaimTools() {
 	boundTool(s, &mcp.Tool{
 		Name:        "claim",
-		Description: "Become the owner of an unclaimed registered agent, named by name or agent_id; it becomes your subagent. Returns {name, owner}.",
+		Description: "Become the owner of an unclaimed registered agent, named by name or agent_id; it becomes your subagent. Returns {name, owner}. With inbox:<name> it instead takes an ownerless role inbox and returns {inbox, owner}.",
 		InputSchema: schemaFor[nameIn](nil),
 	}, func(ctx context.Context, a *Agent, in nameIn) (any, error) {
 		return s.claim(ctx, a, in.Name)
@@ -62,6 +63,9 @@ func (s *Server) claimTarget(ctx context.Context, a *Agent, name string) (regist
 }
 
 func (s *Server) claim(ctx context.Context, a *Agent, name string) (any, error) {
+	if inbox, ok := identity.CutInbox(name); ok {
+		return s.claimInbox(a, inbox)
+	}
 	t, err := s.claimTarget(ctx, a, name)
 	if err != nil {
 		return nil, err
@@ -86,6 +90,9 @@ func (s *Server) claim(ctx context.Context, a *Agent, name string) (any, error) 
 }
 
 func (s *Server) release(ctx context.Context, a *Agent, name string) (any, error) {
+	if _, ok := identity.CutInbox(name); ok {
+		return nil, rejected("invalid_inbox")
+	}
 	t, err := s.claimTarget(ctx, a, name)
 	if err != nil {
 		return nil, err

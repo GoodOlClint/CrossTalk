@@ -1,6 +1,6 @@
 ---
 name: crosstalk
-description: Message other running agent sessions (Claude Code, Codex) on this Mac. Use when asked to tell, ask, check with or hand off to another session or agent; when a cross-session-message or a CrossTalk tool output arrives; when a CrossTalk result shows rejected, unreachable, unknown or a hint; or for list_agents, send_message, ask, reply, receive_message, claim, release, rename.
+description: Message other running agent sessions (Claude Code, Codex) on this Mac. Use when asked to tell, ask, check with or hand off to another session or agent; when a cross-session-message or a CrossTalk tool output arrives; when a CrossTalk result shows rejected, unreachable, unknown or a hint; or for list_agents, send_message, ask, reply, receive_message, claim, release, rename, attach, detach, grant.
 ---
 
 # CrossTalk
@@ -17,6 +17,8 @@ Tool names are bare here; your harness may prefix them.
 - `receive_message` is only for entries that were not delivered into the session.
 - `claim` and `release` are for ownership; use them only when asked.
 - `rename` sets this session's own name. Use it when a brief gives you a name, especially on Codex, and call it before anything else from CrossTalk; the harness's own name for the session no longer overrides it. It changes only this session, and the name lasts across a restart.
+
+- `attach`, `detach` and `grant` manage a role inbox, an address that several sessions can hold; `claim` with `inbox:<name>` takes one that has no owner. Use them only for an inbox your user or launch brief names, never one you pick yourself.
 
 ## Addressing and reading messages
 
@@ -45,6 +47,12 @@ Tool names are bare here; your harness may prefix them.
 - `remote_native_unsupported`: that session on a paired host has no CrossTalk; pick a row with `crosstalk: true`.
 - `unpaired_by_peer`, `tls_pin_mismatch`, `gateway_not_running`: a paired host refuses this one, is not the host that was paired, or has no gateway running; tell your user.
 - `invalid_name`: the name for `rename` is empty, over 64 bytes, has `@`, a control character or a space at either end, is 16 hex digits, or starts with `inbox:` (any case); pick another.
+- `invalid_inbox`: an inbox name is empty or has `@`, `/`, a control character or an `inbox:` prefix, or `release` was given an `inbox:` value; fix the name, and use `detach` to leave an inbox.
+- `not_granted`: the inbox has a live owner who has not granted you; ask that owner to `grant` you, then `attach` again.
+- `ownerless`: the inbox has no live owner and you are not granted; `claim` it as `inbox:<name>` if your user or brief says so.
+- `inbox_owned`: a live owner holds the inbox, so `claim` cannot take it; ask for a `grant`.
+- `not_owner`: only the inbox's live owner can `grant`; `no_such_inbox`: no inbox has that name; `not_member`: the session you hand ownership to has not attached.
+- `caller_not_primary`: a subagent cannot attach, detach, grant or claim an inbox; the session that owns you does it.
 - `name_held`: a live session already has that name; pick another, or retry once if that session has just ended.
 - `self`: pick another row.
 - `agent_held`: tell the user a second CrossTalk server may be installed.

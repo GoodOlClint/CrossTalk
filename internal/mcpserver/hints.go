@@ -16,6 +16,14 @@ var Hints = map[string]string{
 	"invalid_name":              "That name cannot be used: 1 to 64 bytes, no @, no control characters, no space at either end, not 16 hex digits, not starting with inbox: in any case. Pick another and call rename again.",
 	"name_held":                 "Another live session already has that name. Call list_agents to see who, pick a different name, or retry once if that session has just ended.",
 	"inbox_copy":                "That message reached this session as a copy of a message to a role inbox, and only the inbox's responder answers it. Do not reply; use send_message to the sender if you have something to add.",
+	"invalid_inbox":             "An inbox name is non-empty and has no @, /, control character or inbox: prefix; release has no inbox form. Fix the name and call attach, detach, grant or claim again, or use detach to leave an inbox.",
+	"not_granted":               "The inbox has a live owner and has not granted this session. Ask its owner with send_message to call grant for this session, then call attach again.",
+	"ownerless":                 "The inbox has no live owner and this session is not granted. Call claim with inbox:<name> to take it.",
+	"not_owner":                 "Only the live owner of the inbox can do that. Call list_agents to see who owns it, and ask the owner to call grant.",
+	"inbox_owned":               "The inbox has a live owner, so claim cannot take it. Ask the owner to call grant for this session, then call attach.",
+	"no_such_inbox":             "No inbox has that name. Call attach to create it, or fix the name.",
+	"not_member":                "That session is not attached to the inbox. Ask it to call attach first, then call grant with owner=true again.",
+	"caller_not_primary":        "A subagent cannot attach, detach, grant or claim an inbox. Tell the session that owns this one to do it.",
 	"no_such_message":           "No reply route exists for that message_id. Use send_message to the sender instead.",
 }
 

@@ -146,7 +146,7 @@ func TestToolSurface(t *testing.T) {
 		}
 	}
 	slices.Sort(names)
-	want := []string{"ask", "claim", "list_agents", "receive_message", "release", "rename", "reply", "send_message"}
+	want := []string{"ask", "attach", "claim", "detach", "grant", "list_agents", "receive_message", "release", "rename", "reply", "send_message"}
 	if !slices.Equal(names, want) {
 		t.Fatalf("tools %v, want %v", names, want)
 	}
@@ -581,8 +581,8 @@ func TestInstructionsSayReadHintEverywhereAndSilenceIsAllowed(t *testing.T) {
 func TestInitializeCarriesInstructions(t *testing.T) {
 	e := newEnv(t, 4242, NewFakeBackend())
 	got := e.cs.InitializeResult().Instructions
-	if len(got) == 0 || len(got) > 512 {
-		t.Fatalf("instructions are %d bytes, want 1..512: %q", len(got), got)
+	if len(got) == 0 || len(got) > 592 {
+		t.Fatalf("instructions are %d bytes, want 1..592: %q", len(got), got)
 	}
 	if strings.Contains(got, "Address peers by name") {
 		t.Errorf("dropped sentence is back: %q", got)
