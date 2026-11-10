@@ -1,6 +1,6 @@
 # Plan: a `rename` tool for #43
 
-Status: draft for operator review. Brownfield-gate change plan; no code in this branch. Decision record: [ADR 0027](../decisions/0027-rename-tool-lets-a-session-set-its-own-name.md).
+Status: approved; operator rulings of 2026-11-10 recorded in section 7. Brownfield-gate change plan. Decision record: [ADR 0027](../decisions/0027-rename-tool-lets-a-session-set-its-own-name.md).
 
 Terms used below. `agent_id`: the fixed 16-hex hash of (harness, session_ref) that keys all storage. Alias or name: the per-host display name that resolves `to` at send time, held under its own lock file (`names/<name>.lock`). `followRename`: the code that moves the alias when the harness's own name for the session changes (`internal/mcpserver/server.go`). Pin: a name the session set itself with `rename`, which harness-driven renames no longer override. Bind: the session's first CrossTalk call, which registers it. Pooling: one Codex process serving several threads.
 
@@ -100,13 +100,17 @@ Each commit lands with its test; "before" is what fails on the parent commit.
 - **Retire race.** `Rename` after a retired registration could republish a descriptor (known gap in design §3). Tool calls are refused for a retiring agent, so only an in-flight call can hit it; commit 5 closes it.
 - **Journal growth.** One record kept per renamed session, replaced by key; negligible.
 
-## 7. Open questions for the operator
+## 7. Decided (operator rulings, 2026-11-10)
 
-1. **Persist the pin across restart and resume?** Recommendation: yes (section 3.5). Without it a resumed Codex session loses its name. Cost: one journal record type and a replay step.
-2. **Should a user `/rename` on Claude clear the pin?** Recommendation: no; the pin always wins and the session can rename again. A yes needs a harness capability ("this harness's name is user-authored") because Codex's auto title is indistinguishable from a user change at the shim.
-3. **Reject a name that a visible non-CrossTalk session already has?** Recommendation: not in the first cut (see Risks); add if dogfood shows the shadowing.
-4. **Overlap with #54 (role inboxes) on the tool count and the shared files.** The plan-54 build adds `attach`, `detach`, `grant` (and an inbox form of `claim`), so the tool count after both is eleven. Whichever build merges second edits the count in `AGENTS.md`, design §8, `how-it-works.md`, `index.md`, `contributing.md`, the skill and `hints_test.go`. Recommendation: say "the tools" with the list, not a number, in the docs this plan touches, so the second merge does not conflict on a count. This plan edits no file of the plan-54 worker.
-5. **Name rules.** Recommendation as in 3.2 (64 bytes, no `@`, not 16 hex, no `inbox:` prefix, spaces allowed). Confirm the 64-byte cap.
+The open questions of the draft are closed by operator ruling; the build follows these.
+
+1. **The pin survives restart and resume.** Persisted as a journal record and replayed in `register` (section 3.5).
+2. **A user's Claude `/rename` does not clear the pin.** The pin always wins; the session calls `rename` again to change it (section 3.3).
+3. **Names held by visible non-CrossTalk sessions are not refused in v1.** The shadowing risk (section 6) stays open; revisit if dogfood shows it.
+4. **Docs list the tools instead of counting them.** Every "seven tools" or other tool count (AGENTS.md included) becomes a list with no number, so the #54 build adds its tools without a count conflict.
+5. **Name rules as in section 3.2.** At most 64 bytes; a name starting with `inbox:` is reserved and rejected with `invalid_name`.
+
+Order: #43 lands before the #54 role-inbox build; this build does not wait on #54 and edits none of its files.
 
 ## 8. Rollout
 
