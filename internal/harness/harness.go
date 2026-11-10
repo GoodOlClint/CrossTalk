@@ -135,6 +135,23 @@ type NativeIngress interface {
 	NewIngress(cfg IngressConfig) Ingress
 }
 
+// SessionRegistrar registers the agent for a session as its first tools/call
+// would; *mcpserver.Server implements it.
+type SessionRegistrar interface {
+	RegisterSession(ctx context.Context, req RequestContext, cwd string) error
+	// RetireSession retires an agent RegisterSession made, unless a tools/call
+	// has bound it since; it reports whether it retired one.
+	RetireSession(ctx context.Context, req RequestContext) (bool, error)
+}
+
+// ClaimSource is implemented by a harness that learns of its sessions from
+// outside tools/call. ServeClaims runs until ctx ends and registers each
+// session it has proven through r; it returns at once when it has nothing to
+// serve.
+type ClaimSource interface {
+	ServeClaims(ctx context.Context, r SessionRegistrar) error
+}
+
 // Supersession is implemented by a harness that can prove a session ended
 // while its MCP connection lives on, as Claude Code's /clear does. A harness
 // without that proof does not implement it, and its sessions end only with

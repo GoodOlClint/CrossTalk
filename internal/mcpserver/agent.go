@@ -21,6 +21,10 @@ type Agent struct {
 	ready chan struct{}
 	err   error
 
+	// viaCall is set, under Server.mu, once a tools/call has bound this agent;
+	// RetireSession leaves such an agent alone.
+	viaCall bool
+
 	// mu serializes alias changes and claim/release applied to this agent.
 	mu sync.Mutex
 	// afterPrimaryCheck is a test hook run after an inbox tool's unlocked primary check passes.

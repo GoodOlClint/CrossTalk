@@ -142,7 +142,6 @@ func (s *Server) RetireSuperseded() {
 		}
 	}
 	s.mu.Unlock()
-	ac, _ := s.backend.(AgentCloser)
 	for _, a := range ready {
 		if !s.reg.IsSuperseded(a.Descriptor()) {
 			continue
@@ -153,26 +152,58 @@ func (s *Server) RetireSuperseded() {
 			delete(s.agents, a.id)
 		}
 		s.mu.Unlock()
-		if !mine {
-			continue
-		}
-		a.stopCalls()
-		var err error
-		if ac != nil {
-			err = ac.CloseAgent(a)
-		}
-		if errors.Is(err, ErrCloseTimeout) {
-			err = errors.Join(err, a.reg.ReleaseName())
-			s.mu.Lock()
-			s.timedOut = append(s.timedOut, a)
-			s.mu.Unlock()
-		} else {
-			err = errors.Join(err, a.close())
-		}
-		if err != nil {
-			slog.Warn("mcpserver: retiring superseded agent", "agent", a.id, "err", err)
+		if mine {
+			s.retire(a, "superseded")
 		}
 	}
+}
+
+// retire ends an agent already removed from s.agents, as RetireSuperseded
+// describes.
+func (s *Server) retire(a *Agent, why string) {
+	a.stopCalls()
+	ac, _ := s.backend.(AgentCloser)
+	var err error
+	if ac != nil {
+		err = ac.CloseAgent(a)
+	}
+	if errors.Is(err, ErrCloseTimeout) {
+		err = errors.Join(err, a.reg.ReleaseName())
+		s.mu.Lock()
+		s.timedOut = append(s.timedOut, a)
+		s.mu.Unlock()
+	} else {
+		err = errors.Join(err, a.close())
+	}
+	if err != nil {
+		slog.Warn("mcpserver: retiring agent", "agent", a.id, "why", why, "err", err)
+	}
+}
+
+// RetireSession retires the agent for the session req names if it was
+// registered only by RegisterSession and no tools/call has bound it since;
+// it reports whether it retired one. The journal stays for a later owner.
+func (s *Server) RetireSession(ctx context.Context, req harness.RequestContext) (bool, error) {
+	if req.ParentPID == 0 {
+		req.ParentPID = s.ppid
+	}
+	c, err := resolveCaller(ctx, s.harnesses, req)
+	if err != nil || !c.bound() {
+		return false, err
+	}
+	id := identity.AgentID(string(c.harness), c.sessionRef)
+	s.mu.Lock()
+	a := s.agents[id]
+	mine := a != nil && a.isReady() && !a.viaCall
+	if mine {
+		delete(s.agents, id)
+	}
+	s.mu.Unlock()
+	if !mine {
+		return false, nil
+	}
+	s.retire(a, "claim revoked")
+	return true, nil
 }
 
 // Close removes this process's own-instance descriptors and releases their locks.
@@ -204,7 +235,7 @@ func (s *Server) Close() error {
 // call, with the call admitted: the caller must call a.calls.Done. A call that
 // finds its agent's registration still running gets not_ready; it never waits
 // on or binds to another caller's registration.
-func (s *Server) agent(ctx context.Context, c caller) (*Agent, string, *Error) {
+func (s *Server) agent(ctx context.Context, c caller, viaCall bool) (*Agent, string, *Error) {
 	id := identity.AgentID(string(c.harness), c.sessionRef)
 	s.mu.Lock()
 	if s.closed {
@@ -213,7 +244,7 @@ func (s *Server) agent(ctx context.Context, c caller) (*Agent, string, *Error) {
 	}
 	a, ok := s.agents[id]
 	if !ok {
-		a = &Agent{id: id, harness: c.harness, sessionRef: c.sessionRef, req: c.req, ready: make(chan struct{})}
+		a = &Agent{id: id, harness: c.harness, sessionRef: c.sessionRef, req: c.req, ready: make(chan struct{}), viaCall: viaCall}
 		s.agents[id] = a
 		s.mu.Unlock()
 		s.RetireSuperseded()
@@ -230,6 +261,7 @@ func (s *Server) agent(ctx context.Context, c caller) (*Agent, string, *Error) {
 		close(a.ready)
 		return a, notice, nil
 	}
+	a.viaCall = a.viaCall || viaCall
 	s.mu.Unlock()
 	select {
 	case <-a.ready:
@@ -450,7 +482,11 @@ func (s *Server) local(agentID string) *Agent {
 // resolve takes name and cwd from Discover when the harness could not name
 // the caller from the request alone.
 func (s *Server) resolve(ctx context.Context, req *mcp.CallToolRequest) (caller, error) {
-	c, err := resolveCaller(ctx, s.harnesses, requestContext(req, s.ppid))
+	return s.resolveContext(ctx, requestContext(req, s.ppid))
+}
+
+func (s *Server) resolveContext(ctx context.Context, rc harness.RequestContext) (caller, error) {
+	c, err := resolveCaller(ctx, s.harnesses, rc)
 	if err != nil || !c.bound() || c.name != "" {
 		return c, err
 	}
@@ -465,6 +501,40 @@ func (s *Server) resolve(ctx context.Context, req *mcp.CallToolRequest) (caller,
 		}
 	}
 	return c, nil
+}
+
+// RegisterSession registers the agent for the session req names, through the
+// same path as a first tools/call, without waiting for one. A later call for
+// that session finds the same agent. cwd is used when Discover has none.
+func (s *Server) RegisterSession(ctx context.Context, req harness.RequestContext, cwd string) error {
+	if req.ParentPID == 0 {
+		req.ParentPID = s.ppid
+	}
+	c, err := s.resolveContext(ctx, req)
+	if err != nil {
+		return err
+	}
+	if !c.bound() {
+		return &Error{Code: CodeUnbound, Reason: "no harness claims this session"}
+	}
+	if c.cwd == "" {
+		c.cwd = cwd
+	}
+	for {
+		a, _, e := s.agent(ctx, c, false)
+		if e == nil {
+			a.Done()
+			return nil
+		}
+		if e.Code != CodeNotReady || e.Reason != "binding_in_progress" {
+			return e
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
 }
 
 func toolError(err error) *Error {
@@ -510,7 +580,7 @@ func boundTool[In any](s *Server, t *mcp.Tool, h func(context.Context, *Agent, I
 		if !c.bound() {
 			return errResult(&Error{Code: CodeUnbound, Reason: "no harness claims this call"})
 		}
-		a, notice, e := s.agent(ctx, c)
+		a, notice, e := s.agent(ctx, c, true)
 		if e != nil {
 			return errResult(e)
 		}
