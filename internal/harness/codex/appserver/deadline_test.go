@@ -59,8 +59,16 @@ func TestCallRawWriteBoundedByCallerDeadline(t *testing.T) {
 }
 
 func TestCallRawLockWaitBoundedByCallerDeadline(t *testing.T) {
-	c, _ := pipeClient(t, time.Second)
-	go c.Notify("x", strings.Repeat("a", 1<<20))
+	c, remote := pipeClient(t, time.Second)
+	notified := make(chan struct{})
+	go func() {
+		defer close(notified)
+		c.Notify("x", strings.Repeat("a", 1<<20))
+	}()
+	defer func() {
+		remote.Close()
+		<-notified
+	}()
 	time.Sleep(20 * time.Millisecond)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 	defer cancel()
