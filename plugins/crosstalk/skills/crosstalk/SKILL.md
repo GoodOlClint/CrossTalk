@@ -1,6 +1,6 @@
 ---
 name: crosstalk
-description: Message other running agent sessions (Claude Code, Codex) on this Mac. Use when asked to tell, ask, check with or hand off to another session or agent; when a cross-session-message or a CrossTalk tool output arrives; when a CrossTalk result shows rejected, unreachable, unknown or a hint; or for list_agents, send_message, ask, reply, receive_message, claim, release.
+description: Message other running agent sessions (Claude Code, Codex) on this Mac. Use when asked to tell, ask, check with or hand off to another session or agent; when a cross-session-message or a CrossTalk tool output arrives; when a CrossTalk result shows rejected, unreachable, unknown or a hint; or for list_agents, send_message, ask, reply, receive_message, claim, release, rename.
 ---
 
 # CrossTalk
@@ -16,6 +16,7 @@ Tool names are bare here; your harness may prefix them.
 - `reply` answers an inbound message (ask or inform) by its `message_id`. One final reply per ask, or per standalone inform: it closes the ask, so send interim notes with `send_message`.
 - `receive_message` is only for entries that were not delivered into the session.
 - `claim` and `release` are for ownership; use them only when asked.
+- `rename` sets this session's own name. Use it when a brief gives you a name, especially on Codex, and call it before anything else from CrossTalk; the harness's own name for the session no longer overrides it. It changes only this session, and the name lasts across a restart.
 
 ## Addressing and reading messages
 
@@ -43,6 +44,8 @@ Tool names are bare here; your harness may prefix them.
 - `unknown_alias`: no paired host has that name after the `@`; `list_agents` shows the paired hosts.
 - `remote_native_unsupported`: that session on a paired host has no CrossTalk; pick a row with `crosstalk: true`.
 - `unpaired_by_peer`, `tls_pin_mismatch`, `gateway_not_running`: a paired host refuses this one, is not the host that was paired, or has no gateway running; tell your user.
+- `invalid_name`: the name for `rename` is empty, over 64 bytes, has `@` or a control character, is 16 hex digits, or starts with `inbox:`; pick another.
+- `name_held`: a live session already has that name; pick another, or retry once if that session has just ended.
 - `self`: pick another row.
 - `agent_held`: tell the user a second CrossTalk server may be installed.
 - `ask_closed`, `already_replied`: the `reply` text was NOT delivered; the hint gives the `send_message` call (to the sender, same text). `no_such_message`: `send_message` to the sender.
