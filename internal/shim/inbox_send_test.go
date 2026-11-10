@@ -42,10 +42,21 @@ func newInboxWorld(t *testing.T) *inboxWorld {
 	return iw
 }
 
-func (iw *inboxWorld) writesTo(ref string) []adapter.Call {
+func (iw *inboxWorld) allWritesTo(ref string) []adapter.Call {
 	var out []adapter.Call
 	for _, c := range iw.w.codex.Writes() {
 		if c.SessionRef == ref {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// writesTo leaves out the membership notices the setup's attaches produced.
+func (iw *inboxWorld) writesTo(ref string) []adapter.Call {
+	var out []adapter.Call
+	for _, c := range iw.allWritesTo(ref) {
+		if !strings.HasPrefix(c.Message.Text(), "Inbox coord: session ") {
 			out = append(out, c)
 		}
 	}
@@ -254,6 +265,9 @@ func TestInboxMixedBuildReceiverNeverGetsReplyableCopy(t *testing.T) {
 	nb.ok(thread("T-bob"), "grant", map[string]any{"inbox": "coord", "to": carol})
 	nb.ok(thread("T-carol"), "attach", map[string]any{"inbox": "coord"})
 
+	tr.mu.Lock()
+	tr.sends = nil
+	tr.mu.Unlock()
 	res := na.ok(nil, "ask", map[string]any{"to": "inbox:coord", "text": "q?"})
 	dave := identity.AgentID("codex", "T-dave")
 	tr.mu.Lock()

@@ -64,7 +64,7 @@ func (s *Server) claimTarget(ctx context.Context, a *Agent, name string) (regist
 
 func (s *Server) claim(ctx context.Context, a *Agent, name string) (any, error) {
 	if inbox, ok := identity.CutInbox(name); ok {
-		return s.claimInbox(a, inbox)
+		return s.claimInbox(ctx, a, inbox)
 	}
 	t, err := s.claimTarget(ctx, a, name)
 	if err != nil {

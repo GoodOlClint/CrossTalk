@@ -428,6 +428,45 @@ func (st *AgentState) sendCopy(ctx context.Context, m msg.Message, d registry.De
 	return mcpserver.CopyResult{AgentID: d.AgentID, State: state, Reason: reason}
 }
 
+var _ mcpserver.InboxNotifier = (*Shim)(nil)
+
+// NotifyInbox tells every member of the inbox but the caller what changed: an
+// inform copy, so it opens no reply route, from the caller's own identity.
+func (s *Shim) NotifyInbox(ctx context.Context, from *mcpserver.Agent, change string, in registry.InboxState) {
+	st, err := s.state(from)
+	if err != nil {
+		return
+	}
+	ds, err := s.reg.InboxMembers(in.Name)
+	if err != nil {
+		return
+	}
+	label := func(id string) string {
+		if id == "" {
+			return "none"
+		}
+		for _, m := range in.Members {
+			if m.AgentID == id {
+				return m.Name
+			}
+		}
+		return id
+	}
+	responder := ""
+	if len(in.Members) > 0 {
+		responder = in.Members[0].AgentID
+	}
+	text := fmt.Sprintf("Inbox %s: session %s %s. Owner: %s. Responder now: %s.", in.Name, from.Name(), change, label(in.Owner), label(responder))
+	for _, d := range ds {
+		if d.AgentID == from.ID() {
+			continue
+		}
+		m := st.newMessage("inbox:"+in.Name, msg.Inform, msg.Immediate, text)
+		m.Inbox = in.Name
+		st.sendCopy(ctx, m, d)
+	}
+}
+
 // keepForBind stores a delivered inform for the target's shim to replay when
 // it binds, and returns the one-way hint that matches whether it was kept.
 func (st *AgentState) keepForBind(m msg.Message, b adapter.Binding, state adapter.State) string {

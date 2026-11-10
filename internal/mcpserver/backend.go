@@ -109,6 +109,15 @@ type Publisher interface {
 	Published(a *Agent)
 }
 
+// InboxNotifier is optionally implemented by a Backend that tells an inbox's
+// other members about a membership change. It runs after the change is
+// committed and the caller's lock is released; change completes the
+// sentence "session <name> ...", and st is the inbox
+// as the change left it.
+type InboxNotifier interface {
+	NotifyInbox(ctx context.Context, from *Agent, change string, st registry.InboxState)
+}
+
 var ErrCloseTimeout = errors.New("mcpserver: agent handlers did not stop")
 
 type BindInfo struct {

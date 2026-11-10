@@ -77,12 +77,12 @@ func (s *Server) addInboxTools() {
 		Name:        "attach",
 		Description: "Join a role inbox that your user or launch brief named, creating it with you as owner if it does not exist. An owned inbox needs a grant from its owner. Returns {inbox, owner, members, created}.",
 		InputSchema: schemaFor[inboxIn](nil),
-	}, func(_ context.Context, a *Agent, in inboxIn) (any, error) { return s.attach(a, in.Inbox) })
+	}, func(ctx context.Context, a *Agent, in inboxIn) (any, error) { return s.attach(ctx, a, in.Inbox) })
 	boundTool(s, &mcp.Tool{
 		Name:        "detach",
 		Description: "Leave a role inbox. An owner that detaches leaves the inbox ownerless and keeps its grant. Returns {inbox, owner, members}.",
 		InputSchema: schemaFor[inboxIn](nil),
-	}, func(_ context.Context, a *Agent, in inboxIn) (any, error) { return s.detach(a, in.Inbox) })
+	}, func(ctx context.Context, a *Agent, in inboxIn) (any, error) { return s.detach(ctx, a, in.Inbox) })
 	boundTool(s, &mcp.Tool{
 		Name:        "grant",
 		Description: "As the owner of a role inbox, let a session on this host attach to it; with owner=true, hand ownership to a member instead. Returns {inbox, owner, grants}.",
@@ -112,28 +112,51 @@ func (a *Agent) inboxResult(st registry.InboxState) inboxOut {
 	return out
 }
 
-func (s *Server) attach(a *Agent, name string) (any, error) {
+func (a *Agent) inAttached(name string) bool {
+	for _, m := range a.Descriptor().Inboxes {
+		if m.Name == registry.CanonInbox(name) {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Server) notifyInbox(ctx context.Context, a *Agent, change string, st registry.InboxState) {
+	if n, ok := s.backend.(InboxNotifier); ok {
+		n.NotifyInbox(ctx, a, change, st)
+	}
+}
+
+func (s *Server) attach(ctx context.Context, a *Agent, name string) (any, error) {
 	if err := a.requirePrimary(); err != nil {
 		return nil, err
 	}
 	a.mu.Lock()
-	defer a.mu.Unlock()
+	had := a.inAttached(name)
 	st, err := s.reg.AttachInbox(a.reg, name, a.inboxHook)
+	a.mu.Unlock()
 	if err != nil {
 		return nil, inboxError(err)
+	}
+	if !had {
+		s.notifyInbox(ctx, a, "attached to the inbox", st)
 	}
 	return attachOut{inboxOut: a.inboxResult(st), Created: st.Created}, nil
 }
 
-func (s *Server) detach(a *Agent, name string) (any, error) {
+func (s *Server) detach(ctx context.Context, a *Agent, name string) (any, error) {
 	if err := a.requirePrimary(); err != nil {
 		return nil, err
 	}
 	a.mu.Lock()
-	defer a.mu.Unlock()
+	had := a.inAttached(name)
 	st, err := s.reg.DetachInbox(a.reg, name, a.inboxHook)
+	a.mu.Unlock()
 	if err != nil {
 		return nil, inboxError(err)
+	}
+	if had {
+		s.notifyInbox(ctx, a, "detached from the inbox", st)
 	}
 	return a.inboxResult(st), nil
 }
@@ -150,23 +173,27 @@ func (s *Server) grant(ctx context.Context, a *Agent, in grantIn) (any, error) {
 		return nil, err
 	}
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	st, err := s.reg.GrantInbox(a.reg, in.Inbox, t.AgentID, in.Owner)
+	a.mu.Unlock()
 	if err != nil {
 		return nil, inboxError(err)
+	}
+	if in.Owner {
+		s.notifyInbox(ctx, a, "handed ownership to "+t.Name, st)
 	}
 	return grantOut{Inbox: st.Name, Owner: st.Owner, Grants: st.Grants}, nil
 }
 
-func (s *Server) claimInbox(a *Agent, name string) (any, error) {
+func (s *Server) claimInbox(ctx context.Context, a *Agent, name string) (any, error) {
 	if err := a.requirePrimary(); err != nil {
 		return nil, err
 	}
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	st, err := s.reg.ClaimInbox(a.reg, name, a.inboxHook)
+	a.mu.Unlock()
 	if err != nil {
 		return nil, inboxError(err)
 	}
+	s.notifyInbox(ctx, a, "claimed the inbox", st)
 	return claimInboxOut{Inbox: st.Name, Owner: st.Owner}, nil
 }
