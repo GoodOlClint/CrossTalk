@@ -244,3 +244,27 @@ func TestRealAncestry_PeerPIDOverUnixSocket_ExpectChainReachesSelf(t *testing.T)
 		t.Fatalf("chain %+v does not reach self %+v", chain, self)
 	}
 }
+
+func TestAncestryWith_ParentStartedAfterChild_ExpectErrPIDReused(t *testing.T) {
+	base := time.Date(2026, 11, 10, 9, 0, 0, 0, time.UTC)
+	procs := map[int]Proc{
+		1:  {PID: 1, PPID: 0, Start: base},
+		10: {PID: 10, PPID: 1, Start: base.Add(2 * time.Minute)},
+		20: {PID: 20, PPID: 10, Start: base.Add(time.Minute)},
+		30: {PID: 30, PPID: 1, Start: base.Add(time.Minute)},
+		31: {PID: 31, PPID: 30, Start: base.Add(time.Minute)},
+	}
+	info := func(pid int) (Proc, error) {
+		p, ok := procs[pid]
+		if !ok {
+			return Proc{}, ErrNoProcess
+		}
+		return p, nil
+	}
+	if _, err := AncestryWith(info, 20); !errors.Is(err, ErrPIDReused) {
+		t.Fatalf("err %v, want ErrPIDReused", err)
+	}
+	if chain, err := AncestryWith(info, 31); err != nil || len(chain) != 3 {
+		t.Fatalf("equal start times: chain %v err %v", chain, err)
+	}
+}

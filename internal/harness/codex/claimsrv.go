@@ -66,6 +66,11 @@ func ensurePrivateDir(dir string) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
+	return checkPrivateDir(dir)
+}
+
+// checkPrivateDir applies ensurePrivateDir's rules without creating dir.
+func checkPrivateDir(dir string) error {
 	fi, err := os.Lstat(dir)
 	if err != nil {
 		return err

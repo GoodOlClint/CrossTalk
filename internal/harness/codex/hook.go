@@ -151,6 +151,9 @@ func writeClaimFile(path string, data []byte) error {
 // shim names by peer credential, is still alive while the shim walks its
 // ancestry.
 func sendLive(ctx context.Context, path string, line []byte) error {
+	if err := checkPrivateDir(filepath.Dir(path)); err != nil {
+		return err
+	}
 	var d net.Dialer
 	conn, err := d.DialContext(ctx, "unix", path)
 	if err != nil {

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -282,5 +283,111 @@ func TestClaimServer_FailedDurableClaimRescanned_ExpectTriedOncePerWrite(t *test
 	srv.Scan(context.Background())
 	if !c.Bound("T1") {
 		t.Fatal("a refired claim was not retried")
+	}
+}
+
+// connCounter accepts on the claim socket and counts connections.
+func connCounter(t *testing.T, path string) *atomic.Int64 {
+	t.Helper()
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	var n atomic.Int64
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			n.Add(1)
+			c.Write([]byte("ok\n"))
+			c.Close()
+		}
+	}()
+	return &n
+}
+
+func TestHook_SocketDirOpenToOthers_ExpectNoLiveSendDurableWritten(t *testing.T) {
+	e := newHookEnv(t, true)
+	n := connCounter(t, ClaimSocketPath(e.sock, e.parent))
+	if err := os.Chmod(e.sock, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	e.run(t, startPayload)
+	if n.Load() != 0 {
+		t.Fatal("claim sent into a socket directory others can write")
+	}
+	if _, err := os.Stat(claimFile(e.state, e.parent, "T1")); err != nil {
+		t.Fatalf("durable claim not written: %v", err)
+	}
+}
+
+func TestHook_SocketDirIsSymlink_ExpectNoLiveSend(t *testing.T) {
+	e := newHookEnv(t, true)
+	n := connCounter(t, ClaimSocketPath(e.sock, e.parent))
+	link := e.sock + "-link"
+	if err := os.Symlink(e.sock, link); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Remove(link) })
+	var out bytes.Buffer
+	SessionStartHook(strings.NewReader(startPayload), &out, HookOptions{StateDir: e.state, SockDir: link, Sys: e.sys, Self: os.Getpid(), Timeout: 500 * time.Millisecond})
+	if n.Load() != 0 || out.String() != "{}\n" {
+		t.Fatalf("connections %d stdout %q", n.Load(), out.String())
+	}
+}
+
+func TestHook_SocketDirMissing_ExpectNotCreated(t *testing.T) {
+	e := newHookEnv(t, true)
+	missing := filepath.Join(e.sock, "absent")
+	var out bytes.Buffer
+	SessionStartHook(strings.NewReader(startPayload), &out, HookOptions{StateDir: e.state, SockDir: missing, Sys: e.sys, Self: os.Getpid(), Timeout: 500 * time.Millisecond})
+	if _, err := os.Stat(missing); !os.IsNotExist(err) {
+		t.Fatalf("hook created the socket directory: %v", err)
+	}
+}
+
+func TestHook_ClaimDirOpenToOthers_ExpectNoFileWritten(t *testing.T) {
+	e := newHookEnv(t, true)
+	if err := os.MkdirAll(ClaimDir(e.state), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(ClaimDir(e.state), 0o777); err != nil {
+		t.Fatal(err)
+	}
+	e.run(t, startPayload)
+	if fs := e.claimFiles(t); len(fs) != 0 {
+		t.Fatalf("claim written into a directory others can write: %v", fs)
+	}
+}
+
+func TestClaimServer_SocketDirOpenToOthers_ExpectNoListener(t *testing.T) {
+	e := newHookEnv(t, true)
+	if err := os.Chmod(e.sock, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	srv := &ClaimServer{Claims: newTestClaims(t, e.sys, &fakeRegistrar{}), Owner: e.parent, StateDir: e.state, SockDir: e.sock}
+	if ln, err := srv.listen(); err == nil {
+		ln.Close()
+		t.Fatal("listened in a socket directory others can write")
+	}
+}
+
+func TestClaimServer_DurableFileNameDisagreesWithBody_ExpectIgnored(t *testing.T) {
+	e := newHookEnv(t, true)
+	e.sys.own("T1")
+	e.sys.own("T2")
+	line, _ := json.Marshal(Claim{SessionID: "T1"})
+	if err := writeClaimFile(claimFile(e.state, e.parent, "T2"), line); err != nil {
+		t.Fatal(err)
+	}
+	reg := &fakeRegistrar{}
+	c := newTestClaims(t, e.sys, reg)
+	srv := &ClaimServer{Claims: c, Owner: e.parent, StateDir: e.state, SockDir: e.sock}
+	srv.Scan(context.Background())
+	if c.Bound("T1") || c.Bound("T2") || len(reg.got()) != 0 {
+		t.Fatalf("mismatched claim file accepted: registered %v", reg.got())
 	}
 }

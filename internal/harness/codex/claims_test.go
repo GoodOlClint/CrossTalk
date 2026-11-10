@@ -517,3 +517,35 @@ func TestProof_LockSeenHeldThenFreeAfterOpeners_ExpectLockFree(t *testing.T) {
 		t.Fatalf("err %v, want ErrLockFree from the read after the openers", err)
 	}
 }
+
+func TestLiveClaim_LineagePassesProofFails_ExpectExistingBindingKept(t *testing.T) {
+	sys, reg := newFakeSys(), &fakeRegistrar{}
+	sys.own("T1")
+	c := newTestClaims(t, sys, reg)
+	if err := c.AcceptLive(context.Background(), hookPID, claim("T1")); err != nil {
+		t.Fatal(err)
+	}
+	sys.set("T1", true, []int{parentPID, outsider})
+	cl := claim("T1")
+	cl.Source = "resume"
+	if err := c.AcceptLive(context.Background(), hookPID, cl); !errors.Is(err, ErrSecondOpener) {
+		t.Fatalf("err %v, want ErrSecondOpener", err)
+	}
+	b, ok := c.Binding("T1")
+	if !ok || b.Claim.Source != "startup" || len(reg.got()) != 1 {
+		t.Fatalf("binding %+v %v, registered %v", b, ok, reg.got())
+	}
+}
+
+func TestLiveClaim_AncestorStartedAfterChild_ExpectNotDescendant(t *testing.T) {
+	sys, reg := newFakeSys(), &fakeRegistrar{}
+	sys.own("T1")
+	sys.proc(shellPID, parentPID, t0.Add(-time.Minute), "sh")
+	c := newTestClaims(t, sys, reg)
+	if err := c.AcceptLive(context.Background(), hookPID, claim("T1")); !errors.Is(err, ErrNotDescendant) {
+		t.Fatalf("err %v, want ErrNotDescendant", err)
+	}
+	if c.Bound("T1") {
+		t.Fatal("bound through a chain with a reused pid")
+	}
+}

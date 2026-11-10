@@ -13,6 +13,7 @@ var (
 	ErrUnsupported = errors.New("ownerproof: unsupported platform")
 	ErrNoProcess   = errors.New("ownerproof: no such process")
 	ErrTooDeep     = errors.New("ownerproof: ancestry deeper than the walk bound")
+	ErrPIDReused   = errors.New("ownerproof: a parent started after its child (pid reused)")
 )
 
 // maxDepth bounds an ancestry walk; a real chain is a few dozen at most.
@@ -45,7 +46,8 @@ func Args(pid int) (exe string, argv []string, err error) {
 
 // Ancestry walks from pid up through each parent, pid first, ending at a
 // process whose parent is 0 (pid 1 or a container's init). Every step is a
-// fresh kernel read; an exited link is an error.
+// fresh kernel read; an exited link, or a parent that started after its
+// child, is an error.
 func Ancestry(pid int) ([]Proc, error) { return AncestryWith(Info, pid) }
 
 // AncestryWith is Ancestry over another source of process facts.
@@ -55,6 +57,9 @@ func AncestryWith(info func(int) (Proc, error), pid int) ([]Proc, error) {
 		p, err := info(pid)
 		if err != nil {
 			return nil, err
+		}
+		if n := len(chain); n > 0 && p.Start.After(chain[n-1].Start) {
+			return nil, ErrPIDReused
 		}
 		chain = append(chain, p)
 		if p.PPID <= 0 || p.PID == 1 {
