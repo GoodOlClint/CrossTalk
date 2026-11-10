@@ -263,3 +263,24 @@ func TestServeClaims_ParentNotCodex_ExpectReturnsAtOnce(t *testing.T) {
 		t.Fatal("socket dir created under a non-codex parent")
 	}
 }
+
+func TestClaimServer_FailedDurableClaimRescanned_ExpectTriedOncePerWrite(t *testing.T) {
+	e := newHookEnv(t, true)
+	e.sys.set("T1", false)
+	e.run(t, startPayload)
+	reg := &fakeRegistrar{}
+	c := newTestClaims(t, e.sys, reg)
+	srv := &ClaimServer{Claims: c, Owner: e.parent, StateDir: e.state, SockDir: e.sock}
+	p := lockPath(lockDir, "T1")
+	srv.Scan(context.Background())
+	srv.Scan(context.Background())
+	if c.Bound("T1") || e.sys.lockReads(p) != 3 {
+		t.Fatalf("bound %v, lock read %d times, want one debounced attempt (3)", c.Bound("T1"), e.sys.lockReads(p))
+	}
+	e.sys.own("T1")
+	e.run(t, `{"session_id":"T1","source":"resume","cwd":"/work"}`)
+	srv.Scan(context.Background())
+	if !c.Bound("T1") {
+		t.Fatal("a refired claim was not retried")
+	}
+}

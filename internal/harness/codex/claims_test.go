@@ -31,11 +31,18 @@ type fakeSys struct {
 	held    map[string]bool
 	open    map[string][][]int
 	reads   map[string]int
+	locks   map[string]int
 	lockErr error
 }
 
+func (f *fakeSys) lockReads(path string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.locks[path]
+}
+
 func newFakeSys() *fakeSys {
-	f := &fakeSys{procs: map[int]ownerproof.Proc{}, argv: map[int][]string{}, held: map[string]bool{}, open: map[string][][]int{}, reads: map[string]int{}}
+	f := &fakeSys{procs: map[int]ownerproof.Proc{}, argv: map[int][]string{}, held: map[string]bool{}, open: map[string][][]int{}, reads: map[string]int{}, locks: map[string]int{}}
 	f.proc(1, 0, t0.Add(-time.Hour), "launchd")
 	f.proc(parentPID, 1, t0, "codex", "--no-daemon")
 	f.proc(shellPID, parentPID, t0.Add(time.Minute), "sh", "-c", "crosstalk hook codex session-start")
@@ -92,6 +99,7 @@ func (f *fakeSys) Args(pid int) (string, []string, error) {
 func (f *fakeSys) LockHeld(path string) (bool, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.locks[path]++
 	if f.lockErr != nil {
 		return false, f.lockErr
 	}

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -16,6 +17,8 @@ import (
 )
 
 const DefaultHookTimeout = 2 * time.Second
+
+var errNoCodexAncestor = errors.New("codex hook: no codex ancestor")
 
 type HookOptions struct {
 	// StateDir "" means registry.DefaultDir().

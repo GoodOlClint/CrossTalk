@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -87,6 +86,10 @@ type ClaimServer struct {
 	PeerPID  func(*net.UnixConn) (int, error)
 	Interval time.Duration
 	Logger   *slog.Logger
+
+	// failed holds, per session, the At of a durable claim that failed, so
+	// each written claim is tried once per shim; a refire writes a new At.
+	failed map[string]time.Time
 }
 
 func (s *ClaimServer) log() *slog.Logger {
@@ -213,7 +216,14 @@ func (s *ClaimServer) Scan(ctx context.Context) {
 		if cur, ok := s.Claims.Binding(cl.SessionID); ok && cur.Claim.At.Equal(cl.At) {
 			continue
 		}
+		if at, ok := s.failed[cl.SessionID]; ok && at.Equal(cl.At) {
+			continue
+		}
 		if err := s.Claims.AcceptDurable(ctx, cl); err != nil {
+			if s.failed == nil {
+				s.failed = map[string]time.Time{}
+			}
+			s.failed[cl.SessionID] = cl.At
 			s.log().Info("codex durable claim ignored", "thread", cl.SessionID, "err", err)
 		}
 	}
@@ -285,5 +295,3 @@ func (h *Harness) ServeClaims(ctx context.Context, r harness.SessionRegistrar) e
 	srv := &ClaimServer{Claims: c, Owner: parent, StateDir: cfg.StateDir, SockDir: cfg.SockDir, Interval: cfg.Interval, Logger: h.logger}
 	return srv.Serve(ctx)
 }
-
-var errNoCodexAncestor = errors.New("codex hook: no codex ancestor")
