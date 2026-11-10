@@ -168,7 +168,13 @@ func startServer(t *testing.T, e *hookEnv, reg *fakeRegistrar) (*Claims, context
 	done := make(chan struct{})
 	go func() { srv.Serve(ctx); close(done) }()
 	path := ClaimSocketPath(e.sock, e.parent)
-	waitUntil(t, "listener", func() bool { _, err := os.Stat(path); return err == nil })
+	waitUntil(t, "listener", func() bool {
+		c, err := net.Dial("unix", path)
+		if err == nil {
+			c.Close()
+		}
+		return err == nil
+	})
 	t.Cleanup(func() { cancel(); <-done })
 	return c, cancel
 }
