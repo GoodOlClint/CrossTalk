@@ -365,7 +365,10 @@ func (r *Receiver) receive(ctx context.Context, in Inbound, resume bool) Result 
 		}
 	}
 	resolveErr := r.j.ResolveFor(scope, m.MessageID, string(st))
-	dedupeErr := r.j.SetDedupeState(key, m.MessageID, string(st))
+	var dedupeErr error
+	if resolveErr == nil {
+		dedupeErr = r.j.SetDedupeState(key, m.MessageID, string(st))
+	}
 	if resolveErr != nil || dedupeErr != nil {
 		r.j.SetDedupeState(key, m.MessageID, string(adapter.Unknown))
 		return Result{MessageID: m.MessageID, State: adapter.Unknown, Reason: ReasonJournal}

@@ -36,3 +36,25 @@ func TestAppend_DedupeStatesBackwards_ExpectIgnored(t *testing.T) {
 		t.Fatalf("%d dedupe records on disk, want 4 (accept, mailboxed, delivered, confirmed)", n)
 	}
 }
+
+func TestAppend_SameRankDedupeRewrite_ExpectDroppedNotAppended(t *testing.T) {
+	j, _ := open(t, t.TempDir(), Options{})
+	if _, _, err := j.Accept("s", "m1", StateSubmitted); err != nil {
+		t.Fatal(err)
+	}
+	for _, st := range []string{StateMailboxed, StateMailboxed, StateDelivered, StateDelivered, StateConfirmed, StateConfirmed} {
+		if err := j.SetDedupeState("s", "m1", st); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rs, _ := j.Records()
+	n := 0
+	for _, r := range rs {
+		if r.Type == TypeDedupe {
+			n++
+		}
+	}
+	if n != 4 {
+		t.Fatalf("%d dedupe records, want 4", n)
+	}
+}

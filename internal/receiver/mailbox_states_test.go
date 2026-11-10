@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/GoodOlClint/crosstalk/internal/adapter"
+	"github.com/GoodOlClint/crosstalk/internal/journal"
 	"github.com/GoodOlClint/crosstalk/internal/msg"
 )
 
@@ -298,5 +299,41 @@ func TestPull_DeliveredEntryAloneBehindLimit_ExpectNoMoreFlag(t *testing.T) {
 	es, more := e.pull("", 1)
 	if len(es) != 1 || es[0].MessageID != first.MessageID || more {
 		t.Fatalf("page %+v more %v: a delivered entry left behind must not set the drain flag", es, more)
+	}
+}
+
+func TestReceive_OutcomeWriteFailsOnMailboxed_ExpectUnknownAndClaimResolvedAcrossRestart(t *testing.T) {
+	e := newMailboxEnv(t)
+	fail := true
+	j, _, err := journal.Open(e.dir, selfID, jbind(selfBinding, "inst-x"), journal.Options{BeforeAppend: func(r journal.Record) error {
+		if fail && r.Type == journal.TypeOutcome && r.State == "mailboxed" {
+			return errors.New("injected write failure")
+		}
+		return nil
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.j = j
+	e.r = New(Config{Journal: j, Adapter: e.fake, Self: e.self})
+	m := newMsg(msg.Inform, "hi")
+	if r := e.recv(A2A, alice, m); r.State != adapter.Unknown || r.Reason != ReasonJournal {
+		t.Fatalf("recv %+v", r)
+	}
+	if st := e.dedupe(m); st != "unknown" {
+		t.Fatalf("dedupe %q: sender view and entry state disagree", st)
+	}
+	j.Close()
+	fail = false
+	rp := e.open(selfBinding, "inst-y")
+	if err := e.r.Recover(rp); err != nil {
+		t.Fatal(err)
+	}
+	if l, _ := e.j.DispatchState(m.MessageID); l.Type != journal.TypeOutcome || l.State != "unknown" {
+		t.Fatalf("claim not resolved after restart: %+v", l)
+	}
+	e.j.Close()
+	if rp := e.open(selfBinding, "inst-z"); len(rp.Dispatching) != 0 {
+		t.Fatalf("claim retained on the next restart: %+v", rp.Dispatching)
 	}
 }
