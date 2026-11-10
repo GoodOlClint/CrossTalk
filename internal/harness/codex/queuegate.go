@@ -65,9 +65,11 @@ type QueueGate struct {
 	// Parent is the Codex process whose version must be on the allowlist.
 	Parent ownerproof.Proc
 	// Version reads Parent's version; nil means ParentVersion.
-	Version     func(ownerproof.Proc) (string, error)
+	Version     func(context.Context, ownerproof.Proc) (string, error)
 	BusyTimeout time.Duration
 
+	beforeOpen   func()
+	beforeBegin  func()
 	afterBegin   func()
 	beforeCommit func()
 }
@@ -79,7 +81,7 @@ type QueueGate struct {
 // process between check and write fails closed. A COMMIT that errors is
 // ErrQueueAmbiguous.
 func (g *QueueGate) Tx(ctx context.Context, write bool, fn func(*sql.Conn) error) error {
-	if err := g.checkVersion(); err != nil {
+	if err := g.checkVersion(ctx); err != nil {
 		return err
 	}
 	before, err := os.Lstat(g.Path)
@@ -101,11 +103,17 @@ func (g *QueueGate) Tx(ctx context.Context, write bool, fn func(*sql.Conn) error
 	}
 	defer db.Close()
 	db.SetMaxOpenConns(1)
+	if g.beforeOpen != nil {
+		g.beforeOpen()
+	}
 	conn, err := db.Conn(ctx)
 	if err != nil {
 		return queueErr(err)
 	}
 	defer conn.Close()
+	if g.beforeBegin != nil {
+		g.beforeBegin()
+	}
 	begin := "BEGIN"
 	if write {
 		begin = "BEGIN IMMEDIATE"
@@ -155,12 +163,12 @@ func (g *QueueGate) sameFile(before os.FileInfo) error {
 	return nil
 }
 
-func (g *QueueGate) checkVersion() error {
+func (g *QueueGate) checkVersion(ctx context.Context) error {
 	vf := g.Version
 	if vf == nil {
 		vf = ParentVersion
 	}
-	v, err := vf(g.Parent)
+	v, err := vf(ctx, g.Parent)
 	if err != nil {
 		return fmt.Errorf("%w: codex version: %w", ErrQueueGate, err)
 	}
@@ -245,18 +253,22 @@ var (
 	versionCache          sync.Map
 )
 
-// VersionTimeout bounds one `codex --version` run.
+// VersionTimeout bounds one `codex --version` run within the caller's ctx.
 var VersionTimeout = 5 * time.Second
+
+// versionWaitDelay bounds the wait for a killed `codex --version` whose
+// output pipe a child still holds open.
+const versionWaitDelay = time.Second
 
 // ParentVersion is p's Codex version, read once per (pid, start time) by
 // running its executable with --version, and only while p's mapped
 // executable is the file at that path; a failure is not cached.
-func ParentVersion(p ownerproof.Proc) (string, error) {
+func ParentVersion(ctx context.Context, p ownerproof.Proc) (string, error) {
 	k := ownerKey(p)
 	if v, ok := versionCache.Load(k); ok {
 		return v.(string), nil
 	}
-	v, err := execVersion(p)
+	v, err := execVersion(ctx, p)
 	if err != nil {
 		return "", err
 	}
@@ -264,7 +276,7 @@ func ParentVersion(p ownerproof.Proc) (string, error) {
 	return v, nil
 }
 
-func execVersion(p ownerproof.Proc) (string, error) {
+func execVersion(ctx context.Context, p ownerproof.Proc) (string, error) {
 	exe, _, err := ownerproof.Args(p.PID)
 	if err != nil {
 		return "", err
@@ -280,9 +292,11 @@ func execVersion(p ownerproof.Proc) (string, error) {
 	if !same {
 		return "", ErrExecutableReplaced
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), VersionTimeout)
+	ctx, cancel := context.WithTimeout(ctx, VersionTimeout)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, exe, "--version").Output()
+	cmd := exec.CommandContext(ctx, exe, "--version")
+	cmd.WaitDelay = versionWaitDelay
+	out, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("codex --version: %w", err)
 	}

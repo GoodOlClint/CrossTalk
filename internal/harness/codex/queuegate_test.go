@@ -118,7 +118,7 @@ func openFixture(t *testing.T, path string) *sql.DB {
 }
 
 func testGate(path string) *QueueGate {
-	return &QueueGate{Path: path, Parent: ownerproof.Proc{PID: 4242, Start: time.Unix(1, 0)}, Version: func(ownerproof.Proc) (string, error) { return "0.167.0", nil }, BusyTimeout: 200 * time.Millisecond}
+	return &QueueGate{Path: path, Parent: ownerproof.Proc{PID: 4242, Start: time.Unix(1, 0)}, Version: func(context.Context, ownerproof.Proc) (string, error) { return "0.167.0", nil }, BusyTimeout: 200 * time.Millisecond}
 }
 
 var plainRows atomic.Int64
@@ -194,10 +194,10 @@ func TestQueueGate_Table_ExpectFailClosedWithNoRow(t *testing.T) {
 			}
 		}, wantErr: ErrQueueGate},
 		{name: "untested version", gate: func(g *QueueGate) {
-			g.Version = func(ownerproof.Proc) (string, error) { return "0.168.0", nil }
+			g.Version = func(context.Context, ownerproof.Proc) (string, error) { return "0.168.0", nil }
 		}, wantErr: ErrQueueGate},
 		{name: "unreadable version", gate: func(g *QueueGate) {
-			g.Version = func(ownerproof.Proc) (string, error) { return "", ErrExecutableReplaced }
+			g.Version = func(context.Context, ownerproof.Proc) (string, error) { return "", ErrExecutableReplaced }
 		}, wantErr: ErrQueueGate},
 		{name: "file replaced between writes", between: func(t *testing.T, p string) {
 			other := newQueueFixture(t, t.TempDir())
@@ -208,6 +208,11 @@ func TestQueueGate_Table_ExpectFailClosedWithNoRow(t *testing.T) {
 			execFixture(t, p, "CREATE TABLE later (x)")
 			execFixture(t, p, "INSERT INTO _sqlx_migrations(version, description, success, checksum, execution_time) VALUES (3, 'later', 1, x'01', 0)")
 		}, wantErr: ErrQueueGate, rows: 1},
+		{name: "migration applied after open, before BEGIN", gate: func(g *QueueGate) {
+			g.beforeBegin = func() {
+				execFixture(t, g.Path, "INSERT INTO _sqlx_migrations(version, description, success, checksum, execution_time) VALUES (3, 'later', 1, x'01', 0)")
+			}
+		}, wantErr: ErrQueueGate},
 		{name: "file replaced inside the transaction", gate: func(g *QueueGate) {
 			other := newQueueFixture(t, t.TempDir())
 			g.afterBegin = func() { replaceFile(t, other, g.Path) }
@@ -381,7 +386,7 @@ func TestQueueGate_VersionCache_ExpectOneReadPerParentPidAndStart(t *testing.T) 
 	path := newQueueFixture(t, t.TempDir())
 	calls := 0
 	versions := map[string]string{}
-	vf := func(p ownerproof.Proc) (string, error) {
+	vf := func(_ context.Context, p ownerproof.Proc) (string, error) {
 		k := ownerKey(p)
 		if v, ok := versions[k]; ok {
 			return v, nil
@@ -456,7 +461,7 @@ func copyFile(t *testing.T, src, dst string) {
 
 func TestParentVersion_RealProcess_ExpectVersionFromItsExecutable(t *testing.T) {
 	p, _ := startFakeCodex(t)
-	v, err := execVersion(p)
+	v, err := execVersion(context.Background(), p)
 	if err != nil || v != "0.167.0" {
 		t.Fatalf("version %q %v", v, err)
 	}
@@ -465,7 +470,57 @@ func TestParentVersion_RealProcess_ExpectVersionFromItsExecutable(t *testing.T) 
 func TestParentVersion_ExecutableReplacedWhileRunning_ExpectFailure(t *testing.T) {
 	p, exe := startFakeCodex(t)
 	copyFile(t, os.Args[0], exe)
-	if v, err := execVersion(p); !errors.Is(err, ErrExecutableReplaced) {
+	if v, err := execVersion(context.Background(), p); !errors.Is(err, ErrExecutableReplaced) {
 		t.Fatalf("version %q err %v, want ErrExecutableReplaced", v, err)
+	}
+}
+
+func TestQueueGate_FileVanishesBeforeOpen_ExpectErrorAndNoFileCreated(t *testing.T) {
+	path := newQueueFixture(t, t.TempDir())
+	g := testGate(path)
+	g.beforeOpen = func() {
+		for _, s := range []string{"", "-wal", "-shm"} {
+			os.Remove(path + s)
+		}
+	}
+	if err := g.Tx(context.Background(), true, insertPlain); err == nil {
+		t.Fatal("write succeeded on a vanished file")
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("gate created the file: %v", err)
+	}
+}
+
+func TestParentVersion_PIDReusedWithNewStart_ExpectNotServedFromCache(t *testing.T) {
+	p, _ := startFakeCodex(t)
+	if v, err := ParentVersion(context.Background(), p); err != nil || v != "0.167.0" {
+		t.Fatalf("version %q %v", v, err)
+	}
+	reused := p
+	reused.Start = p.Start.Add(-time.Hour)
+	if v, err := ParentVersion(context.Background(), reused); !errors.Is(err, ErrParentChanged) {
+		t.Fatalf("pid with another start time: version %q err %v, want a fresh read that fails", v, err)
+	}
+}
+
+func TestParentVersion_HungCodex_ExpectTimeoutFailsClosed(t *testing.T) {
+	p, _ := startFakeCodex(t)
+	t.Setenv(fakeCodexHang, "1")
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	v, err := ParentVersion(ctx, p)
+	if err == nil {
+		t.Fatalf("version %q from a hung codex", v)
+	}
+	if d := time.Since(start); d > 3*time.Second {
+		t.Fatalf("returned after %v, want about the 300ms ctx", d)
+	}
+	g := testGate(newQueueFixture(t, t.TempDir()))
+	g.Parent, g.Version = p, ParentVersion
+	ctx2, cancel2 := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel2()
+	if err := g.Tx(ctx2, true, insertPlain); !errors.Is(err, ErrQueueGate) {
+		t.Fatalf("gate err %v, want fail closed", err)
 	}
 }
