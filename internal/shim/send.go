@@ -315,21 +315,7 @@ func (st *AgentState) deliver(ctx context.Context, m msg.Message) mcpserver.Resu
 		if d.AgentID == st.agent.ID() {
 			return finish(d.AgentID, adapter.Rejected, ReasonSelf)
 		}
-		if st.outbound(m, d.AgentID, journal.StateSubmitted, "", true) != nil {
-			res.State, res.Reason = adapter.Unreachable, receiver.ReasonJournal
-			return res
-		}
-		state, reason, taskID := st.viaTransport(ctx, d, m)
-		st.outboundTask(m, d.AgentID, state, reason, false, taskID)
-		res.State, res.Reason = state, reason
-		if reason == receiver.ReasonNoEndpoint || state == adapter.Unreachable && d.Harness == string(adapter.Codex) && d.HarnessEndpoint == nil {
-			res.Hint = hintCodexNoEndpoint
-		}
-		if d.HarnessEndpoint != nil {
-			res.Hint = joinHint(res.Hint, st.shim.backendHint(ctx, adapter.Harness(d.Harness), *d.HarnessEndpoint, d.SessionRef, state))
-		}
-		res.Hint = joinHint(res.Hint, st.countSend(d.AgentID, state))
-		return res
+		return st.sendRegistered(ctx, m, d)
 	}
 	if m.Kind != msg.Inform {
 		switch len(tgt.Native) {
@@ -369,6 +355,25 @@ func (st *AgentState) deliver(ctx context.Context, m msg.Message) mcpserver.Resu
 	}
 	res.Hint = joinHint(res.Hint, st.shim.backendHint(ctx, b.Harness, b.HarnessEndpoint, b.SessionRef, state))
 	res.Hint = joinHint(res.Hint, st.countSend(to, state))
+	return res
+}
+
+func (st *AgentState) sendRegistered(ctx context.Context, m msg.Message, d registry.Descriptor) mcpserver.Result {
+	res := mcpserver.Result{MessageID: m.MessageID}
+	if st.outbound(m, d.AgentID, journal.StateSubmitted, "", true) != nil {
+		res.State, res.Reason = adapter.Unreachable, receiver.ReasonJournal
+		return res
+	}
+	state, reason, taskID := st.viaTransport(ctx, d, m)
+	st.outboundTask(m, d.AgentID, state, reason, false, taskID)
+	res.State, res.Reason = state, reason
+	if reason == receiver.ReasonNoEndpoint || state == adapter.Unreachable && d.Harness == string(adapter.Codex) && d.HarnessEndpoint == nil {
+		res.Hint = hintCodexNoEndpoint
+	}
+	if d.HarnessEndpoint != nil {
+		res.Hint = joinHint(res.Hint, st.shim.backendHint(ctx, adapter.Harness(d.Harness), *d.HarnessEndpoint, d.SessionRef, state))
+	}
+	res.Hint = joinHint(res.Hint, st.countSend(d.AgentID, state))
 	return res
 }
 
