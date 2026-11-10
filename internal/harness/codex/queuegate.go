@@ -282,6 +282,9 @@ func execVersion(ctx context.Context, p ownerproof.Proc) (string, error) {
 		return "", err
 	}
 	before, err := os.Stat(exe)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", ErrExecutableReplaced
+	}
 	if err != nil {
 		return "", err
 	}

@@ -524,3 +524,13 @@ func TestParentVersion_HungCodex_ExpectTimeoutFailsClosed(t *testing.T) {
 		t.Fatalf("gate err %v, want fail closed", err)
 	}
 }
+
+func TestParentVersion_ExecutableRemovedWhileRunning_ExpectFailure(t *testing.T) {
+	p, exe := startFakeCodex(t)
+	if err := os.Remove(exe); err != nil {
+		t.Fatal(err)
+	}
+	if v, err := execVersion(context.Background(), p); !errors.Is(err, ErrExecutableReplaced) {
+		t.Fatalf("version %q err %v, want ErrExecutableReplaced", v, err)
+	}
+}

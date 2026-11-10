@@ -61,7 +61,9 @@ func args(pid int) (string, []string, error) {
 		}
 		return "", nil, err
 	}
-	return exe, argv, nil
+	// The kernel appends " (deleted)" to the link once the mapped file is
+	// unlinked or replaced; the path is what stood there.
+	return strings.TrimSuffix(exe, " (deleted)"), argv, nil
 }
 
 func userPIDs() ([]int, error) {
