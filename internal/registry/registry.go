@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -31,6 +32,8 @@ type Registry struct {
 	// running (harness.Superseded); nil means no descriptor is. Set it before
 	// the registry is shared.
 	Superseded func(d Descriptor) bool
+	// Now stamps inbox attach times; nil means time.Now.
+	Now func() time.Time
 }
 
 func New(dir string) *Registry {
@@ -57,11 +60,15 @@ func (r *Registry) agentLockPath(agentID string) string {
 }
 
 func (r *Registry) nameLockPath(name string) string {
+	return filepath.Join(r.namesDir(), fileSafe(name)+".lock")
+}
+
+func fileSafe(name string) string {
 	esc := url.PathEscape(name)
 	if strings.HasPrefix(esc, ".") {
 		esc = "%2E" + esc[1:]
 	}
-	return filepath.Join(r.namesDir(), esc+".lock")
+	return esc
 }
 
 func (r *Registry) UDSPath(agentID string) string {
@@ -191,6 +198,31 @@ func (g *Registration) Name() string {
 	return g.desc.Name
 }
 
+func (g *Registration) hasInbox(name string) bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return slices.ContainsFunc(g.desc.Inboxes, func(m InboxMembership) bool { return m.Name == name })
+}
+
+// setInboxes replaces the membership list and, once published, rewrites the
+// descriptor; before the first Publish it only updates the pending descriptor.
+func (g *Registration) setInboxes(list []InboxMembership) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.agentLock == nil || g.released {
+		return ErrClosed
+	}
+	d := g.desc
+	d.Inboxes = list
+	if g.published {
+		if err := writeAtomic(g.reg.DescriptorPath(d.AgentID), d); err != nil {
+			return err
+		}
+	}
+	g.desc = d
+	return nil
+}
+
 func (g *Registration) InstanceID() string { return g.desc.InstanceID }
 
 func (g *Registration) Descriptor() Descriptor {
@@ -215,6 +247,7 @@ func (g *Registration) Publish(d Descriptor) error {
 		return fmt.Errorf("registry: own start time: %w", err)
 	}
 	d.AgentID, d.Name, d.InstanceID = g.desc.AgentID, g.desc.Name, g.desc.InstanceID
+	d.Inboxes = g.desc.Inboxes
 	d.PID, d.StartedAt, d.Protocol, d.Installed = pid, st, Protocol, true
 	if d.Role == "" {
 		d.Role = RolePrimary
@@ -355,8 +388,10 @@ func readDescriptor(path string) (Descriptor, error) {
 	return d, nil
 }
 
-func writeAtomic(path string, d Descriptor) error {
-	b, err := json.MarshalIndent(d, "", "  ")
+func writeAtomic(path string, d Descriptor) error { return writeJSONAtomic(path, d) }
+
+func writeJSONAtomic(path string, v any) error {
+	b, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
 		return err
 	}
