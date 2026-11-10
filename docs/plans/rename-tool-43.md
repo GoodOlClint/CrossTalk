@@ -88,7 +88,16 @@ Each commit lands with its test; "before" is what fails on the parent commit.
 4. **Replay.** Pin restored in `register`. Tests: `TestRenamePinSurvivesRestart` (new shim process, same session_ref, alias is the pinned name before the first publish; before, it is the harness name); `TestRenamePinHeldOnRestartRetriesWhenFree` (the pinned name is held at restart so the session takes its fallback with a notice; the holder ends; the next call, even with an empty harness name, moves the alias to the pin; before, a pinned session never retries); `TestNameRecordSurvivesOldShimRewrite` (downgrade outcome, section 8).
 5. **Registry-level guard.** If review of the retire path shows `Rename` can republish a retired descriptor (the known gap in design §3 Publish order), close it here: a retired registration refuses `Rename`. Test `TestRenameAfterReleaseNameRefused`. Skip this commit only if the gap is already fixed on main when the build starts.
 6. **Docs and skill.** Sections of §4. Test: the existing docs/manifest/version tests plus a check that the skill and `list_tools` name the same tools (`site_test.go` and `hints_test.go` as they stand; extend the one that compares tool lists).
-7. **End-to-end proof** (build-time, not a code commit): launch a Codex session with a prompt that calls `rename`, resolve it by name from a second session, send and reply, restart the Codex thread, resolve again. Recorded in the PR body.
+7. **End-to-end proof** (build-time, not a code commit): launch a Codex session with a prompt that calls `rename`, resolve it by name from a second session, send and reply, restart the Codex thread, resolve again. Recorded in the PR body. Run live on 2026-11-10 against the installed 0.2.1 binary and an interactive Codex 0.167 session on the managed daemon (#126):
+
+| Step | Result |
+|---|---|
+| Codex calls `rename("e2e-126-codex")` | PASS: `{"name":"e2e-126-codex","previous":"<Codex auto title>"}` |
+| `list_agents` shows the new name | PASS |
+| Claude `send_message` to the new name delivers; Codex replies | PASS |
+| Codex auto title does not move the name | PASS: held across several turns and the resume; no fresh title event was seen live, the pin logic is covered by `TestFollowRenameIgnoresHarnessNameWhilePinned` |
+| Name survives quitting Codex and `codex resume` of the same thread | PASS: same agent_id, same name, a send to it delivered and was answered |
+| Rename to a name another live session holds | PASS: `{"error":"rejected","reason":"name_held"}`, own name unchanged |
 8. **ADR 0024 amendment** (separate, by that file's writer after both branches are on main): amend its Context, Decision intro and "Rejected alternatives" entry for `rename`, and its "How it answers #43" paragraph, to say `rename` exists (ADR 0027) and that the inbox answers a different need. Listed here, not done here.
 
 ## 6. Risks
