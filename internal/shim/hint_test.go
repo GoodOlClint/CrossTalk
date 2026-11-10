@@ -457,3 +457,17 @@ func TestCodexBoundWithoutEndpointRecoversWhenThreadLoads(t *testing.T) {
 		t.Fatalf("descriptor %+v: the bind-time endpoint is kept", d)
 	}
 }
+
+func TestInboxAddressRejectionsAreRejected(t *testing.T) {
+	w := newWorld(t)
+	alice := w.claude(4001, "sess-alice", "alice")
+	na := w.node(alice.pid, nil, nil)
+	res := na.ok(nil, "send_message", send("inbox:x@lab", "hi"))
+	if res["state"] != "rejected" || res["reason"] != "remote_inbox_unsupported" || res["hint"] == nil {
+		t.Fatalf("remote inbox %v", res)
+	}
+	res = na.ok(nil, "ask", send("inbox:nobody", "q?"))
+	if h, _ := res["hint"].(string); res["state"] != "rejected" || res["reason"] != ReasonNoSuchAgent || !strings.Contains(h, "inbox") {
+		t.Fatalf("empty inbox %v", res)
+	}
+}

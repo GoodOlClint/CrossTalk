@@ -16,6 +16,7 @@ var Hints = map[string]string{
 	"invalid_name":              "That name cannot be used: 1 to 64 bytes, no @, no control characters, no space at either end, not 16 hex digits, not starting with inbox: in any case. Pick another and call rename again.",
 	"name_held":                 "Another live session already has that name. Call list_agents to see who, pick a different name, or retry once if that session has just ended.",
 	"inbox_copy":                "That message reached this session as a copy of a message to a role inbox, and only the inbox's responder answers it. Do not reply; use send_message to the sender if you have something to add.",
+	"remote_inbox_unsupported":  "An inbox lives on one host and cannot be addressed as inbox:<name>@<host>. Send to inbox:<name> for this host's inbox, or run list_agents and address a session on that host by name@host.",
 	"invalid_inbox":             "An inbox name is non-empty and has no @, /, control character or inbox: prefix; release has no inbox form. Fix the name and call attach, detach, grant or claim again, or use detach to leave an inbox.",
 	"not_granted":               "The inbox has a live owner and has not granted this session. Ask its owner with send_message to call grant for this session, then call attach again.",
 	"ownerless":                 "The inbox has no live owner and this session is not granted. Call claim with inbox:<name> to take it.",

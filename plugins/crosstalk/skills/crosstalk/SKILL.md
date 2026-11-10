@@ -41,13 +41,14 @@ Tool names are bare here; your harness may prefix them.
 
 - `native_inform_only`: that session has no CrossTalk binding. `send_message` still reaches a reachable one; retry `ask` after it binds. If CrossTalk is not installed there, tell the user.
 - `no_endpoint`: that Codex session cannot receive, and the ask was not stored. Use `send_message`, which it can pull, and tell the user the hint.
-- `no_such_agent`: run `list_agents` again.
+- `no_such_agent`: run `list_agents` again. For `inbox:<name>` it means no session is attached to that inbox.
 - `ambiguous_name`: use `agent_id`.
 - `unknown_alias`: no paired host has that name after the `@`; `list_agents` shows the paired hosts.
 - `remote_native_unsupported`: that session on a paired host has no CrossTalk; pick a row with `crosstalk: true`.
 - `unpaired_by_peer`, `tls_pin_mismatch`, `gateway_not_running`: a paired host refuses this one, is not the host that was paired, or has no gateway running; tell your user.
 - `invalid_name`: the name for `rename` is empty, over 64 bytes, has `@`, a control character or a space at either end, is 16 hex digits, or starts with `inbox:` (any case); pick another.
 - `invalid_inbox`: an inbox name is empty or has `@`, `/`, a control character or an `inbox:` prefix, or `release` was given an `inbox:` value; fix the name, and use `detach` to leave an inbox.
+- `remote_inbox_unsupported`: an inbox lives on one host; send to `inbox:<name>` without `@host`, or address a session on that host by `name@host`.
 - `not_granted`: the inbox has a live owner who has not granted you; ask that owner to `grant` you, then `attach` again.
 - `ownerless`: the inbox has no live owner and you are not granted; `claim` it as `inbox:<name>` if your user or brief says so.
 - `inbox_owned`: a live owner holds the inbox, so `claim` cannot take it; ask for a `grant`.

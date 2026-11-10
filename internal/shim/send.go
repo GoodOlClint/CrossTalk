@@ -292,6 +292,11 @@ func (st *AgentState) deliver(ctx context.Context, m msg.Message) mcpserver.Resu
 	if err != nil {
 		return finish(m.To, adapter.Unreachable, err.Error())
 	}
+	if r := tgt.Rejection; r != nil {
+		res := finish(m.To, adapter.Rejected, r.Reason)
+		res.Hint = r.Hint
+		return res
+	}
 	local := tgt.Registered || len(tgt.Native) > 0
 	switch {
 	case tgt.Remote != nil && !local:

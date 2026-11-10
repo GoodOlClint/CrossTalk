@@ -7,6 +7,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/GoodOlClint/crosstalk/internal/identity"
+	"github.com/GoodOlClint/crosstalk/internal/registry"
 )
 
 // Row is one list_agents entry (§3 Discovery).
@@ -22,6 +23,16 @@ type Row struct {
 	Role      string  `json:"role,omitempty"`
 	Owner     *string `json:"owner"`
 	You       bool    `json:"you,omitempty"`
+	// Inboxes lists the role inboxes a registered session is attached to.
+	Inboxes []RowInbox `json:"inboxes,omitempty"`
+}
+
+// RowInbox is one inbox membership of a row; Owner and Responder mark the
+// inbox's owner and its current responder.
+type RowInbox struct {
+	Name      string `json:"name"`
+	Owner     bool   `json:"owner,omitempty"`
+	Responder bool   `json:"responder,omitempty"`
 }
 
 // RemoteRow is a paired host's agent as list_agents shows it. It has no cwd.
@@ -136,6 +147,8 @@ func (s *Server) listAgents(ctx context.Context) ([]Row, []string) {
 		}
 	}
 
+	s.addInboxes(rows, ds)
+
 	out := make([]Row, 0, len(rows))
 	for _, r := range rows {
 		out = append(out, *r)
@@ -147,4 +160,31 @@ func (s *Server) listAgents(ctx context.Context) ([]Row, []string) {
 		return out[i].AgentID < out[j].AgentID
 	})
 	return out, warnings
+}
+
+// addInboxes marks, per attached inbox, the owner and the responder: the
+// first member in InboxMembers order.
+func (s *Server) addInboxes(rows map[string]*Row, ds []registry.Descriptor) {
+	type info struct{ owner, responder string }
+	seen := map[string]info{}
+	for _, d := range ds {
+		for _, im := range d.Inboxes {
+			name := registry.CanonInbox(im.Name)
+			in, ok := seen[name]
+			if !ok {
+				if f, found, err := s.reg.ReadInbox(name); err == nil && found {
+					in.owner = f.Owner
+				}
+				if ms, err := s.reg.InboxMembers(name); err == nil && len(ms) > 0 {
+					in.responder = ms[0].AgentID
+				}
+				seen[name] = in
+			}
+			r := rows[d.AgentID]
+			r.Inboxes = append(r.Inboxes, RowInbox{Name: name, Owner: in.owner == d.AgentID, Responder: in.responder == d.AgentID})
+		}
+	}
+	for _, r := range rows {
+		sort.Slice(r.Inboxes, func(i, j int) bool { return r.Inboxes[i].Name < r.Inboxes[j].Name })
+	}
 }
