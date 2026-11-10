@@ -310,7 +310,10 @@ func (r *Receiver) Recover(rp journal.Replay) error {
 			}
 			errs = append(errs, r.j.Append(journal.Record{Type: journal.TypeRoute, Session: u.Session, MessageID: u.MessageID, Sender: u.Sender, To: u.To, Kind: u.Kind, State: journal.StateClosed}))
 		case u.Type == journal.TypeDedupe && u.State == journal.StateSubmitted:
-			if _, claimed := r.j.DispatchStateFor(scopeOfKey(u.Sender), u.MessageID); claimed {
+			if l, claimed := r.j.DispatchStateFor(scopeOfKey(u.Sender), u.MessageID); claimed {
+				if l.Type == journal.TypeOutcome && l.State == journal.StateMailboxed {
+					errs = append(errs, r.j.SetDedupeState(u.Sender, u.MessageID, journal.StateMailboxed))
+				}
 				continue
 			}
 			if st := r.strandedState(u, u.Binding.SameConversation(cur), tasked[u.MessageID], self); st != "" {

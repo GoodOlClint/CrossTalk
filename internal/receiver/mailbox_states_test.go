@@ -337,3 +337,42 @@ func TestReceive_OutcomeWriteFailsOnMailboxed_ExpectUnknownAndClaimResolvedAcros
 		t.Fatalf("claim retained on the next restart: %+v", rp.Dispatching)
 	}
 }
+
+func TestRecover_CrashAfterMailboxedOutcomeBeforeDedupe_ExpectEntryPullableAndMailboxed(t *testing.T) {
+	e := newMailboxEnv(t)
+	crashed := false
+	j, _, err := journal.Open(e.dir, selfID, jbind(selfBinding, "inst-x"), journal.Options{BeforeAppend: func(r journal.Record) error {
+		if crashed {
+			return errors.New("process died")
+		}
+		crashed = r.Type == journal.TypeOutcome && r.State == "mailboxed"
+		return nil
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.j = j
+	e.r = New(Config{Journal: j, Adapter: e.fake, Self: e.self})
+	m := newMsg(msg.Inform, "hi")
+	e.recv(A2A, alice, m)
+	if !crashed {
+		t.Fatal("outcome never written")
+	}
+	j.Close()
+	rp := e.open(selfBinding, "inst-y")
+	if st := e.dedupe(m); st != "submitted" {
+		t.Fatalf("dedupe before recover %q", st)
+	}
+	if err := e.r.Recover(rp); err != nil {
+		t.Fatal(err)
+	}
+	if st := e.dedupe(m); st != "mailboxed" {
+		t.Fatalf("dedupe after recover %q", st)
+	}
+	if r := e.recv(A2A, alice, m); !r.Duplicate || r.State != adapter.Mailboxed {
+		t.Fatalf("resend %+v", r)
+	}
+	if es, _ := e.pull("", 0); len(es) != 1 || es[0].MessageID != m.MessageID {
+		t.Fatalf("pull %+v", es)
+	}
+}
