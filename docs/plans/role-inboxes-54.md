@@ -1,6 +1,6 @@
 # Change plan: role inboxes (#54, ADR 0024) with the pre-bind store (#41, ADR 0026)
 
-Status: draft for operator review. No code is written; this plan is the brownfield gate. Branch `plan-54-inboxes` from `main` at c1a4cf7.
+Status: draft for operator review (Codex review dispositions in section 10). No code is written; this plan is the brownfield gate. Branch `plan-54-inboxes` from `main` at c1a4cf7.
 
 ## 1. Goal and scope
 
@@ -83,9 +83,9 @@ Notation: **Before** is the observable behaviour on main; **After** is what the 
 - `TestFailedPreBindWriteKeepsStateAndAddsHint`: state unchanged, old one-way hint kept.
 - `TestAcceptedNativeSendWarnsOneWay` updated: with a stored entry the hint says the recipient can answer with `reply` after it uses CrossTalk.
 
-**A4. Drain at bind and on a `reply` miss.** Files: `internal/shim/agent.go`, `internal/shim/send.go` (`Reply`), `internal/shim/reply_test.go`, `drain_test.go`.
+**A4. Drain at bind and on a `reply` miss or an unfinished import.** Files: `internal/shim/agent.go`, `internal/shim/send.go` (`Reply`), `internal/shim/reply_test.go`, `drain_test.go`.
 - `TestPreBindReplySucceedsAfterBind` (the end-to-end test of #41): a registered sender informs a native session; the session binds; `reply` with the delivered message id returns `accepted`. Before: `invalid/no_such_message`. After: delivered to the sender, route closed, a second `reply` with other text is `already_replied`.
-- `TestPreBindDrainRunsBeforePublish`; `TestPreBindReplyDrainsLateEntry` (an entry written after the bind is found by the miss path); `TestPreBindEntryOlderThanTTLGivesPreBindHint`.
+- `TestPreBindDrainRunsBeforePublish`; `TestPreBindReplyDrainsLateEntry` (an entry written after the bind is found by the miss path); `TestPreBindPartialImportRepairedOnRetry` (a one-time route-append failure during a late drain leaves the dedupe record; the same `reply` retried without a restart drains again, completes the route and succeeds; a closed route is never reopened); `TestPreBindEntryOlderThanTTLGivesPreBindHint`.
 - Docs: design §5 and §12 S5, `docs/faq.md`, skill text; ADR 0023 status note; ADR 0026 Trial record.
 
 ### Track B: role inboxes (ADR 0024)
@@ -102,6 +102,11 @@ Before: no inbox concept. After: the state machine is correct without any tool o
 
 **I2. Journal record for membership.** Files: `internal/journal/journal.go` (`TypeAttach`, key by inbox name, `unresolved()` keeps the latest while attached), `journal_test.go`.
 - `TestAttachRecordSurvivesRetention`: a 25-hour-old attach record is kept; a detach record lets it age out. Before: unknown type, dropped at retention.
+
+**I2b. Receive-side copy support (before any member can exist).** Files: `internal/a2a` (map `metadata.crosstalk.inbox`/`inbox_copy` to `Inbound`; skip `MaxOpenAsks` for a copy; complete an ask copy on delivery), `internal/receiver` (authorize the copy against its original kind; journal dedupe and task with the marker; open no route), `internal/journal` (`Inbox`, `Copy`, `OrigKind` fields), `internal/shim` `Reply` (`rejected/inbox_copy`). Nothing sends a copy yet.
+- `TestInboxCopyOpensNoRoute` (and `reply` to it is `inbox_copy`), `TestInboxForgedCopyFlagOnlyRemovesRoute`, `TestInboxCopyAuthorizedAgainstOriginalKind`, `TestInboxAskCopiesNeverFillOpenAsks`.
+- `TestPendingCopyPersistedAsInformForOlderReaders`: a copy submitted but not yet dispatched is stored with kind `inform` and `OrigKind` set, so a reader that ignores the markers (rollback, see section 6) resumes an inform, never an ask.
+Ordering rule: no commit that lets a session attach (I3 and later) precedes this one, so every build that can publish a membership can receive a copy. Mixed-build rule: because a member is created only by `attach`, and `attach` exists only from I3, an I7 sender never selects a member whose receiver predates I2b.
 
 **I3. The three tools and the `inbox:` form of `claim`/`release`.** Files: `internal/mcpserver/{server.go,claims.go,backend.go,hints.go,fake.go}`, `internal/shim/` handlers beside `claims.go`, new `Agent.applyAttach`/`applyDetach` (same pattern as `applyClaim`: admit, `a.mu`, journal, republish).
 - `TestInboxToolsRefuseSubagents` (`caller_not_primary` for all four), `TestInboxActionsSelfOnlyAndUnbound` (`unbound`, and no peer can act for a session), `TestClaimInboxFormDoesNotResolveASession`, `TestReleaseInboxFormIsInvalidInbox`, `TestInvalidInboxNames` (empty, `@`, `/`, control characters).
@@ -121,9 +126,8 @@ Before: a restarted shim lists no inboxes. After: it republishes them with the o
 - `TestInboxNewestMemberResponds`, `TestInboxAskOneReply` (the ask's task, deadline, route and outbound record are keyed as for a direct ask to the responder), `TestInboxCommandOnlyToResponder`, `TestInboxCodexThreadsIndependent`, nudge counts the inbox as one peer.
 Before: `inbox:x` is `no_such_agent`. After: a member answers.
 
-**I7. Copies to the other members.** Files: `internal/shim/send.go`, `transport.go` and the A2A client (carry the `inbox`/`inbox_copy` metadata), `internal/a2a` (map the metadata to `Inbound`; skip `MaxOpenAsks` for a copy; complete an ask copy on delivery), `internal/receiver` (authorize the copy against its original kind; journal dedupe with the marker; open no route), `internal/shim` `Reply` (`rejected/inbox_copy`).
-- `TestInboxFanOutResponderGetsKindOthersGetCopies`, `TestInboxCopyOpensNoRoute`, `TestInboxForgedCopyFlagOnlyRemovesRoute`, `TestInboxCopyAuthorizedAgainstOriginalKind`, `TestInboxAskCopiesNeverFillOpenAsks`, `TestInboxCopyLegNeverOverwritesResponderLeg` (also after a sender restart).
-Mixed versions: a member is by definition a new shim (only a new shim writes `inboxes` to its descriptor), so an old receiver never gets a copy.
+**I7. Sender fans out copies.** Files: `internal/shim/send.go`, `transport.go` and the A2A client (carry the `inbox`/`inbox_copy` metadata). The receive side is already in I2b.
+- `TestInboxFanOutResponderGetsKindOthersGetCopies`, `TestInboxCopyLegNeverOverwritesResponderLeg` (also after a sender restart), `TestInboxMixedBuildReceiverNeverGetsReplyableCopy` (a receiver double without I2b semantics is never chosen: membership is the only source of recipients and the test attaches only through the I3+ path).
 
 **I8. The fallback walk and durable candidate.** Files: `internal/shim/send.go` (walk, `CancelTask` on a pending leg), `internal/journal` (leg records, restart resume).
 - `TestInboxFallbackPastUnreachableResponder`, `TestInboxFallbackAfterCanceledPendingLeg`, `TestInboxNoFallbackAfterAmbiguousDelivery`, `TestInboxCandidateRepliesBeforeSendReturns`, `TestInboxSenderCrashAfterCandidateAccepted`, `TestInboxAllMembersUnreachable` (`no_reachable_member`), `TestInboxWalkStopsOnJournalUnknown` (relies on the shipped #63 behaviour).
@@ -138,9 +142,9 @@ This is the end-to-end test for #54: before, a send to the old generation-number
 ## 6. Migration and compatibility
 
 - **Descriptors:** `inboxes` is additive and omitted when empty; `Protocol` stays 1. An older shim ignores the field. An older sender cannot address an inbox.
-- **Journals:** `attach` and `leg` are new record types; an older binary reading a newer journal keys an unknown type as `?` and does not retain it, so downgrading loses membership and leg history only.
+- **Journals and rollback:** `attach` and `leg` are new record types; an older binary reading a newer journal keys an unknown type as `?` and does not retain it, so downgrading loses membership and leg history. Pending copies are the other persisted state: they are stored with kind `inform` (I2b), so a downgraded reader resumes an inform, not an ask, and the responder's ask is never answered twice. Rollback barrier: before downgrading, detach inboxes (or accept that membership is lost); copies complete on delivery, so no pending copy outlives a quiet restart.
 - **New directories:** `inboxes/` and `prebind/`, created 0700 on first use. `crosstalk uninstall` removal behaviour for state directories is unchanged (it keeps state); nothing here changes that.
-- **Mixed versions during an upgrade:** fan-out needs a new shim at every member (see I7). The pre-bind store needs a new shim at the sender only; an old receiver ignores the file, and `reply` stays `no_such_message` with the existing hint.
+- **Mixed versions during an upgrade:** fan-out needs a new shim at every member; I2b before I3 guarantees any build that can hold a membership can receive a copy. The pre-bind store needs a new shim at the sender only; an old receiver ignores the file, and `reply` stays `no_such_message` with the existing hint.
 - **Tool surface:** seven to ten tools. The skill and server instructions change in the same commit as the tool.
 
 ## 7. Risks
@@ -171,4 +175,12 @@ This is the end-to-end test for #54: before, a send to the old generation-number
 
 ## 10. Codex review
 
-Filled after the one-shot Codex review.
+One adversarial pass (`codex-companion adversarial-review --base main`, verdict needs-attention). Three findings; each checked against the source, none auto-applied.
+
+| # | Severity | Finding | Disposition |
+|---|---|---|---|
+| 1 | high | Membership (I3) becomes visible before receivers understand copies (I7), so a later-commit sender could pick an I3 to I6 member that treats the copy as an ordinary ask and opens a second reply route. | **Fixed.** Receive-side copy handling moved into new commit I2b, before any commit that lets a session attach; I7 is sender-only. Added `TestInboxMixedBuildReceiverNeverGetsReplyableCopy` and the ordering rule in I2b. The claim "a member is a new shim" is now backed by ordering, not by assertion. |
+| 2 | high | Rollback: a copy persisted as a task of kind `ask` with new markers is resumed by an older reader as an ordinary ask, opening a route next to the responder's. | **Fixed.** Copies are persisted with kind `inform` and an `OrigKind` marker, after the authorization against the original kind (I2b, `TestPendingCopyPersistedAsInformForOlderReaders`); section 6 states the rollback barrier. Residual, accepted: an older reader resumes an inform route for the copy, so a watcher could send a plain inform to the sender; it closes no ask and matches no receipt (`askedPeer` compares the replier with the asked responder). The persisted kind differs from the kind ADR 0024 rule 6 says the copy "keeps"; the displayed kind stays the original, so this is an implementation detail and ADR 0024 gets a one-line in-place note in I10. |
+| 3 | medium | A partial late import (dedupe appended, route append failed) is never repaired because the miss-only drain does not run once the dedupe record exists. | **Fixed.** `Reply` also drains once when the message is found, is an imported inform, and its route is not open and not closed in the journal (ADR 0026 rule 3 updated). Added `TestPreBindPartialImportRepairedOnRetry` in A4. |
+
+Not checked by the reviewer (stated by it): runtime tests; this was a documentation review against current source.
