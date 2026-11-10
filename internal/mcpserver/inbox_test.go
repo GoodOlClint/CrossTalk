@@ -3,11 +3,15 @@ package mcpserver
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/GoodOlClint/crosstalk/internal/journal"
+	"github.com/GoodOlClint/crosstalk/internal/registry"
 )
 
 func inboxArg(n string) map[string]any { return map[string]any{"inbox": n} }
@@ -161,5 +165,126 @@ func TestInvalidInboxNames(t *testing.T) {
 	}
 	if strings.Contains(describe(&Error{Code: CodeRejected, Reason: "ownerless"}), "claim") == false {
 		t.Error("ownerless hint does not point at claim")
+	}
+}
+
+func ageAttachRecords(t *testing.T, e *env, agentID string, at time.Time) {
+	t.Helper()
+	p := journal.Path(e.stateDir, agentID)
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+		m := map[string]any{}
+		if err := json.Unmarshal([]byte(line), &m); err != nil {
+			t.Fatal(err)
+		}
+		if m["type"] == string(journal.TypeAttach) {
+			m["at"] = at.Format(time.RFC3339Nano)
+		}
+		nb, _ := json.Marshal(m)
+		out = append(out, string(nb))
+	}
+	if err := os.WriteFile(p, []byte(strings.Join(out, "\n")+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func attachedAt(t *testing.T, d registry.Descriptor, inbox string) time.Time {
+	t.Helper()
+	for _, m := range d.Inboxes {
+		if m.Name == inbox {
+			return m.AttachedAt
+		}
+	}
+	t.Fatalf("%s is not in %s", d.Name, inbox)
+	return time.Time{}
+}
+
+func TestInboxAttachSurvivesRestartAndKeepsOrder(t *testing.T) {
+	e := claimEnv(t)
+	A, B, C := thread("A"), thread("B"), thread("C")
+	e.mustOK(A, "attach", inboxArg("coord"))
+	e.mustOK(A, "grant", grantArgs("coord", "b", false))
+	e.mustOK(A, "grant", grantArgs("coord", "c", false))
+	e.mustOK(B, "attach", inboxArg("coord"))
+	e.mustOK(C, "attach", inboxArg("coord"))
+	e.mustOK(C, "attach", inboxArg("side"))
+	bAt := attachedAt(t, e.descriptor(codexID("B")), "coord")
+
+	e.stop()
+	old := time.Now().UTC().Add(-72 * time.Hour).Truncate(time.Millisecond)
+	ageAttachRecords(t, e, codexID("A"), old)
+	f, _, _ := e.reg.ReadInbox("side")
+	f.Owner = codexID("A")
+	f.Grants = []string{}
+	raw, _ := json.Marshal(f)
+	if err := os.WriteFile(filepath.Join(e.stateDir, "inboxes", "side.json"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	e.start(999999)
+	e.mustOK(B, "list_agents", map[string]any{})
+	e.mustOK(A, "list_agents", map[string]any{})
+	cOut := e.mustOK(C, "list_agents", map[string]any{})
+
+	dA := e.descriptor(codexID("A"))
+	if got := attachedAt(t, dA, "coord"); !got.Equal(old) {
+		t.Fatalf("attached_at %v, want the journaled %v", got, old)
+	}
+	if got := attachedAt(t, e.descriptor(codexID("B")), "coord"); !got.Equal(bAt) {
+		t.Fatalf("B attached_at %v, want %v", got, bAt)
+	}
+	ds, err := e.reg.InboxMembers("coord")
+	if err != nil || len(ds) != 3 || ds[0].AgentID != codexID("C") || ds[1].AgentID != codexID("B") || ds[2].AgentID != codexID("A") {
+		t.Fatalf("members %v %v, want C, B, A", ds, err)
+	}
+	f, _, _ = e.reg.ReadInbox("coord")
+	if f.Owner != codexID("A") || len(f.Grants) != 2 {
+		t.Fatalf("owner and grants after resume: %+v", f)
+	}
+	if out := e.mustOK(A, "attach", inboxArg("coord")); out["created"] != false || out["owner"] != codexID("A") {
+		t.Fatalf("owner after resume %v", out)
+	}
+
+	if n, _ := cOut["notice"].(string); !strings.Contains(n, "side") {
+		t.Fatalf("no notice for the dropped membership: %v", cOut)
+	}
+	dC := e.descriptor(codexID("C"))
+	for _, m := range dC.Inboxes {
+		if m.Name == "side" {
+			t.Fatalf("dropped membership still published: %+v", dC.Inboxes)
+		}
+	}
+	if r, _ := e.srv.local(codexID("C")).Journal().Latest(journal.Record{Type: journal.TypeAttach, Inbox: "side"}); r.Attached {
+		t.Fatalf("drop not journaled: %+v", r)
+	}
+	attachedAt(t, dC, "coord")
+}
+
+func TestInboxSupersededMemberDropsOut(t *testing.T) {
+	fb := NewFakeBackend()
+	fb.SetSessions(
+		Session{Harness: "codex", SessionRef: "old", Name: "role", Cwd: "/w"},
+		Session{Harness: "codex", SessionRef: "new", Name: "role2", Cwd: "/w"},
+	)
+	e := newEnv(t, 999999, fb)
+	e.mustOK(thread("old"), "attach", inboxArg("coord"))
+	oldID := codexID("old")
+	e.reg.Superseded = func(d registry.Descriptor) bool { return d.AgentID == oldID }
+
+	if ds, _ := e.reg.InboxMembers("coord"); len(ds) != 0 {
+		t.Fatalf("superseded member listed: %v", ds)
+	}
+	e.mustErr(thread("new"), "attach", inboxArg("coord"), CodeRejected, "ownerless")
+	out := e.mustOK(thread("new"), "claim", map[string]any{"name": "inbox:coord"})
+	if out["owner"] != codexID("new") {
+		t.Fatalf("claim %v", out)
+	}
+	ds, _ := e.reg.InboxMembers("coord")
+	if len(ds) != 1 || ds[0].AgentID != codexID("new") {
+		t.Fatalf("members %v", ds)
 	}
 }

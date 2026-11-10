@@ -320,16 +320,44 @@ func (s *Server) register(ctx context.Context, a *Agent, c caller) (notice strin
 	if err := g.Publish(d); err != nil {
 		return "", err
 	}
+	dropped, err := s.resumeInboxes(a)
+	if err != nil {
+		return "", err
+	}
 	if p, ok := s.backend.(Publisher); ok {
 		p.Published(a)
 	}
 	if pinHeld != "" {
-		return fmt.Sprintf("registered as %q: the name set with rename, %q, is held by another live agent; a later call takes it", g.Name(), pinHeld), nil
-	}
-	if a.pinned == "" && c.name != "" && g.Name() != c.name {
+		notice = fmt.Sprintf("registered as %q: the name set with rename, %q, is held by another live agent; a later call takes it", g.Name(), pinHeld)
+	} else if a.pinned == "" && c.name != "" && g.Name() != c.name {
 		notice = s.heldNotice("registered as", g.Name(), c.name)
 	}
+	for _, name := range dropped {
+		if notice != "" {
+			notice += "; "
+		}
+		notice += fmt.Sprintf("no longer in role inbox %q: its owner changed while this session was down and this session is not granted", name)
+	}
 	return notice, nil
+}
+
+// resumeInboxes replays the journaled memberships after the first publish,
+// so an inbox another session claimed while this one was down is re-checked
+// under its lock. It returns the inboxes the session no longer belongs to.
+func (s *Server) resumeInboxes(a *Agent) (dropped []string, err error) {
+	for _, r := range a.replay.Unresolved {
+		if r.Type != journal.TypeAttach || !r.Attached {
+			continue
+		}
+		kept, err := s.reg.ResumeInbox(a.reg, registry.InboxMembership{Name: r.Inbox, AttachedAt: r.At}, a.inboxHook)
+		if err != nil {
+			return nil, err
+		}
+		if !kept {
+			dropped = append(dropped, r.Inbox)
+		}
+	}
+	return dropped, nil
 }
 
 func (s *Server) heldNotice(prefix, name, harnessName string) string {
