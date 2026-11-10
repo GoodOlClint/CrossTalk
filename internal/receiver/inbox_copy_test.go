@@ -110,3 +110,16 @@ func TestInboxCopyAuthorizedAgainstOriginalKind(t *testing.T) {
 		t.Fatalf("verified ask copy: %+v", res)
 	}
 }
+
+func TestDeliveryCarriesInboxCopyFlag(t *testing.T) {
+	for _, copied := range []bool{false, true} {
+		e := newEnv(t)
+		m := newMsg(msg.Ask, "x")
+		if res := e.recvIn(alice, m, "coord", copied); res.State != adapter.Accepted {
+			t.Fatalf("%+v", res)
+		}
+		if w := e.fake.Writes(); len(w) != 1 || w[0].Delivery.InboxCopy != copied {
+			t.Fatalf("copy=%v writes %+v", copied, w)
+		}
+	}
+}

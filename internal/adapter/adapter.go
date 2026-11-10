@@ -57,6 +57,8 @@ type Delivery struct {
 	SenderAgentID string
 	// Inbox is the role inbox the message was addressed to; "" for a direct message.
 	Inbox string
+	// InboxCopy marks a watcher's copy of an inbox message: informational, with no reply route.
+	InboxCopy bool
 	// ReplyAddress is the target harness's NativeReplyAddress for the
 	// injecting agent; "" when it has none.
 	ReplyAddress string

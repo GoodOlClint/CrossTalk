@@ -345,7 +345,7 @@ func (r *Receiver) receive(ctx context.Context, in Inbound, resume bool) Result 
 			return reject(ReasonJournal)
 		}
 	}
-	st, err := r.ad.Inject(ctx, m, adapter.Delivery{Mode: m.Delivery, Target: self.Binding, VerifiedSender: in.Sender.Verified, SenderHarness: in.Sender.Harness, Inbox: in.Inbox})
+	st, err := r.ad.Inject(ctx, m, adapter.Delivery{Mode: m.Delivery, Target: self.Binding, VerifiedSender: in.Sender.Verified, SenderHarness: in.Sender.Harness, Inbox: in.Inbox, InboxCopy: in.InboxCopy})
 	if !st.Injectable() {
 		st = adapter.Unknown
 	}

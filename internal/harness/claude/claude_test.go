@@ -480,3 +480,20 @@ func TestInjectShowsInboxName(t *testing.T) {
 		t.Fatal("envelope without an inbox names one")
 	}
 }
+
+func TestInjectShowsInboxCopyMarker(t *testing.T) {
+	for _, copied := range []bool{false, true} {
+		a, s, f := setup(t, ackLine)
+		d := adapter.Delivery{Mode: msg.Immediate, Target: s.Binding(), VerifiedSender: true, Inbox: "coord", InboxCopy: copied}
+		if st, err := a.Inject(context.Background(), message("alice", "hello"), d); st != adapter.Accepted || err != nil {
+			t.Fatalf("got %s %v", st, err)
+		}
+		var user userFrame
+		if err := json.Unmarshal([]byte(f.frames()[0][1]), &user); err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.Contains(user.Message.Content, `inbox-copy="true"`); got != copied {
+			t.Fatalf("copy=%v marker=%v: %q", copied, got, user.Message.Content)
+		}
+	}
+}

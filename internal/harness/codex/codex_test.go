@@ -625,3 +625,21 @@ func TestInjectShowsInboxName(t *testing.T) {
 		t.Fatal("render without an inbox names one")
 	}
 }
+
+func TestInjectShowsInboxCopyMarker(t *testing.T) {
+	for _, copied := range []bool{false, true} {
+		r := newRig(t, idleThread())
+		d := r.delivery(true, msg.Immediate)
+		d.Inbox, d.InboxCopy = "coord", copied
+		if st, err := r.a.Inject(ctx(t), message("hello"), d); st != adapter.Accepted || err != nil {
+			t.Fatalf("Inject = %s, %v", st, err)
+		}
+		got := r.srv.Thread(thread)
+		if len(got.ToolOutputs) != 1 {
+			t.Fatalf("tool outputs %+v", got.ToolOutputs)
+		}
+		if has := strings.Contains(got.ToolOutputs[0].Output, `"inbox_copy":true`); has != copied {
+			t.Fatalf("copy=%v marker=%v: %s", copied, has, got.ToolOutputs[0].Output)
+		}
+	}
+}
