@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 )
@@ -148,5 +150,33 @@ func TestRealProof_HolderKilled_ExpectRevokedOnRecheck(t *testing.T) {
 	cmd.Wait()
 	if got := c.Recheck(); len(got) != 1 || c.Bound("T1") {
 		t.Fatalf("revoked %v after the owner was killed", got)
+	}
+}
+
+func TestRealProof_ConcurrentProofsOfFreeLockFromTwoTables_ExpectNoFalsePass(t *testing.T) {
+	realKernel(t)
+	dir, path := realLock(t)
+	codex := startRealHelper(t, "read", path)
+	a, _ := realClaims(t, codex, dir)
+	b, _ := realClaims(t, codex, dir)
+	a.opt.Tries, b.opt.Tries = 1, 1
+	var pass atomic.Int64
+	var wg sync.WaitGroup
+	for g := range 8 {
+		c := a
+		if g%2 == 1 {
+			c = b
+		}
+		wg.Go(func() {
+			for range 200 {
+				if c.proveTarget("T1") == nil {
+					pass.Add(1)
+				}
+			}
+		})
+	}
+	wg.Wait()
+	if n := pass.Load(); n != 0 {
+		t.Fatalf("%d of 1600 proofs passed on a free lock", n)
 	}
 }

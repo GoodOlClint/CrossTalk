@@ -444,3 +444,76 @@ func TestClaims_ForeignClaimFails_ExpectExistingClaimNotRevoked(t *testing.T) {
 		t.Fatalf("foreign claim touched the binding: bound %v, registered %v", c.Bound("T1"), reg.got())
 	}
 }
+
+// overlapSys records how many lock probes of one path run at once.
+type overlapSys struct {
+	*fakeSys
+	mu       sync.Mutex
+	inFlight int
+	most     int
+}
+
+func (o *overlapSys) LockHeld(path string) (bool, error) {
+	o.mu.Lock()
+	o.inFlight++
+	o.most = max(o.most, o.inFlight)
+	o.mu.Unlock()
+	time.Sleep(time.Millisecond)
+	o.mu.Lock()
+	o.inFlight--
+	o.mu.Unlock()
+	return o.fakeSys.LockHeld(path)
+}
+
+func TestProof_ConcurrentProbesOfOnePathAcrossTables_ExpectSerialized(t *testing.T) {
+	sys := &overlapSys{fakeSys: newFakeSys()}
+	sys.own("T1")
+	parent, _ := sys.Info(parentPID)
+	mk := func() *Claims {
+		return NewClaims(ClaimOptions{Sys: sys, Parent: parent, LockDir: lockDir, Registrar: &fakeRegistrar{}, Tries: 1})
+	}
+	a, b := mk(), mk()
+	var wg sync.WaitGroup
+	for g := range 8 {
+		c := a
+		if g%2 == 1 {
+			c = b
+		}
+		wg.Go(func() {
+			for range 10 {
+				c.proveTarget("T1")
+			}
+		})
+	}
+	wg.Wait()
+	if sys.most != 1 {
+		t.Fatalf("%d lock probes of one path overlapped in one process", sys.most)
+	}
+}
+
+// heldSeq answers LockHeld from a sequence; the last answer repeats.
+type heldSeq struct {
+	*fakeSys
+	mu  sync.Mutex
+	seq []bool
+}
+
+func (h *heldSeq) LockHeld(path string) (bool, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	v := h.seq[0]
+	if len(h.seq) > 1 {
+		h.seq = h.seq[1:]
+	}
+	return v, nil
+}
+
+func TestProof_LockSeenHeldThenFreeAfterOpeners_ExpectLockFree(t *testing.T) {
+	sys := &heldSeq{fakeSys: newFakeSys(), seq: []bool{true, false}}
+	sys.own("T1")
+	parent, _ := sys.Info(parentPID)
+	c := NewClaims(ClaimOptions{Sys: sys, Parent: parent, LockDir: lockDir, Registrar: &fakeRegistrar{}, Tries: 1})
+	if err := c.AcceptDurable(context.Background(), claim("T1")); !errors.Is(err, ErrLockFree) {
+		t.Fatalf("err %v, want ErrLockFree from the read after the openers", err)
+	}
+}

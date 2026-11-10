@@ -140,14 +140,19 @@ func (c *Claims) parentNow() error {
 // ownsLock is the inference of plan 3.3: the kernel names no flock holder,
 // so the lock is held by someone, the parent has the file open, and no other
 // process does.
+//
+// LockHeld briefly takes a free lock itself and Openers excludes this
+// process, so two probes of one path must never overlap in this process:
+// each would read the other's transient flock as "held". The lock is read
+// again after the openers so that a free lock seen held only during another
+// process's probe also needs that probe to span both reads.
 func (c *Claims) ownsLock(thread string) error {
 	path := lockPath(c.opt.LockDir, thread)
-	held, err := c.opt.Sys.LockHeld(path)
-	if err != nil {
+	mu := probeLock(path)
+	mu.Lock()
+	defer mu.Unlock()
+	if err := c.held(path); err != nil {
 		return err
-	}
-	if !held {
-		return ErrLockFree
 	}
 	openers, err := c.opt.Sys.Openers(path)
 	if err != nil {
@@ -159,7 +164,25 @@ func (c *Claims) ownsLock(thread string) error {
 	if len(openers) > 1 {
 		return ErrSecondOpener
 	}
+	return c.held(path)
+}
+
+func (c *Claims) held(path string) error {
+	held, err := c.opt.Sys.LockHeld(path)
+	if err != nil {
+		return err
+	}
+	if !held {
+		return ErrLockFree
+	}
 	return nil
+}
+
+var probeLocks sync.Map
+
+func probeLock(path string) *sync.Mutex {
+	mu, _ := probeLocks.LoadOrStore(path, new(sync.Mutex))
+	return mu.(*sync.Mutex)
 }
 
 // proveTarget is the target obligation. A failing lock or opener read is
