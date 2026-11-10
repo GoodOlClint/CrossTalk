@@ -53,14 +53,14 @@ type Mailbox struct {
 	seq     int
 	tokens  int
 	entries map[string][]*entry
-	cursors map[string]map[string]bool
+	cursors map[string]map[string][]string // issued cursor -> the entries that pull returned
 	// AfterMark runs after a pull has marked entries collecting and released the lock,
 	// before the response is returned: the window where the response is in flight.
 	AfterMark func()
 }
 
 func NewMailbox(now func() time.Time, bound time.Duration) *Mailbox {
-	return &Mailbox{now: now, bound: bound, entries: map[string][]*entry{}, cursors: map[string]map[string]bool{}}
+	return &Mailbox{now: now, bound: bound, entries: map[string][]*entry{}, cursors: map[string]map[string][]string{}}
 }
 
 func (m *Mailbox) find(thread, id string) *entry {
@@ -114,12 +114,10 @@ func (m *Mailbox) State(thread, id string) EntryState {
 // settle applies the evidence rules; the caller holds the lock. Only a reply naming an
 // entry, a cursor an earlier pull issued, or an echoed token settles anything.
 func (m *Mailbox) settle(thread string, ev evidence) {
-	if ev.cursor != "" && m.cursors[thread][ev.cursor] {
-		if c := m.find(thread, ev.cursor); c != nil {
-			for _, e := range m.entries[thread] {
-				if e.seq <= c.seq && e.state == Collecting {
-					e.state = Accepted
-				}
+	if ev.cursor != "" {
+		for _, id := range m.cursors[thread][ev.cursor] {
+			if e := m.find(thread, id); e != nil && e.state == Collecting {
+				e.state = Accepted
 			}
 		}
 	}
@@ -137,8 +135,9 @@ func (m *Mailbox) settle(thread string, ev evidence) {
 	}
 }
 
-// Pull is receive_message. after must be a cursor an earlier pull for this thread issued;
-// it settles collecting entries at or before it. A pull without a cursor settles nothing.
+// Pull is receive_message. after must be the Next cursor of an earlier pull for this thread;
+// it settles only the entries that pull returned (not earlier pulls whose response may never
+// have arrived). A pull without a cursor settles nothing.
 func (m *Mailbox) Pull(thread, after string, limit int) PullResult {
 	m.mu.Lock()
 	m.settle(thread, evidence{cursor: after})
@@ -161,11 +160,9 @@ func (m *Mailbox) Pull(thread, after string, limit int) PullResult {
 	if len(res.Entries) > 0 {
 		res.Token = token
 		if m.cursors[thread] == nil {
-			m.cursors[thread] = map[string]bool{}
+			m.cursors[thread] = map[string][]string{}
 		}
-		for _, id := range res.Entries {
-			m.cursors[thread][id] = true
-		}
+		m.cursors[thread][res.Next] = res.Entries
 	}
 	hook := m.AfterMark
 	m.mu.Unlock()
@@ -226,4 +223,15 @@ func (m *Mailbox) ReplayAfterCrash() {
 			}
 		}
 	}
+}
+
+func (m *Mailbox) HasMailboxed(thread string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, e := range m.entries[thread] {
+		if e.state == Mailboxed {
+			return true
+		}
+	}
+	return false
 }

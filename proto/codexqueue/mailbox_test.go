@@ -254,3 +254,37 @@ func TestMailbox_ConcurrentListsAndPull_ExpectNeverAccepted_RaceDetector(t *test
 		t.Fatal("a list call settled the entry")
 	}
 }
+
+// Codex review finding 1: a cursor settles only the entries the pull that issued it returned.
+func TestMailbox_CursorOfReceivedPullBWhilePullAResponseWithheld_ExpectOnlyBSettled(t *testing.T) {
+	m, c := newMB()
+	m.Commit(th, "m1")
+	m.Commit(th, "m2")
+	var calls int
+	marked, proceed := make(chan struct{}), make(chan struct{})
+	m.AfterMark = func() {
+		calls++
+		if calls == 1 {
+			close(marked)
+			<-proceed
+		}
+	}
+	done := make(chan struct{})
+	go func() { defer close(done); m.Pull(th, "", 1) }()
+	<-marked
+	b := m.Pull(th, "", 10)
+	close(proceed)
+	<-done
+	if len(b.Entries) != 1 || b.Entries[0] != "m2" {
+		t.Fatalf("pull B %+v", b)
+	}
+	m.Pull(th, b.Next, 10)
+	if m.State(th, "m2") != Accepted || m.State(th, "m1") != Collecting {
+		t.Fatalf("m1 %v m2 %v: B's cursor must settle only B's entries", m.State(th, "m1"), m.State(th, "m2"))
+	}
+	c.Advance(time.Minute)
+	m.Expire()
+	if m.State(th, "m1") != Unknown {
+		t.Fatalf("m1 %v, want unknown at the bound", m.State(th, "m1"))
+	}
+}

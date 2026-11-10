@@ -78,3 +78,56 @@ func TestRouter_PullClosesGeneration_ExpectCollected(t *testing.T) {
 		t.Fatalf("%v", states(r.W, th))
 	}
 }
+
+// Codex review finding 2: an arrival during a paused pull must not lose its wake.
+func pausedPull(t *testing.T, r *Router, during func()) {
+	t.Helper()
+	marked, proceed := make(chan struct{}), make(chan struct{})
+	r.MB.AfterMark = func() { close(marked); <-proceed }
+	done := make(chan PullResult)
+	go func() { done <- r.Pull(th, "", 2) }()
+	<-marked
+	during()
+	close(proceed)
+	<-done
+	r.MB.AfterMark = nil
+}
+
+func TestRouter_ArrivalDuringPausedPullWithMoreFalse_ExpectNewGenerationAndRow(t *testing.T) {
+	r, q, _ := newRouter()
+	want := 1
+	r.Receive(th, "m1", true)
+	q.take(th)
+	pausedPull(t, r, func() { r.Receive(th, "m2", true) })
+	if q.count(th) != want || !eq(states(r.W, th), []GenState{GenCollected, GenQueued}) {
+		t.Fatalf("gens %v rows %d: m2 got no wake", states(r.W, th), q.count(th))
+	}
+	if res := r.Pull(th, "", 10); len(res.Entries) != 1 || res.Entries[0] != "m2" {
+		t.Fatalf("%+v", res)
+	}
+}
+
+func TestRouter_ArrivalDuringPausedPullWithMoreTrue_ExpectNoExtraWake(t *testing.T) {
+	r, q, _ := newRouter()
+	want := 0
+	for _, id := range []string{"m1", "m2", "m3"} {
+		r.Receive(th, id, true)
+	}
+	q.take(th)
+	pausedPull(t, r, func() { r.Receive(th, "m4", true) })
+	if q.count(th) != want || !eq(states(r.W, th), []GenState{GenCollected}) {
+		t.Fatalf("gens %v rows %d: the model is still draining, no second wake", states(r.W, th), q.count(th))
+	}
+}
+
+func TestRouter_ArrivalAfterPullResumes_ExpectNewGenerationAsBefore(t *testing.T) {
+	r, q, _ := newRouter()
+	want := 1
+	r.Receive(th, "m1", true)
+	q.take(th)
+	pausedPull(t, r, func() {})
+	r.Receive(th, "m2", true)
+	if q.count(th) != want || !eq(states(r.W, th), []GenState{GenCollected, GenQueued}) {
+		t.Fatalf("gens %v rows %d", states(r.W, th), q.count(th))
+	}
+}
