@@ -44,6 +44,7 @@ const (
 	hintNativeOneWayKept        = "Delivered one way to a session with no CrossTalk binding. It can answer with reply once it has used CrossTalk; until then, or if it never does, any answer comes as a new message, addressed to your agent_id, and may never come or may wait on that session's user."
 	hintPreBindNotKept          = "CrossTalk could not keep this message for that session's first CrossTalk call, so a reply from that session may not find it."
 	hintNoRouteUnbound          = "This session has no message with that id: check the message_id against receive_message. Use send_message to the sender."
+	hintNotCollected            = "That message is waiting in your mailbox and no receive_message has returned it yet. Call receive_message, then reply."
 	hintNoRoutePreBind          = "That message_id may predate this session's binding, so it may never have reached this session, or its record may have been trimmed. If unsure, check the message_id against receive_message; if it is right, use send_message to the agent_id the message shows as from-agent-id (Claude) or from_agent_id (Codex), or to the sender's name if it shows none."
 	hintNoRouteExpired          = "That inform has no open reply route: it was not delivered, it was already answered, or it is over an hour old. Use send_message to the sender."
 	hintCodexNoEndpoint         = "This Codex session has no app-server endpoint CrossTalk can reach, so it can send but not receive. It was launched with --no-daemon or a -c config override, either of which gives it a private app-server, or it is a codex exec run, which never receives. Tell its user to restart Codex without --no-daemon or -c and put any setting in ~/.codex/config.toml."
@@ -705,6 +706,13 @@ func (s *Shim) Reply(ctx context.Context, from *mcpserver.Agent, messageID, text
 		return mcpserver.Result{}, &mcpserver.Error{Code: mcpserver.CodeRejected, Reason: ReasonInboxCopy}
 	}
 	orig, key, ok := st.inbound(messageID)
+	if ok {
+		if err := st.rcv.Confirm(messageID); errors.Is(err, receiver.ErrNotCollected) {
+			return mcpserver.Result{}, &mcpserver.Error{Code: mcpserver.CodeInvalid, Reason: ReasonNotCollected, Hint: hintNotCollected}
+		} else if err != nil {
+			return mcpserver.Result{}, err
+		}
+	}
 	if !ok {
 		hint := hintNoRouteUnbound
 		if ts, ok := msg.UUIDv7Time(messageID); ok && ts.Before(st.boundAt.Truncate(time.Millisecond)) {
@@ -886,21 +894,21 @@ func (st *AgentState) retryObligations() {
 	}
 }
 
-func (s *Shim) Mailbox(ctx context.Context, of *mcpserver.Agent, after string, limit int) ([]mcpserver.MailboxEntry, error) {
+func (s *Shim) Mailbox(ctx context.Context, of *mcpserver.Agent, after string, limit int) ([]mcpserver.MailboxEntry, bool, error) {
 	st, err := s.state(of)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	es, err := st.rcv.Mailbox(after, limit)
+	es, more, err := st.rcv.Pull(after, limit)
 	if errors.Is(err, receiver.ErrUnknownCursor) {
-		return nil, &mcpserver.Error{Code: mcpserver.CodeInvalid, Reason: "after"}
+		return nil, false, &mcpserver.Error{Code: mcpserver.CodeInvalid, Reason: "after"}
 	}
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	out := make([]mcpserver.MailboxEntry, 0, len(es))
 	for _, e := range es {
-		me := mcpserver.MailboxEntry{Direction: e.Direction, MessageID: e.MessageID, TaskID: e.TaskID, InReplyTo: e.InReplyTo, From: e.From, To: e.To, Reason: e.Reason, State: adapter.State(e.State), InstanceID: e.InstanceID, SessionRef: e.SessionRef}
+		me := mcpserver.MailboxEntry{Direction: e.Direction, MessageID: e.MessageID, TaskID: e.TaskID, InReplyTo: e.InReplyTo, From: e.From, To: e.To, Reason: e.Reason, State: adapter.State(e.State), InstanceID: e.InstanceID, SessionRef: e.SessionRef, PossiblySeen: e.PossiblySeen}
 		if e.Message != nil {
 			me.Text = e.Message.Text()
 			if n, ok := st.harness.(harness.Noticer); ok {
@@ -909,5 +917,5 @@ func (s *Shim) Mailbox(ctx context.Context, of *mcpserver.Agent, after string, l
 		}
 		out = append(out, me)
 	}
-	return out, nil
+	return out, more, nil
 }

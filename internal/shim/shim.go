@@ -28,6 +28,7 @@ const (
 	ReasonSelf               = "self"
 	ReasonNativeInformOnly   = "native_inform_only"
 	ReasonNoSuchMessage      = "no_such_message"
+	ReasonNotCollected       = "not_collected"
 	ReasonSenderUnverified   = "sender_unverified"
 	ReasonNoReplyHook        = "no_reply_hook"
 	ReasonRemoteReplyPending = "remote_reply_pending"

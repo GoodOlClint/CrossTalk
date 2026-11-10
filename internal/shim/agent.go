@@ -331,3 +331,13 @@ func (i injector) Inject(ctx context.Context, m msg.Message, d adapter.Delivery)
 	d.ReplyAddress = i.reply
 	return i.Harness.Inject(ctx, m, d)
 }
+
+// MailSignal forwards to the harness when it implements adapter.MailSignaler.
+func (i injector) MailSignal(ctx context.Context, m msg.Message, d adapter.Delivery) error {
+	ms, ok := i.Harness.(adapter.MailSignaler)
+	if !ok {
+		return nil
+	}
+	d.ReplyAddress = i.reply
+	return ms.MailSignal(ctx, m, d)
+}

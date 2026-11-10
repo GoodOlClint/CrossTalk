@@ -204,6 +204,9 @@ type Receiver struct {
 	pending int
 	routes  []route
 
+	// pullMu serializes Pull and Confirm so a pull's read of entry states and its marks are one step.
+	pullMu sync.Mutex
+
 	beforeClaim func(messageID string)
 }
 
@@ -345,7 +348,8 @@ func (r *Receiver) receive(ctx context.Context, in Inbound, resume bool) Result 
 			return reject(ReasonJournal)
 		}
 	}
-	st, err := r.ad.Inject(ctx, m, adapter.Delivery{Mode: m.Delivery, Target: self.Binding, VerifiedSender: in.Sender.Verified, SenderHarness: in.Sender.Harness, Inbox: in.Inbox, InboxCopy: in.InboxCopy})
+	delivery := adapter.Delivery{Mode: m.Delivery, Target: self.Binding, VerifiedSender: in.Sender.Verified, SenderHarness: in.Sender.Harness, Inbox: in.Inbox, InboxCopy: in.InboxCopy}
+	st, err := r.ad.Inject(ctx, m, delivery)
 	if !st.Injectable() {
 		st = adapter.Unknown
 	}
@@ -361,10 +365,16 @@ func (r *Receiver) receive(ctx context.Context, in Inbound, resume bool) Result 
 		}
 	}
 	resolveErr := r.j.ResolveFor(scope, m.MessageID, string(st))
-	dedupeErr := r.j.SetDedupeState(key, m.MessageID, string(st))
+	var dedupeErr error
+	if resolveErr == nil {
+		dedupeErr = r.j.SetDedupeState(key, m.MessageID, string(st))
+	}
 	if resolveErr != nil || dedupeErr != nil {
 		r.j.SetDedupeState(key, m.MessageID, string(adapter.Unknown))
 		return Result{MessageID: m.MessageID, State: adapter.Unknown, Reason: ReasonJournal}
+	}
+	if ms, ok := r.ad.(adapter.MailSignaler); ok && st == adapter.Mailboxed {
+		ms.MailSignal(ctx, m, delivery)
 	}
 	return Result{MessageID: m.MessageID, State: st, Reason: reason}
 }
