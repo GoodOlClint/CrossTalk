@@ -1,4 +1,4 @@
-# ADR 0026 — Rename tool lets a session set its own name
+# ADR 0027 — Rename tool lets a session set its own name
 
 - **Status:** Provisional (operator 2026-11-09, ruling on #43; plan under review)
 - **Date:** 2026-11-09
@@ -44,8 +44,7 @@ This reverses the `rename` rejection in ADR 0024 (its Rejected alternatives entr
 - **Design changes when built:** §3 (the pin and the name record), §8 (the `rename` entry and the tool count), §11 (tests); `AGENTS.md`; the skill; `docs/how-it-works.md`, `docs/index.md`, `docs/contributing.md`; the hints for `invalid_name` and `name_held`.
 - **Files an implementation would touch:** `internal/identity` (validation), `internal/journal/journal.go` (the record), `internal/mcpserver/` (`server.go` pin rule and replay, a handler beside `claims.go`, `hints.go`), possibly `internal/registry/registry.go` (a retired registration refuses `Rename`).
 - **Tests that would pin it:** `TestValidName`, `TestNameRecordRetained`, `TestRenameChangesAliasKeepsAgentID`, `TestRenameNameHeldRejected`, `TestRenameInvalidName`, `TestRenameSameNameStillPins`, `TestFollowRenameIgnoresHarnessNameWhilePinned`, `TestUnpinnedFollowRenameUnchanged`, `TestRenameCodexThreadsIndependent`, `TestRenamePinSurvivesRestart`, `TestRenamePinHeldOnRestartRetriesWhenFree`, `TestRenameJournalFailureRollsBack`, `TestNameRecordSurvivesOldShimRewrite`.
-- **Overlap with ADR 0024 (#54).** Both add tools; the count after both is eleven. Docs should list the tools rather than count them where possible. ADR numbers may collide with the inbox build's ADRs; the later merge renumbers.
-
+- **Overlap with ADR 0024 (#54).** Both add tools; the count after both is eleven. Docs should list the tools rather than count them where possible.
 ## Open questions
 
 - Persist the pin across restart (recommended yes).
@@ -57,6 +56,6 @@ This reverses the `rename` rejection in ADR 0024 (its Rejected alternatives entr
 
 - Council verdict: none; the operator reviews the plan before any implementation.
 - Rests on: ADRs 0003, 0004, 0006, 0008, 0022 and 0024 (provisional).
-- Commits: `git log --grep 'Provisional-ADR: 0026'` (none yet).
+- Commits: `git log --grep 'Provisional-ADR: 0027'` (none yet).
 - Pinning test: the tests listed in Consequences.
 - Outcome: not built.

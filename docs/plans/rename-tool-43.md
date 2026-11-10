@@ -1,6 +1,6 @@
 # Plan: a `rename` tool for #43
 
-Status: draft for operator review. Brownfield-gate change plan; no code in this branch. Decision record: [ADR 0026](../decisions/0026-rename-tool-lets-a-session-set-its-own-name.md).
+Status: draft for operator review. Brownfield-gate change plan; no code in this branch. Decision record: [ADR 0027](../decisions/0027-rename-tool-lets-a-session-set-its-own-name.md).
 
 Terms used below. `agent_id`: the fixed 16-hex hash of (harness, session_ref) that keys all storage. Alias or name: the per-host display name that resolves `to` at send time, held under its own lock file (`names/<name>.lock`). `followRename`: the code that moves the alias when the harness's own name for the session changes (`internal/mcpserver/server.go`). Pin: a name the session set itself with `rename`, which harness-driven renames no longer override. Bind: the session's first CrossTalk call, which registers it. Pooling: one Codex process serving several threads.
 
@@ -8,7 +8,7 @@ Terms used below. `agent_id`: the fixed 16-hex hash of (harness, session_ref) th
 
 Goal: a launcher (or the session itself) can give a Codex session a name that `list_agents` shows and `to` resolves, because Codex has no launch-name flag and CrossTalk otherwise shows Codex's auto thread title (#43).
 
-Operator ruling (2026-11-09, on #43): build a `rename` tool; not an environment variable, not docs only. This overturns the first-draft rejection of `rename` in ADR 0024 (operator, 2026-11-07), so ADR 0026 records the reversal. This plan does not edit ADR 0024; the amendment is step 8 below, for the writer that owns that file.
+Operator ruling (2026-11-09, on #43): build a `rename` tool; not an environment variable, not docs only. This overturns the first-draft rejection of `rename` in ADR 0024 (operator, 2026-11-07), so ADR 0027 records the reversal. This plan does not edit ADR 0024; the amendment is step 8 below, for the writer that owns that file.
 
 ## 2. Existing state (what the tool must fit)
 
@@ -72,7 +72,7 @@ Success carries no hint. `unbound`, `not_ready` and `agent_held` come from the e
 ## 4. Public surface to change
 
 1. `docs/design.md` §8: "Seven tools" → "Eight tools" (or the count after merge order, see Open questions); a `rename(name)` entry with validation, `name_held`, the pin rule and the Codex launch pattern; §3 Name rule: add the pin to `followRename`; §3 journal list: the name record; §11: the new tests.
-2. `AGENTS.md` Architecture: "seven tools (...)" → the eight with `rename`; one clause pointing at ADR 0026; ADR 0024 is not edited here.
+2. `AGENTS.md` Architecture: "seven tools (...)" → the eight with `rename`; one clause pointing at ADR 0027; ADR 0024 is not edited here.
 3. `plugins/crosstalk/skills/crosstalk/SKILL.md`: add `rename` to the description's tool list, a "Which tool" bullet ("`rename` sets this session's own name; use it when a brief gives you a name, especially on Codex; the harness's name no longer overrides it"), and `invalid_name`, `name_held` under Recovery.
 4. `docs/how-it-works.md:16`, `docs/index.md:23`, `docs/contributing.md:41`: the count and the list.
 5. `docs/faq.md` if it answers "how do I name a session" (check at build); `docs/setup.md` and `README.md` count no tools and need no change.
@@ -89,7 +89,7 @@ Each commit lands with its test; "before" is what fails on the parent commit.
 5. **Registry-level guard.** If review of the retire path shows `Rename` can republish a retired descriptor (the known gap in design §3 Publish order), close it here: a retired registration refuses `Rename`. Test `TestRenameAfterReleaseNameRefused`. Skip this commit only if the gap is already fixed on main when the build starts.
 6. **Docs and skill.** Sections of §4. Test: the existing docs/manifest/version tests plus a check that the skill and `list_tools` name the same tools (`site_test.go` and `hints_test.go` as they stand; extend the one that compares tool lists).
 7. **End-to-end proof** (build-time, not a code commit): launch a Codex session with a prompt that calls `rename`, resolve it by name from a second session, send and reply, restart the Codex thread, resolve again. Recorded in the PR body.
-8. **ADR 0024 amendment** (separate, by that file's writer after both branches are on main): amend its Context, Decision intro and "Rejected alternatives" entry for `rename`, and its "How it answers #43" paragraph, to say `rename` exists (ADR 0026) and that the inbox answers a different need. Listed here, not done here.
+8. **ADR 0024 amendment** (separate, by that file's writer after both branches are on main): amend its Context, Decision intro and "Rejected alternatives" entry for `rename`, and its "How it answers #43" paragraph, to say `rename` exists (ADR 0027) and that the inbox answers a different need. Listed here, not done here.
 
 ## 6. Risks
 
@@ -99,7 +99,6 @@ Each commit lands with its test; "before" is what fails on the parent commit.
 - **Pin versus user intent on Claude.** A user's `/rename` after a model `rename` is ignored while pinned. Mitigation: the user asks the model to rename again; Open question.
 - **Retire race.** `Rename` after a retired registration could republish a descriptor (known gap in design §3). Tool calls are refused for a retiring agent, so only an in-flight call can hit it; commit 5 closes it.
 - **Journal growth.** One record kept per renamed session, replaced by key; negligible.
-- **ADR number collision.** The plan-54 worker may also take 0026; whichever merges second renumbers.
 
 ## 7. Open questions for the operator
 
@@ -119,4 +118,4 @@ One pass, `adversarial-review --base main` with this plan's path as focus; full 
 
 1. **[high] Pinned sessions cannot retry the pin after a restart found the name held.** Fixed: sections 3.3 and the ADR now say a pinned session retries `Rename(pinned)` on every call, including with an empty harness name; commit 4 gains `TestRenamePinHeldOnRestartRetriesWhenFree`.
 2. **[medium] An older shim's journal rewrite drops the unknown name record.** Fixed: section 8 states the downgrade policy (the pin is lost silently, `rename` again restores it) and commit 4 pins that outcome with `TestNameRecordSurvivesOldShimRewrite`. Not rejected, but the reviewer's "round-trip preserves the pin" test is replaced by one asserting a silent, non-fatal loss, because preserving unknown fields across versions would need a journal format change that this ticket does not justify.
-3. **[medium] ADR 0026 was empty and the ADR 0024 conflict unresolved.** Fixed: the ADR is written (the first Write failed on a missing prior read, so the commit saw only the template until this revision). The ADR now names the ADR 0024 passages it reverses and says the amendment lands before the build starts; the amendment itself stays a step for that file's writer (plan §5, step 8), because one writer owns ADR 0024.
+3. **[medium] ADR 0027 was empty and the ADR 0024 conflict unresolved.** Fixed: the ADR is written (the first Write failed on a missing prior read, so the commit saw only the template until this revision). The ADR now names the ADR 0024 passages it reverses and says the amendment lands before the build starts; the amendment itself stays a step for that file's writer (plan §5, step 8), because one writer owns ADR 0024.
