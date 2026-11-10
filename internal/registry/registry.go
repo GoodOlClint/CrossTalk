@@ -201,7 +201,7 @@ func (g *Registration) Name() string {
 func (g *Registration) hasInbox(name string) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	return slices.ContainsFunc(g.desc.Inboxes, func(m InboxMembership) bool { return m.Name == name })
+	return slices.ContainsFunc(g.desc.Inboxes, func(m InboxMembership) bool { return strings.EqualFold(m.Name, name) })
 }
 
 // setInboxes replaces the membership list and, once published, rewrites the

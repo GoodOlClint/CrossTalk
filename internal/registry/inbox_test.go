@@ -461,3 +461,34 @@ func ids(t *testing.T, r *Registry, name string) []string {
 	}
 	return out
 }
+
+func TestInboxNamesCaseInsensitive(t *testing.T) {
+	e := newInboxEnv(t)
+	a, b := e.agent("a"), e.agent("b")
+	if _, err := e.r.AttachInbox(a, "Coord", noHook); err != nil {
+		t.Fatal(err)
+	}
+	_, err := e.r.AttachInbox(b, "coord", noHook)
+	wantErr(t, err, ErrNotGranted)
+	if f := e.file("COORD"); f.Name != "coord" || f.Owner != id("a") {
+		t.Fatalf("file %+v", f)
+	}
+	entries, err := os.ReadDir(filepath.Join(e.r.Dir, "inboxes"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, en := range entries {
+		if en.Name() != "coord.json" && en.Name() != "coord.lock" {
+			t.Fatalf("unexpected file %s", en.Name())
+		}
+	}
+	if got := ids(t, e.r, "cOORD"); !slices.Equal(got, []string{id("a")}) {
+		t.Fatalf("members %v", got)
+	}
+	if _, err := e.r.GrantInbox(a, "COORD", id("b"), false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.r.AttachInbox(b, "cOord", noHook); err != nil {
+		t.Fatal(err)
+	}
+}

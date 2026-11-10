@@ -62,8 +62,12 @@ type InboxState struct {
 
 func (r *Registry) inboxesDir() string { return filepath.Join(r.Dir, "inboxes") }
 
+// Inbox names compare without case; every exported entry point lowercases the
+// name before it reaches a file, a lock or a descriptor.
+func canonInbox(name string) string { return strings.ToLower(name) }
+
 func (r *Registry) inboxPath(name string) string {
-	return filepath.Join(r.inboxesDir(), fileSafe(name)+".json")
+	return filepath.Join(r.inboxesDir(), fileSafe(canonInbox(name))+".json")
 }
 
 func (r *Registry) now() time.Time {
@@ -99,7 +103,7 @@ func (r *Registry) lockInbox(name string) (*os.File, error) {
 	if err := os.MkdirAll(r.inboxesDir(), 0o700); err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(filepath.Join(r.inboxesDir(), fileSafe(name)+".lock"), os.O_RDWR|os.O_CREATE, 0o600)
+	f, err := os.OpenFile(filepath.Join(r.inboxesDir(), fileSafe(canonInbox(name))+".lock"), os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
 		return nil, err
 	}
@@ -118,6 +122,7 @@ func (r *Registry) lockInbox(name string) (*os.File, error) {
 
 // ReadInbox returns the inbox file; ok is false when there is none.
 func (r *Registry) ReadInbox(name string) (InboxFile, bool, error) {
+	name = canonInbox(name)
 	b, err := os.ReadFile(r.inboxPath(name))
 	if errors.Is(err, os.ErrNotExist) {
 		return InboxFile{}, false, nil
@@ -149,19 +154,20 @@ func (r *Registry) holdsInbox(agentID, name string) bool {
 	if err != nil || !r.Live(d) || r.IsSuperseded(d) {
 		return false
 	}
-	return slices.ContainsFunc(d.Inboxes, func(m InboxMembership) bool { return m.Name == name })
+	return slices.ContainsFunc(d.Inboxes, func(m InboxMembership) bool { return strings.EqualFold(m.Name, name) })
 }
 
 // InboxMembers returns the live, non-superseded descriptors that list the
 // inbox, responder first: latest attached_at, ties to the lower agent_id.
 func (r *Registry) InboxMembers(name string) ([]Descriptor, error) {
+	name = canonInbox(name)
 	ds, err := r.List()
 	if err != nil {
 		return nil, err
 	}
 	at := func(d Descriptor) (time.Time, bool) {
 		for _, m := range d.Inboxes {
-			if m.Name == name {
+			if strings.EqualFold(m.Name, name) {
 				return m.AttachedAt, true
 			}
 		}
@@ -216,7 +222,7 @@ func (r *Registry) join(g *Registration, name string, at time.Time, hook InboxHo
 	if err := hook(InboxEvent{Inbox: name, Attached: true, At: at}); err != nil {
 		return err
 	}
-	list := slices.DeleteFunc(slices.Clone(g.Descriptor().Inboxes), func(m InboxMembership) bool { return m.Name == name })
+	list := slices.DeleteFunc(slices.Clone(g.Descriptor().Inboxes), func(m InboxMembership) bool { return strings.EqualFold(m.Name, name) })
 	return g.setInboxes(append(list, InboxMembership{Name: name, AttachedAt: at}))
 }
 
@@ -224,12 +230,13 @@ func (r *Registry) leave(g *Registration, name string, hook InboxHook) error {
 	if err := hook(InboxEvent{Inbox: name, Attached: false, At: r.now()}); err != nil {
 		return err
 	}
-	return g.setInboxes(slices.DeleteFunc(slices.Clone(g.Descriptor().Inboxes), func(m InboxMembership) bool { return m.Name == name }))
+	return g.setInboxes(slices.DeleteFunc(slices.Clone(g.Descriptor().Inboxes), func(m InboxMembership) bool { return strings.EqualFold(m.Name, name) }))
 }
 
 // AttachInbox adds g to the inbox, creating the inbox with g as owner when it
 // has no file. A caller already in the inbox succeeds without change.
 func (r *Registry) AttachInbox(g *Registration, name string, hook InboxHook) (InboxState, error) {
+	name = canonInbox(name)
 	if err := ValidInboxName(name); err != nil {
 		return InboxState{}, err
 	}
@@ -269,6 +276,7 @@ func (r *Registry) AttachInbox(g *Registration, name string, hook InboxHook) (In
 // DetachInbox removes g from the inbox. An owner that detaches leaves the
 // inbox ownerless and is added to its grants.
 func (r *Registry) DetachInbox(g *Registration, name string, hook InboxHook) (InboxState, error) {
+	name = canonInbox(name)
 	if err := ValidInboxName(name); err != nil {
 		return InboxState{}, err
 	}
@@ -300,6 +308,7 @@ func (r *Registry) DetachInbox(g *Registration, name string, hook InboxHook) (In
 // instead, which must already be a member, and adds the old owner to the
 // grants; only the live owner may grant.
 func (r *Registry) GrantInbox(g *Registration, name, to string, handOver bool) (InboxState, error) {
+	name = canonInbox(name)
 	if err := ValidInboxName(name); err != nil {
 		return InboxState{}, err
 	}
@@ -338,6 +347,7 @@ func (r *Registry) GrantInbox(g *Registration, name, to string, handOver bool) (
 // ClaimInbox makes g the owner and a member of an ownerless inbox, which keeps
 // its grants. The live owner claiming again succeeds without change.
 func (r *Registry) ClaimInbox(g *Registration, name string, hook InboxHook) (InboxState, error) {
+	name = canonInbox(name)
 	if err := ValidInboxName(name); err != nil {
 		return InboxState{}, err
 	}
@@ -377,6 +387,7 @@ func (r *Registry) ClaimInbox(g *Registration, name string, hook InboxHook) (Inb
 // owner or lists it in grants; otherwise the membership is dropped and the
 // hook reports the detach.
 func (r *Registry) ResumeInbox(g *Registration, m InboxMembership, hook InboxHook) (bool, error) {
+	m.Name = canonInbox(m.Name)
 	if err := ValidInboxName(m.Name); err != nil {
 		return false, err
 	}
