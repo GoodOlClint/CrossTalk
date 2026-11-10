@@ -86,15 +86,16 @@ func (f *FakeBackend) Ask(_ context.Context, a *Agent, r AskRequest) (Result, er
 	return Result{MessageID: msg.NewUUIDv7(), State: adapter.Accepted}, nil
 }
 
-func (f *FakeBackend) Mailbox(_ context.Context, a *Agent, after string, limit int) ([]MailboxEntry, error) {
+func (f *FakeBackend) Mailbox(_ context.Context, a *Agent, after string, limit int) ([]MailboxEntry, bool, error) {
 	f.record(FakeCall{Op: "mailbox", MessageID: after}, a)
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	es := f.mailbox[a.ID()]
+	more := false
 	if limit > 0 && len(es) > limit {
-		es = es[:limit]
+		es, more = es[:limit], true
 	}
-	return es, nil
+	return es, more, nil
 }
 
 func (f *FakeBackend) Claim(_ context.Context, a *Agent, t registry.Descriptor) error {

@@ -54,7 +54,23 @@ const (
 	StateRemoved     = "removed"
 	StateRejected    = "rejected"
 	StateUnreachable = "unreachable"
+	// Inbound mailbox entry states, in rising rank (ADR 0028): a dedupe
+	// record or outcome never moves to a lower rank once one is journaled.
+	StateMailboxed = "mailboxed"
+	StateConfirmed = "confirmed"
 )
+
+func mailRank(state string) int {
+	switch state {
+	case StateMailboxed:
+		return 1
+	case StateDelivered:
+		return 2
+	case StateConfirmed:
+		return 3
+	}
+	return 0
+}
 
 type Binding struct {
 	InstanceID      string `json:"instance_id"`
@@ -172,7 +188,7 @@ func unresolved(latest Record) bool {
 	switch latest.Type {
 	case TypeDedupe, TypeTask:
 		switch latest.State {
-		case StateSubmitted, StateWorking, StateDispatching, StateUnknown, StateRecovered:
+		case StateSubmitted, StateWorking, StateDispatching, StateUnknown, StateRecovered, StateMailboxed, StateDelivered:
 			return true
 		}
 	case TypeDispatch:
@@ -472,6 +488,9 @@ func (j *Journal) appendLocked(r Record) (Record, error) {
 	if j.f == nil {
 		return Record{}, ErrClosed
 	}
+	if cur, ok := j.regressed(r); ok {
+		return cur, nil
+	}
 	if j.beforeAppend != nil {
 		if err := j.beforeAppend(r); err != nil {
 			return Record{}, err
@@ -515,6 +534,25 @@ func (j *Journal) appendLocked(r Record) (Record, error) {
 	}
 	j.index(r)
 	return r, nil
+}
+
+// regressed reports whether r would move a mailbox entry to a state of equal
+// or lower rank than its journaled one; such a record is dropped. An outcome
+// is compared against the dedupe record of its message_id, which has one sender.
+func (j *Journal) regressed(r Record) (Record, bool) {
+	switch r.Type {
+	case TypeDedupe:
+		if cur, ok := j.latest[r.key()]; ok && mailRank(cur.State) > 0 && mailRank(r.State) <= mailRank(cur.State) {
+			return cur, true
+		}
+	case TypeOutcome:
+		for s := range j.idSenders[r.MessageID] {
+			if cur, ok := j.latest[Record{Type: TypeDedupe, Sender: s, MessageID: r.MessageID}.key()]; ok && mailRank(cur.State) > 0 && mailRank(r.State) < mailRank(cur.State) {
+				return cur, true
+			}
+		}
+	}
+	return Record{}, false
 }
 
 // Append durably records r. At and Binding default to now and the journal's binding.

@@ -11,6 +11,9 @@ import (
 
 var ErrUnknownCursor = errors.New("receiver: after names no journaled message")
 
+// ErrNotCollected is what Confirm returns for an entry no pull has returned yet.
+var ErrNotCollected = errors.New("receiver: entry is mailboxed, not collected")
+
 const (
 	DirectionInbound  = "inbound"
 	DirectionOutbound = "outbound"
@@ -28,11 +31,14 @@ type Entry struct {
 	InstanceID string       `json:"instance_id"`
 	SessionRef string       `json:"session_ref"`
 	Message    *msg.Message `json:"message,omitempty"`
+	// PossiblySeen marks a delivered entry returned again: an earlier pull may not have reached the model.
+	PossiblySeen bool `json:"possibly_seen,omitempty"`
 }
 
 // MailboxStates are the states receive_message returns by default (§8);
-// accepted and queued are delivered by the harness itself.
-var MailboxStates = []adapter.State{adapter.Unreachable, adapter.Unknown, adapter.Bounced, adapter.State(journal.StateRecovered)}
+// accepted and queued are delivered by the harness itself, and confirmed
+// entries have been seen.
+var MailboxStates = []adapter.State{adapter.Unreachable, adapter.Unknown, adapter.Bounced, adapter.State(journal.StateRecovered), adapter.Mailboxed, adapter.State(journal.StateDelivered)}
 
 // Admitted reports whether a dedupe state is one the receiver writes only
 // after the message passed hop, policy and size admission and was claimed
@@ -41,7 +47,7 @@ var MailboxStates = []adapter.State{adapter.Unreachable, adapter.Unknown, adapte
 // messages) are not evidence of admission.
 func Admitted(state string) bool {
 	switch adapter.State(state) {
-	case adapter.Accepted, adapter.Queued, adapter.Unknown:
+	case adapter.Accepted, adapter.Queued, adapter.Unknown, adapter.Mailboxed, adapter.State(journal.StateDelivered), adapter.State(journal.StateConfirmed):
 		return true
 	}
 	return false
@@ -97,14 +103,44 @@ type mailKey struct {
 	out bool
 }
 
-// Mailbox returns, in journal order, the inbound messages whose latest state
-// is unreachable, unknown, bounced or recovered, and the outbound messages whose
-// latest state is unknown. after is a message_id cursor over the whole
-// journal; limit <= 0 means no limit.
+// Mailbox is Pull without the drain flag.
 func (r *Receiver) Mailbox(after string, limit int) ([]Entry, error) {
+	es, _, err := r.Pull(after, limit)
+	return es, err
+}
+
+// Confirm records that a reply named messageID: a delivered entry becomes
+// confirmed, a confirmed one stays so, and a mailboxed one is ErrNotCollected.
+// An id that names no inbound entry is a no-op.
+func (r *Receiver) Confirm(messageID string) error {
+	r.pullMu.Lock()
+	defer r.pullMu.Unlock()
+	sender, ok := r.j.DedupeSender(messageID)
+	if !ok {
+		return nil
+	}
+	switch st, _ := r.j.Dedupe(sender, messageID); st {
+	case journal.StateMailboxed:
+		return ErrNotCollected
+	case journal.StateDelivered:
+		return r.j.SetDedupeState(sender, messageID, journal.StateConfirmed)
+	}
+	return nil
+}
+
+// Pull returns, in journal order, the inbound messages whose latest state
+// is unreachable, unknown, bounced, recovered, mailboxed or delivered, and the outbound messages whose
+// latest state is unknown. A mailboxed entry is marked delivered by the pull
+// that returns it; a delivered one is returned again with PossiblySeen and
+// marked confirmed (ADR 0028, R191). more is true when the page limit left
+// mailboxed entries behind. after is a message_id cursor over the whole
+// journal and settles nothing; limit <= 0 means no limit.
+func (r *Receiver) Pull(after string, limit int) ([]Entry, bool, error) {
+	r.pullMu.Lock()
+	defer r.pullMu.Unlock()
 	rs, err := r.j.Records()
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	_, idx := dedupeEntries(rs)
 	outs := map[string]*outboundState{}
@@ -143,11 +179,14 @@ func (r *Receiver) Mailbox(after string, limit int) ([]Entry, error) {
 			}
 		}
 		if start < 0 {
-			return nil, ErrUnknownCursor
+			return nil, false, ErrUnknownCursor
 		}
 	}
 	var out []Entry
-	for _, mk := range order[start:] {
+	var keys []dedupeKey
+	stopped := len(order)
+	for oi := start; oi < len(order); oi++ {
+		mk := order[oi]
 		k := mk.dedupeKey
 		if mk.out {
 			o := outs[k.id]
@@ -169,8 +208,9 @@ func (r *Receiver) Mailbox(after string, limit int) ([]Entry, error) {
 					en.Message = &m
 				}
 			}
-			out = append(out, en)
+			out, keys = append(out, en), append(keys, dedupeKey{})
 			if limit > 0 && len(out) == limit {
+				stopped = oi + 1
 				break
 			}
 			continue
@@ -186,12 +226,38 @@ func (r *Receiver) Mailbox(after string, limit int) ([]Entry, error) {
 				en.Message, en.From, en.TaskID, en.InReplyTo = &m, m.From, m.TaskID, m.InReplyTo
 			}
 		}
-		out = append(out, en)
+		if e.latest.State == journal.StateDelivered {
+			en.PossiblySeen = true
+		}
+		out, keys = append(out, en), append(keys, k)
 		if limit > 0 && len(out) == limit {
+			stopped = oi + 1
 			break
 		}
 	}
-	return out, nil
+	more := false
+	for _, mk := range order[stopped:] {
+		if !mk.out && idx[mk.dedupeKey].latest.State == journal.StateMailboxed {
+			more = true
+		}
+	}
+	for i := range out {
+		if keys[i] == (dedupeKey{}) || out[i].State != journal.StateMailboxed && !out[i].PossiblySeen {
+			continue
+		}
+		next := journal.StateDelivered
+		if out[i].PossiblySeen {
+			next = journal.StateConfirmed
+		}
+		if err := r.j.SetDedupeState(keys[i].sender, keys[i].id, next); err != nil {
+			if i == 0 {
+				return nil, false, err
+			}
+			return out[:i], true, nil
+		}
+		out[i].State = journal.StateDelivered
+	}
+	return out, more, nil
 }
 
 // Recover applies the §5 replay rules after journal.Open: an unresolved

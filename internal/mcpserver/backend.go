@@ -59,6 +59,8 @@ type MailboxEntry struct {
 	Notice     string `json:"notice,omitempty"`
 	InstanceID string `json:"instance_id"`
 	SessionRef string `json:"session_ref"`
+	// PossiblySeen marks a delivered entry returned again because an earlier pull may not have reached the model.
+	PossiblySeen bool `json:"possibly_seen,omitempty"`
 }
 
 // Session is one harness session a Backend can see.
@@ -70,7 +72,8 @@ type Backend interface {
 	Send(ctx context.Context, from *Agent, req SendRequest) (Result, error)
 	Reply(ctx context.Context, from *Agent, messageID, text string) (Result, error)
 	Ask(ctx context.Context, from *Agent, req AskRequest) (Result, error)
-	Mailbox(ctx context.Context, of *Agent, after string, limit int) ([]MailboxEntry, error)
+	// Mailbox returns a page of entries and whether mailboxed entries remain behind the page limit.
+	Mailbox(ctx context.Context, of *Agent, after string, limit int) ([]MailboxEntry, bool, error)
 	Claim(ctx context.Context, owner *Agent, target registry.Descriptor) error
 	Release(ctx context.Context, owner *Agent, target registry.Descriptor) error
 	Discover(ctx context.Context) ([]Session, error)
@@ -166,8 +169,8 @@ func (Unwired) Reply(context.Context, *Agent, string, string) (Result, error) {
 	return Result{}, errUnwired
 }
 func (Unwired) Ask(context.Context, *Agent, AskRequest) (Result, error) { return Result{}, errUnwired }
-func (Unwired) Mailbox(context.Context, *Agent, string, int) ([]MailboxEntry, error) {
-	return nil, nil
+func (Unwired) Mailbox(context.Context, *Agent, string, int) ([]MailboxEntry, bool, error) {
+	return nil, false, nil
 }
 func (Unwired) Claim(context.Context, *Agent, registry.Descriptor) error   { return errUnwired }
 func (Unwired) Release(context.Context, *Agent, registry.Descriptor) error { return errUnwired }

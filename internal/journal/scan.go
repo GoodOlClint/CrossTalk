@@ -52,3 +52,14 @@ func (j *Journal) IDHeldByOther(sender, messageID string) bool {
 	}
 	return false
 }
+
+// DedupeSender returns the sender key holding the dedupe record for
+// messageID; a message_id has at most one.
+func (j *Journal) DedupeSender(messageID string) (string, bool) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	for s := range j.idSenders[messageID] {
+		return s, true
+	}
+	return "", false
+}

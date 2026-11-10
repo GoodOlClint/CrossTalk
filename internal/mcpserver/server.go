@@ -626,20 +626,24 @@ func (s *Server) addTools() {
 
 	boundTool(s, &mcp.Tool{
 		Name:        "receive_message",
-		Description: "Pull mailbox entries the harness did not deliver (inbound unreachable, unknown, recovered, bounced) and your own sends still unknown, e.g. pending far-side tasks (direction outbound). after is a message_id cursor over the full journal ordering, but the state filter always applies: accepted and queued messages are never returned.",
+		Description: "Pull mailbox entries the harness did not deliver (inbound unreachable, unknown, recovered, bounced, mailboxed, delivered) and your own sends still unknown, e.g. pending far-side tasks (direction outbound). after is a message_id cursor over the full journal ordering, but the state filter always applies: accepted, queued and confirmed messages are never returned. A mailboxed entry is marked delivered by the pull that returns it; a delivered entry is returned once more with possibly_seen true, then confirmed; a reply naming it confirms it at any time. more is true when mailboxed entries remain behind the limit.",
 		InputSchema: schemaFor[receiveIn](func(sch *jsonschema.Schema) {
 			zero := 0.0
 			sch.Properties["limit"].Minimum = &zero
 		}),
 	}, func(ctx context.Context, a *Agent, in receiveIn) (any, error) {
-		es, err := s.backend.Mailbox(ctx, a, in.After, in.Limit)
+		es, more, err := s.backend.Mailbox(ctx, a, in.After, in.Limit)
 		if err != nil {
 			return nil, err
 		}
 		if es == nil {
 			es = []MailboxEntry{}
 		}
-		return map[string]any{"messages": es}, nil
+		out := map[string]any{"messages": es}
+		if more {
+			out["more"] = true
+		}
+		return out, nil
 	})
 
 	s.addClaimTools()
