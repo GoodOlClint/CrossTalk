@@ -131,3 +131,56 @@ func TestRouter_ArrivalAfterPullResumes_ExpectNewGenerationAsBefore(t *testing.T
 		t.Fatalf("gens %v rows %d", states(r.W, th), q.count(th))
 	}
 }
+
+// Verifier-found: a no-wake entry (route row 4) arriving during a paused pull must not get a wake.
+func TestRouter_NoWakeArrivalDuringPausedPull_ExpectNoRow(t *testing.T) {
+	r, q, _ := newRouter()
+	r.Receive(th, "m1", true)
+	q.take(th)
+	pausedPull(t, r, func() { r.Receive(th, "m2", false) })
+	if q.count(th) != 0 || !eq(states(r.W, th), []GenState{GenCollected}) {
+		t.Fatalf("row-4 (no wake) entry got a wake: gens %v rows %d", states(r.W, th), q.count(th))
+	}
+	if res := r.Pull(th, "", 10); len(res.Entries) != 1 || res.Entries[0] != "m2" {
+		t.Fatalf("the no-wake entry must stay pullable: %+v", res)
+	}
+}
+
+func TestRouter_WakeEligibleAndNoWakeArrivalsDuringPausedPull_ExpectOneRow(t *testing.T) {
+	r, q, _ := newRouter()
+	r.Receive(th, "m1", true)
+	q.take(th)
+	pausedPull(t, r, func() { r.Receive(th, "m2", false); r.Receive(th, "m3", true) })
+	if q.count(th) != 1 || len(r.W.Gens(th)) != 2 {
+		t.Fatalf("gens %v rows %d", states(r.W, th), q.count(th))
+	}
+}
+
+func TestRouter_TwoPausedPullsBothRecheck_ExpectOneRow(t *testing.T) {
+	r, q, _ := newRouter()
+	r.Receive(th, "m1", true)
+	q.take(th)
+	var n int
+	ma, mb, go1 := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	r.MB.AfterMark = func() {
+		n++
+		if n == 1 {
+			close(ma)
+		} else {
+			close(mb)
+		}
+		<-go1
+	}
+	da, db := make(chan PullResult), make(chan PullResult)
+	go func() { da <- r.Pull(th, "", 10) }()
+	<-ma
+	go func() { db <- r.Pull(th, "", 10) }()
+	<-mb
+	r.Receive(th, "m2", true)
+	close(go1)
+	<-da
+	<-db
+	if q.count(th) != 1 {
+		t.Fatalf("gens %v rows %d", states(r.W, th), q.count(th))
+	}
+}

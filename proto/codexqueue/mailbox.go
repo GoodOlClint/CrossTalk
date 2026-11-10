@@ -27,6 +27,7 @@ type entry struct {
 	state       EntryState
 	token       string
 	collectedAt time.Time
+	wake        bool
 }
 
 // evidence is what a call offers as proof of receipt; every call, evidence or not, goes
@@ -72,14 +73,18 @@ func (m *Mailbox) find(thread, id string) *entry {
 	return nil
 }
 
-func (m *Mailbox) Commit(thread, id string) {
+func (m *Mailbox) Commit(thread, id string) { m.CommitWake(thread, id, false) }
+
+// CommitWake records an entry; wake says it arrived on a route that may start a wake
+// (plan 3.1 row 5), as opposed to mailbox-only (row 4).
+func (m *Mailbox) CommitWake(thread, id string, wake bool) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.find(thread, id) != nil {
 		return
 	}
 	m.seq++
-	m.entries[thread] = append(m.entries[thread], &entry{id: id, seq: m.seq})
+	m.entries[thread] = append(m.entries[thread], &entry{id: id, seq: m.seq, wake: wake})
 }
 
 func allowed(from, to EntryState) bool {
@@ -225,11 +230,11 @@ func (m *Mailbox) ReplayAfterCrash() {
 	}
 }
 
-func (m *Mailbox) HasMailboxed(thread string) bool {
+func (m *Mailbox) HasWakeEligible(thread string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, e := range m.entries[thread] {
-		if e.state == Mailboxed {
+		if e.state == Mailboxed && e.wake {
 			return true
 		}
 	}
