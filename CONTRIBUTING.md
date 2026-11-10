@@ -33,7 +33,7 @@ CI (`.github/workflows/ci.yml`) runs these on Linux and macOS for every pull req
 | Path | What it holds |
 |---|---|
 | `cmd/crosstalk` | The command line: `mcp`, `install`, `uninstall`, `reinstall`, `send`, `capture`, `version`. The one place that lists the harnesses. |
-| `internal/mcpserver` | The seven MCP tools the model sees, their result shapes and hints. |
+| `internal/mcpserver` | The MCP tools the model sees, their result shapes and hints. |
 | `internal/shim` | The shim's per-agent state: send, reply, ask deadlines, the per-peer nudge. |
 | `internal/receiver` | The one receiver chain every inbound message passes through. |
 | `internal/a2a`, `internal/udsingress` | The two ingress points: A2A over loopback HTTP, and a unix socket that speaks Claude Code's protocol. |

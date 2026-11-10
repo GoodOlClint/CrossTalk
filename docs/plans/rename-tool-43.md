@@ -25,7 +25,7 @@ Operator ruling (2026-11-09, on #43): build a `rename` tool; not an environment 
 
 ### 3.1 Tool
 
-`rename(name)` → `{name, previous}`, plus `notice` through the existing `withNotice`. The eighth tool, served to bound callers only (`boundTool`); an unbound call gets `unbound` like every tool but `list_agents`.
+`rename(name)` → `{name, previous}`, plus `notice` through the existing `withNotice`. A new tool, served to bound callers only (`boundTool`); an unbound call gets `unbound` like every tool but `list_agents`.
 
 - Acts on the calling agent, from request identity (Claude parent pid, Codex `_meta.threadId`; ADR 0004, 0006). There is no target argument, so no session can rename another, and no message, envelope or peer can invoke it.
 - Any bound caller may call it, primary or subagent: a name is an alias, and a claim gives the owner no say over its subagent's name.
@@ -71,8 +71,8 @@ Success carries no hint. `unbound`, `not_ready` and `agent_held` come from the e
 
 ## 4. Public surface to change
 
-1. `docs/design.md` §8: "Seven tools" → "Eight tools" (or the count after merge order, see Open questions); a `rename(name)` entry with validation, `name_held`, the pin rule and the Codex launch pattern; §3 Name rule: add the pin to `followRename`; §3 journal list: the name record; §11: the new tests.
-2. `AGENTS.md` Architecture: "seven tools (...)" → the eight with `rename`; one clause pointing at ADR 0027; ADR 0024 is not edited here.
+1. `docs/design.md` §8: the tool list gains `rename` (listed, not counted: section 7); a `rename(name)` entry with validation, `name_held`, the pin rule and the Codex launch pattern; §3 Name rule: add the pin to `followRename`; §3 journal list: the name record; §11: the new tests.
+2. `AGENTS.md` Architecture: the tool list gains `rename`, with no count; one clause pointing at ADR 0027; ADR 0024 is not edited here.
 3. `plugins/crosstalk/skills/crosstalk/SKILL.md`: add `rename` to the description's tool list, a "Which tool" bullet ("`rename` sets this session's own name; use it when a brief gives you a name, especially on Codex; the harness's name no longer overrides it"), and `invalid_name`, `name_held` under Recovery.
 4. `docs/how-it-works.md:16`, `docs/index.md:23`, `docs/contributing.md:41`: the count and the list.
 5. `docs/faq.md` if it answers "how do I name a session" (check at build); `docs/setup.md` and `README.md` count no tools and need no change.
