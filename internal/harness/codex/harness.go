@@ -31,12 +31,16 @@ type HarnessOptions struct {
 	Directory interface {
 		List() ([]registry.Descriptor, error)
 	}
+	// Claims configures ServeClaims.
+	Claims ClaimsConfig
 }
 
 // Harness is Codex behind harness.Harness: the caller is _meta.threadId,
 // the binding is the one endpoint that has the thread loaded.
 type Harness struct {
 	Threads
+	claims ClaimsConfig
+	logger *slog.Logger
 }
 
 var _ harness.Harness = (*Harness)(nil)
@@ -49,7 +53,7 @@ func NewHarness(opt HarnessOptions) *Harness {
 	if a, ok := t.(*Adapter); ok && opt.Directory != nil {
 		a.Directory = opt.Directory
 	}
-	return &Harness{Threads: t}
+	return &Harness{Threads: t, claims: opt.Claims, logger: opt.Logger}
 }
 
 func (h *Harness) Name() adapter.Harness { return adapter.Codex }
