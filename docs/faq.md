@@ -52,7 +52,7 @@ It means the message went into the other session. It does not mean the model rea
 
 ## Why did my `ask` come back `native_inform_only`?
 
-The target is a session that has not made a CrossTalk call yet, so CrossTalk has no binding for it. Send a plain `send_message`. After the session's first CrossTalk call, `ask` works. A Claude session nobody has typed into yet cannot answer: type one line in it first.
+The target is a session that has not made a CrossTalk call yet, so CrossTalk has no binding for it. Send a plain `send_message`. After the session's first CrossTalk call, `ask` works. A Claude session nobody has typed into yet cannot answer: type one line in it first. Once the target has made its first CrossTalk call it can answer an inform it received before that with `reply`, for an hour after the message was sent; if `reply` says `no_such_message`, the message was not kept and the target answers with `send_message` to the sender's agent_id shown in the message.
 
 ## Why did a native `SendMessage` reply come back to my own session?
 

@@ -2,6 +2,8 @@ package shim
 
 import (
 	"context"
+	"encoding/json"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -11,6 +13,7 @@ import (
 	"github.com/GoodOlClint/crosstalk/internal/journal"
 	"github.com/GoodOlClint/crosstalk/internal/mcpserver"
 	"github.com/GoodOlClint/crosstalk/internal/msg"
+	"github.com/GoodOlClint/crosstalk/internal/prebind"
 )
 
 func TestIdenticalReplyRetryReturnsFirstResult(t *testing.T) {
@@ -129,5 +132,144 @@ func TestNotDeliveredHintRemoteSenderNamesNoDestination(t *testing.T) {
 	got := notDeliveredHint(msg.Message{From: "alice@lab"}, key)
 	if !strings.Contains(got, "NOT delivered") || strings.Contains(got, "alice") || !strings.Contains(got, "list_agents") {
 		t.Fatalf("remote hint %q", got)
+	}
+}
+
+func bobTarget(sessionRef string) prebind.Target {
+	return prebind.Target{AgentID: identity.AgentID("codex", sessionRef), Harness: "codex", SessionRef: sessionRef}
+}
+
+func storeEntry(t *testing.T, w *world, now time.Time, from *fakeClaude, to prebind.Target, deliveredAt time.Time, text string) string {
+	t.Helper()
+	w.token(from.agentID())
+	id := msg.NewUUIDv7()
+	m := msg.Message{MessageID: id, ContextID: id, From: from.name, To: "bob", Kind: msg.Inform, Delivery: msg.Immediate, HopChain: []string{msg.Hop(from.agentID())}, SentAt: deliveredAt, Parts: []msg.Part{{Type: "text", Text: text}}}
+	body, _ := json.Marshal(m)
+	st := prebind.New(w.state, prebind.Options{Now: func() time.Time { return now }})
+	e := prebind.Entry{AgentID: to.AgentID, Harness: to.Harness, SessionRef: to.SessionRef, Sender: from.agentID(), Message: string(body), DeliveredAt: deliveredAt, State: "accepted"}
+	if err := st.Append(e); err != nil {
+		t.Fatal(err)
+	}
+	return id
+}
+
+func TestPreBindReplySucceedsAfterBind(t *testing.T) {
+	w := newWorld(t)
+	alice := w.claude(4001, "sess-alice", "alice")
+	w.codex.addThread("T-bob", "bob")
+	w.token(alice.agentID())
+	na := w.node(alice.pid, w.lb, nil)
+	nb := w.node(1, w.lb, nil)
+
+	sent := na.ok(nil, "send_message", send("bob", "fyi"))
+	if sent["state"] != "accepted" {
+		t.Fatalf("send %v", sent)
+	}
+	id := sent["message_id"].(string)
+
+	nb.ok(thread("T-bob"), "receive_message", map[string]any{})
+	res := nb.ok(thread("T-bob"), "reply", map[string]any{"message_id": id, "text": "answer"})
+	if res["state"] != "accepted" {
+		t.Fatalf("reply %v", res)
+	}
+	waitFor(t, "alice to receive the reply", func() bool { return len(alice.got()) == 1 })
+	if !strings.Contains(alice.got()[0], "answer") {
+		t.Fatalf("alice got %q", alice.got())
+	}
+	bobID := bobTarget("T-bob").AgentID
+	st := nb.sh.Agent(bobID)
+	if st.Receiver().RouteOpen(id) {
+		t.Fatal("route still open after the reply")
+	}
+	nb.fails(thread("T-bob"), "reply", map[string]any{"message_id": id, "text": "other"}, "rejected", ReasonAlreadyReplied)
+	if res := nb.ok(thread("T-bob"), "reply", map[string]any{"message_id": id, "text": "answer"}); res["state"] != "accepted" || len(alice.got()) != 1 {
+		t.Fatalf("identical retry %v, alice got %d", res, len(alice.got()))
+	}
+}
+
+func TestPreBindReplyDrainsLateEntry(t *testing.T) {
+	w := newWorld(t)
+	alice := w.claude(4001, "sess-alice", "alice")
+	w.codex.addThread("T-bob", "bob")
+	na := w.node(alice.pid, w.lb, nil)
+	nb := w.node(1, w.lb, nil)
+	na.ok(nil, "receive_message", map[string]any{})
+	nb.ok(thread("T-bob"), "receive_message", map[string]any{})
+
+	id := storeEntry(t, w, time.Now(), alice, bobTarget("T-bob"), time.Now().Add(-time.Minute), "late")
+	res := nb.ok(thread("T-bob"), "reply", map[string]any{"message_id": id, "text": "answer"})
+	if res["state"] != "accepted" {
+		t.Fatalf("reply %v", res)
+	}
+	waitFor(t, "alice to receive the reply", func() bool { return len(alice.got()) == 1 })
+	nb.fails(thread("T-bob"), "reply", map[string]any{"message_id": msg.NewUUIDv7(), "text": "x"}, "invalid", ReasonNoSuchMessage)
+}
+
+func TestPreBindPartialImportRepairedOnRetry(t *testing.T) {
+	w := newWorld(t)
+	alice := w.claude(4001, "sess-alice", "alice")
+	w.codex.addThread("T-bob", "bob")
+	na := w.node(alice.pid, w.lb, nil)
+	nb := w.node(1, w.lb, nil)
+	na.ok(nil, "receive_message", map[string]any{})
+	nb.ok(thread("T-bob"), "receive_message", map[string]any{})
+	bob := bobTarget("T-bob")
+	st := nb.sh.Agent(bob.AgentID)
+
+	delivered := time.Now().Add(-time.Minute)
+	id := storeEntry(t, w, time.Now(), alice, bob, delivered, "half imported")
+	m := msg.Message{MessageID: id, ContextID: id, From: "alice", To: "bob", Kind: msg.Inform, Delivery: msg.Immediate, HopChain: []string{msg.Hop(alice.agentID())}, SentAt: delivered, Parts: []msg.Part{{Type: "text", Text: "half imported"}}}
+	body, _ := json.Marshal(m)
+	if err := st.Agent().Journal().Append(journal.Record{Type: journal.TypeDedupe, Sender: alice.agentID(), MessageID: id, State: "accepted", Message: body, Imported: true}); err != nil {
+		t.Fatal(err)
+	}
+	if !st.Receiver().ImportIncomplete(id) || st.Receiver().RouteOpen(id) {
+		t.Fatal("setup: expected a dedupe record with no route")
+	}
+
+	res := nb.ok(thread("T-bob"), "reply", map[string]any{"message_id": id, "text": "answer"})
+	if res["state"] != "accepted" {
+		t.Fatalf("reply %v", res)
+	}
+	waitFor(t, "alice to receive the reply", func() bool { return len(alice.got()) == 1 })
+	if st.Receiver().ImportIncomplete(id) || st.Receiver().RouteOpen(id) {
+		t.Fatal("route open or incomplete after the reply")
+	}
+	rs := journalRecords(t, w, bob.AgentID)
+	opens := 0
+	for _, r := range rs {
+		if r.Type == journal.TypeRoute && r.MessageID == id && r.State == journal.StateOpen {
+			opens++
+		}
+	}
+	if opens != 1 {
+		t.Fatalf("%d open records for the route", opens)
+	}
+	nb.fails(thread("T-bob"), "reply", map[string]any{"message_id": id, "text": "again"}, "rejected", ReasonAlreadyReplied)
+}
+
+func TestPreBindEntryOlderThanTTLGivesPreBindHint(t *testing.T) {
+	w := newWorld(t)
+	alice := w.claude(4001, "sess-alice", "alice")
+	w.codex.addThread("T-bob", "bob")
+	bound := time.Now().UTC()
+	nb := w.node(1, w.lb, func(o *Options) { o.Now = func() time.Time { return bound } })
+	stale := bound.Add(-2 * time.Hour)
+	id := uuidV7At(stale)
+	w.token(alice.agentID())
+	m := msg.Message{MessageID: id, ContextID: id, From: "alice", To: "bob", Kind: msg.Inform, Delivery: msg.Immediate, HopChain: []string{msg.Hop(alice.agentID())}, SentAt: stale, Parts: []msg.Part{{Type: "text", Text: "old"}}}
+	body, _ := json.Marshal(m)
+	b := bobTarget("T-bob")
+	e := prebind.Entry{AgentID: b.AgentID, Harness: b.Harness, SessionRef: b.SessionRef, Sender: alice.agentID(), Message: string(body), DeliveredAt: stale, State: "accepted"}
+	if err := prebind.New(w.state, prebind.Options{Now: func() time.Time { return bound }}).Append(e); err != nil {
+		t.Fatal(err)
+	}
+	nb.ok(thread("T-bob"), "receive_message", map[string]any{})
+	_, out := nb.call(thread("T-bob"), "reply", map[string]any{"message_id": id, "text": "x"})
+	if out["reason"] != ReasonNoSuchMessage || !strings.Contains(out["hint"].(string), "may predate this session's binding") {
+		t.Fatalf("reply %v", out)
+	}
+	if rs := journalRecords(t, w, b.AgentID); slices.ContainsFunc(rs, func(r journal.Record) bool { return r.Type == journal.TypeRoute && r.MessageID == id }) {
+		t.Fatal("an entry older than the TTL opened a route")
 	}
 }

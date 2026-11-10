@@ -2,6 +2,7 @@ package shim
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -14,6 +15,7 @@ import (
 	"github.com/GoodOlClint/crosstalk/internal/journal"
 	"github.com/GoodOlClint/crosstalk/internal/mcpserver"
 	"github.com/GoodOlClint/crosstalk/internal/msg"
+	"github.com/GoodOlClint/crosstalk/internal/prebind"
 	"github.com/GoodOlClint/crosstalk/internal/receiver"
 	"github.com/GoodOlClint/crosstalk/internal/registry"
 )
@@ -39,6 +41,7 @@ type AgentState struct {
 	serve  chan struct{}
 
 	replyMu sync.Mutex
+	drainMu sync.Mutex
 
 	mu       sync.Mutex
 	up       bool
@@ -145,6 +148,7 @@ func (s *Shim) Bind(ctx context.Context, a *mcpserver.Agent) (mcpserver.BindInfo
 	if err := st.rcv.Recover(a.Replay()); err != nil {
 		return mcpserver.BindInfo{}, err
 	}
+	st.drainPreBind()
 	st.ctx, st.cancel = context.WithCancel(s.ctx)
 	var u harness.Ingress
 	if s.ingress != nil {
@@ -176,6 +180,29 @@ func (s *Shim) Bind(ctx context.Context, a *mcpserver.Agent) (mcpserver.BindInfo
 	}
 	st.rearmDeadlines()
 	return info, nil
+}
+
+// drainPreBind replays the informs delivered to this session before it bound
+// into its journal. A failure is logged and leaves the claimed file for the
+// next drain; it never fails a bind or a reply.
+func (st *AgentState) drainPreBind() {
+	st.drainMu.Lock()
+	defer st.drainMu.Unlock()
+	t := prebind.Target{AgentID: st.agent.ID(), Harness: string(st.binding.Harness), SessionRef: st.binding.SessionRef}
+	err := st.shim.prebind.Drain(t, func(e prebind.Entry) error {
+		var m msg.Message
+		if json.Unmarshal([]byte(e.Message), &m) != nil {
+			return nil
+		}
+		err := st.rcv.ImportDelivered(receiver.Delivered{Sender: e.Sender, Message: m, DeliveredAt: e.DeliveredAt, State: e.State})
+		if errors.Is(err, receiver.ErrNotImportable) {
+			return nil
+		}
+		return err
+	})
+	if err != nil {
+		st.shim.log.Warn("shim: pre-bind drain", "agent", st.agent.ID(), "err", err)
+	}
 }
 
 // Published starts replaying a's reply obligations; mcpserver calls it once

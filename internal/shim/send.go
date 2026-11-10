@@ -589,6 +589,10 @@ func (s *Shim) Reply(ctx context.Context, from *mcpserver.Agent, messageID, text
 	if err != nil {
 		return mcpserver.Result{}, err
 	}
+	// The drain takes the store lock, so it runs before replyMu is held.
+	if _, _, ok := st.inbound(messageID); !ok || st.rcv.ImportIncomplete(messageID) {
+		st.drainPreBind()
+	}
 	st.replyMu.Lock()
 	defer st.replyMu.Unlock()
 	orig, key, ok := st.inbound(messageID)

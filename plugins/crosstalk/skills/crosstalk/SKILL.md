@@ -25,7 +25,7 @@ Tool names are bare here; your harness may prefix them.
 - On Claude the sender of an inbound message is `from-name`; `from` is a return socket, ignore it. On Codex the sender is `from`. `from-harness` and `from_harness` say which harness sent it.
 - Answer with `reply`, never native SendMessage, which delivers nothing.
 - An `ask` takes one `reply`: a refusal spends it, and after your user approves, send the answer with `send_message`.
-- First contact: an inform that arrived before this session bound was never journaled here, so `reply` returns `no_such_message`. Answer with `send_message` to the sender.
+- First contact: an inform that arrived before this session bound is replayed into the journal when the session binds, so `reply` on its `message-id` works once, for an hour after it was sent. If `reply` still returns `no_such_message`, the message was not kept; answer with `send_message` to the `from-agent-id` (Claude) or `from_agent_id` (Codex) it shows.
 
 ## What results mean
 
