@@ -64,6 +64,12 @@ func TestClaims_TwoThreadsOneShimConcurrentCallsAndRecheckRevokesOne_ExpectNoCro
 	if err := c.AcceptDurable(context.Background(), cl); err != nil {
 		t.Fatal(err)
 	}
+	for _, th := range []string{"T1", "T2"} {
+		res, err := e.cs.CallTool(context.Background(), &mcp.CallToolParams{Meta: map[string]any{"threadId": th}, Name: "list_agents", Arguments: map[string]any{}})
+		if err != nil || res.IsError {
+			t.Fatalf("%s: %v %+v", th, err, res)
+		}
+	}
 	sys.set("T2", false)
 
 	var wg sync.WaitGroup
@@ -189,5 +195,63 @@ func TestClaims_SessionHeldByAnotherLiveShimRealRegistry_ExpectIgnored(t *testin
 	after, _ := e.reg.List()
 	if len(after) != 1 || after[0].InstanceID != before[0].InstanceID {
 		t.Fatalf("record changed: %+v -> %+v", before, after)
+	}
+}
+
+func TestRecheck_RevokedClaimOnlyThread_ExpectRetiredAndNewOwnerRegisters(t *testing.T) {
+	dir := t.TempDir()
+	a := newMCPEnv(t, dir)
+	sysA := newFakeSys()
+	sysA.own("T1")
+	sysA.own("T2")
+	ca := newTestClaims(t, sysA, a.srv)
+	for _, th := range []string{"T1", "T2"} {
+		if err := ca.AcceptLive(context.Background(), hookPID, claim(th)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sysA.set("T1", false)
+	if got := ca.Recheck(); !slices.Equal(got, []string{"T1"}) {
+		t.Fatalf("revoked %v, want [T1]", got)
+	}
+	ds, _ := a.reg.List()
+	if len(ds) != 1 || ds[0].AgentID != codexAgentID("T2") {
+		t.Fatalf("descriptors after revoke %+v, want only T2", ds)
+	}
+
+	b := newMCPEnv(t, dir)
+	sysB := newFakeSys()
+	sysB.own("T1")
+	cb := newTestClaims(t, sysB, b.srv)
+	if err := cb.AcceptLive(context.Background(), hookPID, claim("T1")); err != nil {
+		t.Fatalf("new owner: %v", err)
+	}
+	ds, _ = b.reg.List()
+	if len(ds) != 2 {
+		t.Fatalf("descriptors %+v, want T1 under the new owner and T2", ds)
+	}
+	if !ca.Bound("T2") {
+		t.Fatal("T2 claim revoked by T1's transfer")
+	}
+}
+
+func TestRecheck_RevokedThreadBoundByToolsCall_ExpectAgentKept(t *testing.T) {
+	e := newMCPEnv(t, t.TempDir())
+	sys := newFakeSys()
+	sys.own("T1")
+	c := newTestClaims(t, sys, e.srv)
+	if err := c.AcceptLive(context.Background(), hookPID, claim("T1")); err != nil {
+		t.Fatal(err)
+	}
+	res, err := e.cs.CallTool(context.Background(), &mcp.CallToolParams{Meta: map[string]any{"threadId": "T1"}, Name: "list_agents", Arguments: map[string]any{}})
+	if err != nil || res.IsError {
+		t.Fatalf("%v %+v", err, res)
+	}
+	sys.set("T1", false)
+	if got := c.Recheck(); !slices.Equal(got, []string{"T1"}) {
+		t.Fatalf("revoked %v, want [T1]", got)
+	}
+	if ds, _ := e.reg.List(); len(ds) != 1 || ds[0].AgentID != codexAgentID("T1") {
+		t.Fatalf("descriptors %+v, want T1 kept", ds)
 	}
 }

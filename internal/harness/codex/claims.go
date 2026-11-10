@@ -259,13 +259,20 @@ func (c *Claims) Recheck() []string {
 		if err == nil {
 			continue
 		}
+		c.regMu.Lock()
 		c.mu.Lock()
-		if c.byID[t] == b {
+		gone := c.byID[t] == b
+		if gone {
 			delete(c.byID, t)
-			revoked = append(revoked, t)
 		}
 		c.mu.Unlock()
-		c.logger.Info("codex claim revoked", "thread", t, "err", err)
+		if gone {
+			revoked = append(revoked, t)
+			req := harness.RequestContext{Meta: map[string]any{"threadId": t}}
+			retired, rerr := c.opt.Registrar.RetireSession(context.Background(), req)
+			c.logger.Info("codex claim revoked", "thread", t, "err", err, "retired", retired, "retire_err", rerr)
+		}
+		c.regMu.Unlock()
 	}
 	slices.Sort(revoked)
 	return revoked

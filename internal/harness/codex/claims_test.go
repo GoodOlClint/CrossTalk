@@ -125,9 +125,10 @@ func (f *fakeSys) Openers(path string) ([]int, error) {
 // fakeRegistrar records RegisterSession calls; fail makes a session's
 // registration fail as a live agent held elsewhere would.
 type fakeRegistrar struct {
-	mu    sync.Mutex
-	calls []string
-	fail  map[string]error
+	mu      sync.Mutex
+	calls   []string
+	retired []string
+	fail    map[string]error
 }
 
 func (r *fakeRegistrar) RegisterSession(_ context.Context, req harness.RequestContext, _ string) error {
@@ -136,6 +137,14 @@ func (r *fakeRegistrar) RegisterSession(_ context.Context, req harness.RequestCo
 	tid, _ := req.Meta["threadId"].(string)
 	r.calls = append(r.calls, tid)
 	return r.fail[tid]
+}
+
+func (r *fakeRegistrar) RetireSession(_ context.Context, req harness.RequestContext) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	tid, _ := req.Meta["threadId"].(string)
+	r.retired = append(r.retired, tid)
+	return true, nil
 }
 
 func (r *fakeRegistrar) got() []string {

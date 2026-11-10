@@ -139,6 +139,9 @@ type NativeIngress interface {
 // would; *mcpserver.Server implements it.
 type SessionRegistrar interface {
 	RegisterSession(ctx context.Context, req RequestContext, cwd string) error
+	// RetireSession retires an agent RegisterSession made, unless a tools/call
+	// has bound it since; it reports whether it retired one.
+	RetireSession(ctx context.Context, req RequestContext) (bool, error)
 }
 
 // ClaimSource is implemented by a harness that learns of its sessions from
