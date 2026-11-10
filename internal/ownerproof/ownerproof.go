@@ -46,10 +46,13 @@ func Args(pid int) (exe string, argv []string, err error) {
 // Ancestry walks from pid up through each parent, pid first, ending at a
 // process whose parent is 0 (pid 1 or a container's init). Every step is a
 // fresh kernel read; an exited link is an error.
-func Ancestry(pid int) ([]Proc, error) {
+func Ancestry(pid int) ([]Proc, error) { return AncestryWith(Info, pid) }
+
+// AncestryWith is Ancestry over another source of process facts.
+func AncestryWith(info func(int) (Proc, error), pid int) ([]Proc, error) {
 	var chain []Proc
 	for len(chain) < maxDepth {
-		p, err := Info(pid)
+		p, err := info(pid)
 		if err != nil {
 			return nil, err
 		}
