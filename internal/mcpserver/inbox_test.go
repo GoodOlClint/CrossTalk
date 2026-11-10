@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -80,6 +81,51 @@ func TestInboxToolsRefuseSubagents(t *testing.T) {
 	e.mustErr(B, "claim", map[string]any{"name": "inbox:coord"}, CodeRejected, "caller_not_primary")
 	if ds, _ := e.reg.InboxMembers("coord"); len(ds) != 0 {
 		t.Fatalf("subagent joined: %v", ds)
+	}
+}
+
+func TestInboxMutationRechecksPrimaryUnderLock(t *testing.T) {
+	cases := []struct {
+		tool  string
+		inbox string
+		setup func(e *env)
+		args  any
+	}{
+		{"attach", "n", func(e *env) {}, inboxArg("n")},
+		{"detach", "n", func(e *env) { e.mustOK(thread("A"), "attach", inboxArg("n")) }, inboxArg("n")},
+		{"grant", "n", func(e *env) { e.mustOK(thread("A"), "attach", inboxArg("n")) }, grantArgs("n", "b", false)},
+		{"claim", "n", func(e *env) {
+			e.mustOK(thread("B"), "attach", inboxArg("n"))
+			e.mustOK(thread("B"), "detach", inboxArg("n"))
+		}, map[string]any{"name": "inbox:n"}},
+	}
+	for _, c := range cases {
+		t.Run(c.tool, func(t *testing.T) {
+			e := claimEnv(t)
+			c.setup(e)
+			caller := "A"
+			if c.tool == "claim" {
+				caller = "C"
+			}
+			before, had, err := e.reg.ReadInbox(c.inbox)
+			if err != nil {
+				t.Fatal(err)
+			}
+			a := e.srv.local(codexID(caller))
+			a.afterPrimaryCheck = func() {
+				if err := a.applyClaim("owner", "owner"); err != nil {
+					t.Error(err)
+				}
+			}
+			e.mustErr(thread(caller), c.tool, c.args, CodeRejected, "caller_not_primary")
+			after, has, err := e.reg.ReadInbox(c.inbox)
+			if err != nil || had != has || !reflect.DeepEqual(before, after) {
+				t.Fatalf("inbox file changed: %+v %v -> %+v %v (%v)", before, had, after, has, err)
+			}
+			if ds, _ := e.reg.InboxMembers(c.inbox); c.tool == "attach" && len(ds) != 0 {
+				t.Fatalf("subagent joined: %v", ds)
+			}
+		})
 	}
 }
 

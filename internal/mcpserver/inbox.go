@@ -98,6 +98,21 @@ func (a *Agent) requirePrimary() error {
 	if a.Descriptor().Role != registry.RolePrimary {
 		return rejected("caller_not_primary")
 	}
+	if a.afterPrimaryCheck != nil {
+		a.afterPrimaryCheck()
+	}
+	return nil
+}
+
+// lockPrimary takes a.mu and re-checks the role under it, so a concurrent
+// claim cannot make the caller a subagent between the check and the mutation.
+// On success the caller holds a.mu.
+func (a *Agent) lockPrimary() error {
+	a.mu.Lock()
+	if a.Descriptor().Role != registry.RolePrimary {
+		a.mu.Unlock()
+		return rejected("caller_not_primary")
+	}
 	return nil
 }
 
@@ -131,7 +146,9 @@ func (s *Server) attach(ctx context.Context, a *Agent, name string) (any, error)
 	if err := a.requirePrimary(); err != nil {
 		return nil, err
 	}
-	a.mu.Lock()
+	if err := a.lockPrimary(); err != nil {
+		return nil, err
+	}
 	had := a.inAttached(name)
 	st, err := s.reg.AttachInbox(a.reg, name, a.inboxHook)
 	a.mu.Unlock()
@@ -148,7 +165,9 @@ func (s *Server) detach(ctx context.Context, a *Agent, name string) (any, error)
 	if err := a.requirePrimary(); err != nil {
 		return nil, err
 	}
-	a.mu.Lock()
+	if err := a.lockPrimary(); err != nil {
+		return nil, err
+	}
 	had := a.inAttached(name)
 	st, err := s.reg.DetachInbox(a.reg, name, a.inboxHook)
 	a.mu.Unlock()
@@ -172,7 +191,9 @@ func (s *Server) grant(ctx context.Context, a *Agent, in grantIn) (any, error) {
 	if err != nil {
 		return nil, err
 	}
-	a.mu.Lock()
+	if err := a.lockPrimary(); err != nil {
+		return nil, err
+	}
 	st, err := s.reg.GrantInbox(a.reg, in.Inbox, t.AgentID, in.Owner)
 	a.mu.Unlock()
 	if err != nil {
@@ -188,7 +209,9 @@ func (s *Server) claimInbox(ctx context.Context, a *Agent, name string) (any, er
 	if err := a.requirePrimary(); err != nil {
 		return nil, err
 	}
-	a.mu.Lock()
+	if err := a.lockPrimary(); err != nil {
+		return nil, err
+	}
 	st, err := s.reg.ClaimInbox(a.reg, name, a.inboxHook)
 	a.mu.Unlock()
 	if err != nil {
