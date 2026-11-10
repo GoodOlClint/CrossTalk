@@ -87,5 +87,15 @@ func Openers(path string) ([]int, error) {
 	return openersAmong(path, pids)
 }
 
+// ExecutableIs reports whether pid's mapped executable is the file now at
+// path (same device and inode). A binary replaced at path while pid runs is
+// false.
+func ExecutableIs(pid int, path string) (bool, error) {
+	if pid <= 0 {
+		return false, ErrNoProcess
+	}
+	return executableIs(pid, path)
+}
+
 // OpenersAmong is Openers over the given pids only, by the same rules.
 func OpenersAmong(path string, pids []int) ([]int, error) { return openersAmong(path, pids) }

@@ -3,7 +3,7 @@
 - **Status:** Provisional (council 2026-11-10, revised after the chair's critique, a Codex adversarial review and the chair's final precision fixes the same day; operator consent rulings (a) to (d) recorded 2026-11-10, R191 (mark on pull) recorded 2026-11-10; the operator approved the build (steps 1 to 7) on 2026-11-10; step 2 built; the rest gated on the feasibility probes and the isolated prototype results)
 - **Date:** 2026-11-10
 - **Deciders:** operator (consent rulings 2026-11-10; build approved 2026-11-10) + Claude + council (five advisors, one of them Codex)
-- **Implementation:** step 2 built (the shared `mailboxed` / `delivered` / `confirmed` states, the monotonic rule, the pull marks, `possibly_seen`, the drain flag, `reply` confirming, `not_collected` and the `MailSignal` extension point, harness-neutral). Steps 1 and 3 to 7 not built: no hook command, no claim file, no wake generation record, no SQLite driver, and the Codex adapter does not return `mailboxed` or implement `MailSignal`.
+- **Implementation:** step 2 built (the shared `mailboxed` / `delivered` / `confirmed` states, the monotonic rule, the pull marks, `possibly_seen`, the drain flag, `reply` confirming, `not_collected` and the `MailSignal` extension point, harness-neutral). Step 1 built (claim handoff and owner proof, plan 3.3). Step 3 built: the per-write gate (plan 3.5) over a cgo-free driver, `modernc.org/sqlite`. Steps 4 to 7 not built: no wake generation record, and the Codex adapter does not return `mailboxed` or implement `MailSignal`.
 - **Context source:** issue #112; [change plan](https://github.com/GoodOlClint/CrossTalk/blob/main/docs/plans/codex-no-daemon-queue.md); council record of 2026-11-10
 
 ## Context

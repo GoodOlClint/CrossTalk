@@ -61,7 +61,9 @@ func args(pid int) (string, []string, error) {
 		}
 		return "", nil, err
 	}
-	return exe, argv, nil
+	// The kernel appends " (deleted)" to the link once the mapped file is
+	// unlinked or replaced; the path is what stood there.
+	return strings.TrimSuffix(exe, " (deleted)"), argv, nil
 }
 
 func userPIDs() ([]int, error) {
@@ -157,4 +159,19 @@ func opensFile(fdDir string, target os.FileInfo) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+func executableIs(pid int, path string) (bool, error) {
+	target, err := os.Stat(path)
+	if err != nil {
+		return false, err
+	}
+	fi, err := os.Stat("/proc/" + strconv.Itoa(pid) + "/exe")
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return false, ErrNoProcess
+		}
+		return false, err
+	}
+	return os.SameFile(fi, target), nil
 }

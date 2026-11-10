@@ -73,6 +73,15 @@ const (
 	vnodeFDInfoSize       = 176
 	vstDevOff             = 24
 	vstInoOff             = 24 + 8
+	// proc_regionwithpathinfo: proc_regioninfo (96 bytes, pri_address at 80,
+	// pri_size at 88) then vnode_info_path, whose vinfo_stat starts at 96.
+	procPIDRegionPathInfo = 8
+	regionPathInfoSize    = 1272
+	regionAddrOff         = 80
+	regionSizeOff         = 88
+	regionDevOff          = 96
+	regionInoOff          = 96 + 8
+	maxRegions            = 1 << 16
 )
 
 var procInfo = rawProcInfo
@@ -173,4 +182,39 @@ func opensFile(pid int, st *unix.Stat_t, vbuf []byte) (bool, error) {
 		}
 	}
 	return false, nil
+}
+
+// executableIs walks pid's memory regions for one mapped from the file at
+// path; the walk ends with EINVAL past the last region.
+func executableIs(pid int, path string) (bool, error) {
+	var st unix.Stat_t
+	if err := unix.Stat(path, &st); err != nil {
+		return false, &os.PathError{Op: "stat", Path: path, Err: err}
+	}
+	buf := make([]byte, regionPathInfoSize)
+	var addr uint64
+	for range maxRegions {
+		n, err := procInfo(procInfoCallPIDInfo, pid, procPIDRegionPathInfo, addr, buf)
+		if errors.Is(err, unix.ESRCH) {
+			return false, ErrNoProcess
+		}
+		if errors.Is(err, unix.EINVAL) || err == nil && n == 0 {
+			return false, nil
+		}
+		if err != nil {
+			return false, fmt.Errorf("ownerproof: regions of %d: %w", pid, err)
+		}
+		if n < regionPathInfoSize {
+			return false, fmt.Errorf("ownerproof: short region info for %d", pid)
+		}
+		if binary.NativeEndian.Uint32(buf[regionDevOff:]) == uint32(st.Dev) && binary.NativeEndian.Uint64(buf[regionInoOff:]) == st.Ino {
+			return true, nil
+		}
+		next := binary.NativeEndian.Uint64(buf[regionAddrOff:]) + binary.NativeEndian.Uint64(buf[regionSizeOff:])
+		if next <= addr {
+			return false, fmt.Errorf("ownerproof: region walk of %d did not advance", pid)
+		}
+		addr = next
+	}
+	return false, fmt.Errorf("ownerproof: more than %d regions in %d", maxRegions, pid)
 }

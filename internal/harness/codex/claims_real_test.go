@@ -7,11 +7,13 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/GoodOlClint/crosstalk/internal/ownerproof"
 )
@@ -19,11 +21,26 @@ import (
 const (
 	realHelperMode = "CODEX_CLAIMS_HELPER_MODE"
 	realHelperPath = "CODEX_CLAIMS_HELPER_PATH"
+	fakeCodexHang  = "CODEX_CLAIMS_HELPER_HANG"
 )
 
 // The test binary re-executed stands in for a codex process: "hold" opens
-// and flocks the lock file as Codex does, "read" only opens it.
+// and flocks the lock file as Codex does, "read" only opens it, "codex"
+// waits and answers --version as Codex 0.167.0 (or never, with
+// fakeCodexHang set).
 func TestMain(m *testing.M) {
+	if os.Getenv(realHelperMode) == "codex" {
+		if slices.Contains(os.Args[1:], "--version") {
+			if os.Getenv(fakeCodexHang) != "" {
+				time.Sleep(time.Hour)
+			}
+			os.Stdout.WriteString("codex-cli 0.167.0\n")
+			os.Exit(0)
+		}
+		os.Stdout.WriteString("ready\n")
+		bufio.NewReader(os.Stdin).ReadString('\n')
+		os.Exit(0)
+	}
 	if mode := os.Getenv(realHelperMode); mode != "" {
 		f, err := os.OpenFile(os.Getenv(realHelperPath), os.O_RDWR, 0)
 		if err != nil {
