@@ -6,7 +6,7 @@ Terms. **agy** = Google's Antigravity CLI, version 1.5.0 on macOS. **Conversatio
 
 ## 1. Goal
 
-An agy session takes part in CrossTalk: Claude, Codex and other agy sessions on the same Mac can send it messages and asks, and it can send and answer through the same seven tools. Delivery uses documented agy interfaces only (MCP, `hooks.json`, `settings.json`).
+An agy session takes part in CrossTalk: Claude, Codex and other agy sessions on the same Mac can send it messages and asks, and it can send and answer through the same CrossTalk tools. Delivery uses documented agy interfaces only (MCP, `hooks.json`, `settings.json`).
 
 Binding operator rulings: hook mailbox delivery only; no `agy agentapi`, `agy acp`, `-p` driving, Remote Control scripting or keystrokes; assume a consumer plan; an idle agent does not wake.
 
@@ -156,7 +156,7 @@ Rules: an empty file is `{}` (the operator's `mcp_config.json` is 0 bytes today)
 
 Choose the smallest layer that passes this test on flash-low in fresh conversations: "tell <peer> hello" uses CrossTalk `send_message`, and the pointer leads to `receive_message`. Try in order and stop at the first pass:
 
-1. `_meta: {"antigravity/alwaysLoad": true}` on all seven tools (changelog: the agent gets the tool directly instead of discovering it) plus clear descriptions. Expected to be enough for the pointer.
+1. `_meta: {"antigravity/alwaysLoad": true}` on every CrossTalk tool (changelog: the agent gets the tool directly instead of discovering it) plus clear descriptions. Expected to be enough for the pointer.
 2. Add MCP `instructions`. It is not known whether agy surfaces them.
 3. Add `~/.gemini/config/rules/crosstalk.md` (a fourth install file; loaded in every conversation).
 

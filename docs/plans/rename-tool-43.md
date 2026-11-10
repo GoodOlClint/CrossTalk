@@ -33,7 +33,7 @@ Operator ruling (2026-11-09, on #43): build a `rename` tool; not an environment 
 
 ### 3.2 Validation and uniqueness
 
-A name is accepted if it is non-empty, at most 64 bytes, free of control characters and `@`, not 16 lowercase hex (it could never resolve), and does not start with `inbox:` (reserved by ADR 0024). Otherwise `rejected/invalid_name`. Spaces are allowed, because existing session names contain them.
+A name is accepted if it is non-empty, at most 64 bytes, free of control characters and `@`, not 16 lowercase hex (it could never resolve), has no space at either end, and does not start with `inbox:` in any letter case (reserved by ADR 0024). Otherwise `rejected/invalid_name`. Spaces inside a name are allowed, because existing session names contain them.
 
 The alias lock is the uniqueness rule, unchanged: if another live registration holds the name, `rejected/name_held`, the session keeps its current alias and pin, and no fallback is invented. A name held by a superseded session frees within the supersede interval, as for registration, so the hint says to retry. A name held by a native session that has no CrossTalk binding is not checked; see Risks.
 
@@ -57,7 +57,7 @@ Order inside the tool: take the new alias lock and rewrite the descriptor (`Regi
 
 New reasons, all under `rejected`: `invalid_name`, `name_held`. Hints (`internal/mcpserver/hints.go`, every entry names a real tool):
 
-- `invalid_name`: "That name cannot be used: 1 to 64 bytes, no @, no control characters, no space at either end, not 16 hex digits, not starting with inbox:. Pick another and call rename again."
+- `invalid_name`: "That name cannot be used: 1 to 64 bytes, no @, no control characters, no space at either end, not 16 hex digits, not starting with inbox: in any case. Pick another and call rename again."
 - `name_held`: "Another live session already has that name. Call list_agents to see who, pick a different name, or retry once if that session has just ended."
 
 Success carries no hint. `unbound`, `not_ready` and `agent_held` come from the existing paths.

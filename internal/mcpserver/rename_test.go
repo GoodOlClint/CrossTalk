@@ -90,6 +90,18 @@ func TestRenameInvalidName(t *testing.T) {
 	}
 }
 
+func TestRenameToNativeSessionNameAllowed(t *testing.T) {
+	e := renameEnv(t, map[string]string{"N": "native", "T-1": "orig"})
+	e.mustOK(thread("T-1"), "send_message", sendArgs("x", "1"))
+	out := e.mustOK(thread("T-1"), "rename", nameArg("native"))
+	if out["name"] != "native" {
+		t.Fatalf("rename result %v", out)
+	}
+	if d, ok, _ := e.reg.Lookup("native"); !ok || d.AgentID != codexID("T-1") {
+		t.Errorf("name does not resolve to the renamed session: %+v %v", d, ok)
+	}
+}
+
 func TestRenameSameNameStillPins(t *testing.T) {
 	e := renameEnv(t, map[string]string{"T-1": "orig"})
 	out := e.mustOK(thread("T-1"), "rename", nameArg("orig"))

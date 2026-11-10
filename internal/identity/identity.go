@@ -75,14 +75,14 @@ const (
 // ValidName reports why name cannot be a session alias: empty, over
 // MaxNameBytes, surrounding space (HTTP trims it from the A2A sender header),
 // a control character, "@" (separates a paired-host alias), the
-// shape of an agent_id (never matched as a name), or the reserved inbox: prefix.
+// shape of an agent_id (never matched as a name), or the reserved inbox: prefix in any case.
 func ValidName(name string) error {
 	switch {
 	case name == "":
 		return errors.New("name is empty")
 	case len(name) > MaxNameBytes:
 		return errors.New("name is longer than 64 bytes")
-	case strings.HasPrefix(name, reservedName):
+	case strings.HasPrefix(strings.ToLower(name), reservedName):
 		return errors.New("name starts with the reserved prefix inbox:")
 	case strings.TrimSpace(name) != name:
 		return errors.New("name starts or ends with a space")

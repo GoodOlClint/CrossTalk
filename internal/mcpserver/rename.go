@@ -12,6 +12,10 @@ import (
 	"github.com/GoodOlClint/crosstalk/internal/registry"
 )
 
+type renameIn struct {
+	Name string `json:"name" jsonschema:"the new name for this session"`
+}
+
 type renameOut struct {
 	Name     string `json:"name"`
 	Previous string `json:"previous"`
@@ -21,8 +25,8 @@ func (s *Server) addRenameTool() {
 	boundTool(s, &mcp.Tool{
 		Name:        "rename",
 		Description: "Set this session's own name, which list_agents shows and to resolves. The harness's name for the session no longer overrides it. Returns {name, previous}.",
-		InputSchema: schemaFor[nameIn](nil),
-	}, func(ctx context.Context, a *Agent, in nameIn) (any, error) {
+		InputSchema: schemaFor[renameIn](nil),
+	}, func(ctx context.Context, a *Agent, in renameIn) (any, error) {
 		return s.rename(a, in.Name)
 	})
 }

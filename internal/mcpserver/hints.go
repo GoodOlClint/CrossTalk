@@ -13,7 +13,7 @@ var Hints = map[string]string{
 	"unpaired_by_peer":          "That host no longer accepts this one. Tell your user to pair the two hosts again; list_agents shows the paired hosts.",
 	"gateway_not_running":       "The other host's CrossTalk gateway is not running. Tell your user to start it there, then send_message again.",
 	"tls_pin_mismatch":          "The host at that address is not the one that was paired. Tell your user and do not retry send_message.",
-	"invalid_name":              "That name cannot be used: 1 to 64 bytes, no @, no control characters, no space at either end, not 16 hex digits, not starting with inbox:. Pick another and call rename again.",
+	"invalid_name":              "That name cannot be used: 1 to 64 bytes, no @, no control characters, no space at either end, not 16 hex digits, not starting with inbox: in any case. Pick another and call rename again.",
 	"name_held":                 "Another live session already has that name. Call list_agents to see who, pick a different name, or retry once if that session has just ended.",
 	"no_such_message":           "No reply route exists for that message_id. Use send_message to the sender instead.",
 }

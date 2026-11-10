@@ -44,7 +44,7 @@ Tool names are bare here; your harness may prefix them.
 - `unknown_alias`: no paired host has that name after the `@`; `list_agents` shows the paired hosts.
 - `remote_native_unsupported`: that session on a paired host has no CrossTalk; pick a row with `crosstalk: true`.
 - `unpaired_by_peer`, `tls_pin_mismatch`, `gateway_not_running`: a paired host refuses this one, is not the host that was paired, or has no gateway running; tell your user.
-- `invalid_name`: the name for `rename` is empty, over 64 bytes, has `@` or a control character, is 16 hex digits, or starts with `inbox:`; pick another.
+- `invalid_name`: the name for `rename` is empty, over 64 bytes, has `@`, a control character or a space at either end, is 16 hex digits, or starts with `inbox:` (any case); pick another.
 - `name_held`: a live session already has that name; pick another, or retry once if that session has just ended.
 - `self`: pick another row.
 - `agent_held`: tell the user a second CrossTalk server may be installed.
