@@ -1,12 +1,16 @@
 package shim
 
 import (
+	"context"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/GoodOlClint/crosstalk/internal/adapter"
 	"github.com/GoodOlClint/crosstalk/internal/identity"
 	"github.com/GoodOlClint/crosstalk/internal/journal"
+	"github.com/GoodOlClint/crosstalk/internal/msg"
+	"github.com/GoodOlClint/crosstalk/internal/registry"
 )
 
 type inboxWorld struct {
@@ -58,8 +62,8 @@ func TestInboxNewestMemberResponds(t *testing.T) {
 	if len(got) != 1 || !strings.Contains(got[0].Message.Parts[0].Text, "status?") {
 		t.Fatalf("carol writes %+v", got)
 	}
-	if len(iw.writesTo("T-bob")) != 0 {
-		t.Fatalf("bob wrote %+v before copies exist", iw.writesTo("T-bob"))
+	if len(iw.writesTo("T-bob")) != 1 {
+		t.Fatalf("bob writes %+v, want one copy", iw.writesTo("T-bob"))
 	}
 	st := iw.na.sh.Agent(iw.alice.agentID())
 	o, ok := st.agent.Journal().Latest(journal.Record{Type: journal.TypeOutbound, MessageID: res["message_id"].(string)})
@@ -86,7 +90,7 @@ func TestInboxAskOneReply(t *testing.T) {
 	if !armed {
 		t.Fatal("ask deadline not armed")
 	}
-	iw.nb.fails(thread("T-bob"), "reply", map[string]any{"message_id": id, "text": "me?"}, "invalid", ReasonNoSuchMessage)
+	iw.nb.fails(thread("T-bob"), "reply", map[string]any{"message_id": id, "text": "me?"}, "rejected", ReasonInboxCopy)
 	if rep := iw.nb.ok(thread("T-carol"), "reply", map[string]any{"message_id": id, "text": "main"}); rep["state"] != "accepted" {
 		t.Fatalf("reply %v", rep)
 	}
@@ -147,5 +151,124 @@ func TestInboxNudgeCountsInboxAsOnePeer(t *testing.T) {
 	}
 	if h, _ := last["hint"].(string); !strings.Contains(h, "sent this peer 30 messages") {
 		t.Fatalf("send %d hint %q, want the nudge although the responder changed", NudgeFirst, h)
+	}
+}
+
+func copiesOf(t *testing.T, res map[string]any) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	list, _ := res["copies"].([]any)
+	for _, c := range list {
+		row := c.(map[string]any)
+		out[row["agent_id"].(string)], _ = row["state"].(string)
+	}
+	return out
+}
+
+func TestInboxFanOutResponderGetsKindOthersGetCopies(t *testing.T) {
+	iw := newInboxWorld(t)
+	res := iw.na.ok(nil, "ask", map[string]any{"to": "inbox:coord", "text": "which branch?"})
+	id := res["message_id"].(string)
+	if c := copiesOf(t, res); len(c) != 1 || c[iw.bob] != "accepted" || res["responder"] != iw.carol {
+		t.Fatalf("result %v", res)
+	}
+	resp, copy := iw.writesTo("T-carol"), iw.writesTo("T-bob")
+	if len(resp) != 1 || len(copy) != 1 {
+		t.Fatalf("carol %d bob %d writes", len(resp), len(copy))
+	}
+	for _, c := range []adapter.Call{resp[0], copy[0]} {
+		if c.Message.MessageID != id || c.Message.Kind != msg.Ask || c.Delivery.Inbox != "coord" {
+			t.Fatalf("delivered %+v inbox %q", c.Message, c.Delivery.Inbox)
+		}
+	}
+	iw.nb.fails(thread("T-bob"), "reply", map[string]any{"message_id": id, "text": "me?"}, "rejected", ReasonInboxCopy)
+	if rep := iw.nb.ok(thread("T-carol"), "reply", map[string]any{"message_id": id, "text": "main"}); rep["state"] != "accepted" {
+		t.Fatalf("reply %v", rep)
+	}
+
+	res = iw.na.ok(nil, "send_message", map[string]any{"to": "inbox:coord", "text": "run tests", "kind": "command"})
+	if len(copiesOf(t, res)) != 0 || len(iw.writesTo("T-bob")) != 1 {
+		t.Fatalf("a command was copied: %v", res)
+	}
+}
+
+func TestInboxCopyLegNeverOverwritesResponderLeg(t *testing.T) {
+	iw := newInboxWorld(t)
+	res := iw.na.ok(nil, "ask", map[string]any{"to": "inbox:coord", "text": "which branch?"})
+	id := res["message_id"].(string)
+	st := iw.na.sh.Agent(iw.alice.agentID())
+	j := st.agent.Journal()
+	o, ok := j.Latest(journal.Record{Type: journal.TypeOutbound, MessageID: id})
+	if !ok || o.To != iw.carol || o.Kind != "ask" || o.State != "accepted" {
+		t.Fatalf("outbound %+v", o)
+	}
+	l, ok := j.Latest(journal.Record{Type: journal.TypeLeg, MessageID: id, To: iw.bob})
+	if !ok || l.State != "accepted" || l.Kind != "ask" {
+		t.Fatalf("copy leg %+v", l)
+	}
+	iw.na.stop()
+	na := iw.w.node(iw.alice.pid, iw.w.lb, nil)
+	na.ok(nil, "receive_message", map[string]any{})
+	if rep := iw.nb.ok(thread("T-carol"), "reply", map[string]any{"message_id": id, "text": "main"}); rep["state"] != "accepted" {
+		t.Fatalf("reply %v", rep)
+	}
+	if !na.sh.Agent(iw.alice.agentID()).replied(id) {
+		t.Fatal("responder's reply not recognized after the sender restarted")
+	}
+}
+
+type recordingTransport struct {
+	*Loopback
+	mu    sync.Mutex
+	sends []recordedSend
+}
+
+type recordedSend struct {
+	to   string
+	copy bool
+}
+
+func (r *recordingTransport) Send(ctx context.Context, from, to registry.Descriptor, m msg.Message, ri bool) (adapter.State, error) {
+	r.mu.Lock()
+	r.sends = append(r.sends, recordedSend{to.AgentID, m.InboxCopy})
+	r.mu.Unlock()
+	return r.Loopback.Send(ctx, from, to, m, ri)
+}
+
+func TestInboxMixedBuildReceiverNeverGetsReplyableCopy(t *testing.T) {
+	w := newWorld(t)
+	alice := w.claude(4001, "sess-alice", "alice")
+	w.codex.addThread("T-bob", "bob")
+	w.codex.addThread("T-carol", "carol")
+	w.codex.addThread("T-dave", "dave")
+	tr := &recordingTransport{Loopback: w.lb}
+	na := w.node(alice.pid, tr, nil)
+	nb := w.node(1, tr, nil)
+	tr.Attach(na.sh, nb.sh)
+	na.ok(nil, "receive_message", map[string]any{})
+	for _, id := range []string{"T-bob", "T-carol", "T-dave"} {
+		nb.ok(thread(id), "receive_message", map[string]any{})
+	}
+	carol := identity.AgentID("codex", "T-carol")
+	nb.ok(thread("T-bob"), "attach", map[string]any{"inbox": "coord"})
+	nb.ok(thread("T-bob"), "grant", map[string]any{"inbox": "coord", "to": carol})
+	nb.ok(thread("T-carol"), "attach", map[string]any{"inbox": "coord"})
+
+	res := na.ok(nil, "ask", map[string]any{"to": "inbox:coord", "text": "q?"})
+	dave := identity.AgentID("codex", "T-dave")
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	if len(tr.sends) != 2 || res["responder"] != carol {
+		t.Fatalf("sends %+v result %v", tr.sends, res)
+	}
+	for _, s := range tr.sends {
+		if s.to == dave || s.copy != (s.to != carol) {
+			t.Fatalf("send %+v: copies go to members only and the responder's is no copy", s)
+		}
+	}
+	for _, c := range w.codex.Writes() {
+		if c.SessionRef == "T-dave" {
+			t.Fatalf("a registered non-member got %+v", c.Message)
+		}
 	}
 }

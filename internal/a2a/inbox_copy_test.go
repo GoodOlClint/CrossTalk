@@ -220,3 +220,20 @@ func TestForgedOrigKindOnTheWireIsIgnored(t *testing.T) {
 		}
 	}
 }
+
+func TestEncodeCarriesInboxMarks(t *testing.T) {
+	m := msg.Message{MessageID: msg.NewUUIDv7(), ContextID: "c", Kind: msg.Ask, Inbox: "coord", InboxCopy: true, Parts: []msg.Part{{Type: "text", Text: "q"}}}
+	ib, err := inboxOf(encode(m))
+	if err != nil || ib.name != "coord" || !ib.copy {
+		t.Fatalf("copy: %+v %v", ib, err)
+	}
+	m.InboxCopy = false
+	if ib, err = inboxOf(encode(m)); err != nil || ib.name != "coord" || ib.copy {
+		t.Fatalf("responder leg: %+v %v", ib, err)
+	}
+	m.Inbox = ""
+	m.InboxCopy = true
+	if ib, err = inboxOf(encode(m)); err != nil || ib.name != "" || ib.copy {
+		t.Fatalf("no inbox: %+v %v", ib, err)
+	}
+}

@@ -389,15 +389,43 @@ func (st *AgentState) sendRegistered(ctx context.Context, m msg.Message, d regis
 	return res
 }
 
-// sendInbox sends m to the inbox's responder, its first member.
+// sendInbox sends m to the inbox's responder, its first member. An inform or
+// ask whose responder leg did not come back unreachable is also copied to
+// every other member except the sender; a command is never copied.
 func (st *AgentState) sendInbox(ctx context.Context, m msg.Message, ib *mcpserver.InboxTarget, finish func(string, adapter.State, string) mcpserver.Result) mcpserver.Result {
 	responder := ib.Members[0]
 	if responder.AgentID == st.agent.ID() {
 		return finish(responder.AgentID, adapter.Rejected, ReasonSelf)
 	}
+	m.Inbox = ib.Name
 	res := st.sendRegistered(ctx, m, responder, "inbox:"+ib.Name)
 	res.Inbox, res.Responder = ib.Name, responder.AgentID
+	if m.Kind == msg.Command || res.State == adapter.Unreachable {
+		return res
+	}
+	for _, d := range ib.Members[1:] {
+		if d.AgentID != st.agent.ID() {
+			res.Copies = append(res.Copies, st.sendCopy(ctx, m, d))
+		}
+	}
 	return res
+}
+
+// sendCopy sends the watcher d its copy of m, journaled as a leg of its own so
+// it never touches the outbound record that holds the responder leg.
+func (st *AgentState) sendCopy(ctx context.Context, m msg.Message, d registry.Descriptor) mcpserver.CopyResult {
+	m.InboxCopy = true
+	leg := func(state adapter.State, reason, taskID string) error {
+		return st.agent.Journal().Append(journal.Record{Type: journal.TypeLeg, MessageID: m.MessageID, To: d.AgentID, Kind: string(m.Kind), State: string(state), Reason: reason, TaskID: taskID, ContextID: m.ContextID})
+	}
+	if leg(journal.StateSubmitted, "", "") != nil {
+		return mcpserver.CopyResult{AgentID: d.AgentID, State: adapter.Unreachable, Reason: receiver.ReasonJournal}
+	}
+	state, reason, taskID := st.viaTransport(ctx, d, m)
+	if err := leg(state, reason, taskID); err != nil {
+		st.shim.log.Warn("shim: journal leg", "agent", st.agent.ID(), "message_id", m.MessageID, "err", err)
+	}
+	return mcpserver.CopyResult{AgentID: d.AgentID, State: state, Reason: reason}
 }
 
 // keepForBind stores a delivered inform for the target's shim to replay when

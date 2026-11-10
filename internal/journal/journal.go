@@ -35,6 +35,7 @@ const (
 	TypeReceipt    Type = "receipt"
 	TypeNudge      Type = "nudge"
 	TypeAttach     Type = "attach"
+	TypeLeg        Type = "leg"
 )
 
 const (
@@ -83,6 +84,7 @@ func (b Binding) SameConversation(o Binding) bool {
 //	outbound:   MessageID, To (agent_id, harness:session_ref, or an unresolved name), Kind, State, Reason, TaskID (far side's), ContextID; the first carries Message, whose deadline_seconds and sent_at fix an ask's deadline
 //	nudge:      To (the peer), Count (sends to it when the nudge fired); kept past retention, since it is the record of how often the nudge fires
 //	attach:     Inbox, Attached (false once detached or dropped); At is the attached_at of the membership
+//	leg:        MessageID, To (agent_id), Kind, State, Reason, TaskID; one inbox copy sent from this agent, kept apart from the outbound record that holds the responder leg
 //	receipt:    MessageID (an admitted inbound reply), InReplyTo (the outbound ask it answers), Sender (the ask's peer agent_id), ContextID (the ask's)
 type Record struct {
 	Type      Type       `json:"type"`
@@ -141,6 +143,8 @@ func (r Record) key() string {
 		return "n\x00" + r.To + "\x00" + strconv.Itoa(r.Count)
 	case TypeAttach:
 		return "a\x00" + r.Inbox
+	case TypeLeg:
+		return "l\x00" + r.MessageID + "\x00" + r.To
 	}
 	return "?\x00" + string(r.Type)
 }
@@ -173,7 +177,7 @@ func unresolved(latest Record) bool {
 		}
 	case TypeDispatch:
 		return true
-	case TypeOutcome, TypeOutbound:
+	case TypeOutcome, TypeOutbound, TypeLeg:
 		return latest.State == StateUnknown
 	case TypeRoute:
 		return latest.State == StateOpen

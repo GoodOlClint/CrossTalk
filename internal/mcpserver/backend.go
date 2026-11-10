@@ -34,6 +34,15 @@ type Result struct {
 	// the agent_id of the member that holds the message's reply route.
 	Inbox     string `json:"inbox,omitempty"`
 	Responder string `json:"responder,omitempty"`
+	// Copies is the outcome of each watcher's copy of an inform or ask to an inbox.
+	Copies []CopyResult `json:"copies,omitempty"`
+}
+
+// CopyResult is one watcher's copy of a message to an inbox.
+type CopyResult struct {
+	AgentID string        `json:"agent_id"`
+	State   adapter.State `json:"state"`
+	Reason  string        `json:"reason,omitempty"`
 }
 
 type MailboxEntry struct {

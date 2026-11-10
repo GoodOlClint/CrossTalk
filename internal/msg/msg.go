@@ -45,6 +45,11 @@ type Message struct {
 	HopChain        []string  `json:"hop_chain"`
 	SentAt          time.Time `json:"sent_at"`
 	Parts           []Part    `json:"parts"`
+	// Inbox is the role inbox the message is addressed to, and InboxCopy marks
+	// a watcher's copy. A sender sets them; a receiver reads them from the
+	// A2A metadata, never from this struct.
+	Inbox     string `json:"inbox,omitempty"`
+	InboxCopy bool   `json:"inbox_copy,omitempty"`
 }
 
 // Text is the text parts joined by newlines.

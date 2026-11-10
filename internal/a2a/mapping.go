@@ -186,6 +186,12 @@ func encode(m msg.Message) *sdk.Message {
 	if m.DeadlineSeconds > 0 {
 		ct["deadline_seconds"] = m.DeadlineSeconds
 	}
+	if m.Inbox != "" {
+		ct["inbox"] = m.Inbox
+		if m.InboxCopy {
+			ct["inbox_copy"] = true
+		}
+	}
 	if len(ct) > 0 {
 		am.Metadata = map[string]any{MetaKey: ct}
 	}

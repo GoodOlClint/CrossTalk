@@ -632,3 +632,28 @@ func TestAttachRecordSurvivesRetention(t *testing.T) {
 		t.Fatalf("replay attach records %v", kept)
 	}
 }
+
+func TestLegRecordsKeyedPerRecipientAndRetainedWhileUnknown(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return now }
+	j, _ := open(t, dir, Options{Now: clock})
+	j.Append(Record{Type: TypeOutbound, MessageID: "m1", To: "resp", Kind: "ask", State: "accepted"})
+	j.Append(Record{Type: TypeLeg, MessageID: "m1", To: "w1", Kind: "ask", State: StateSubmitted})
+	j.Append(Record{Type: TypeLeg, MessageID: "m1", To: "w1", Kind: "ask", State: StateUnknown})
+	j.Append(Record{Type: TypeLeg, MessageID: "m2", To: "w2", Kind: "inform", State: "accepted"})
+	if o, _ := j.Latest(Record{Type: TypeOutbound, MessageID: "m1"}); o.To != "resp" || o.State != "accepted" {
+		t.Fatalf("outbound record touched by legs: %+v", o)
+	}
+	j.Close()
+
+	now = now.Add(25 * time.Hour)
+	j2, _ := open(t, dir, Options{Now: clock})
+	defer j2.Close()
+	if r, ok := j2.Latest(Record{Type: TypeLeg, MessageID: "m1", To: "w1"}); !ok || r.State != StateUnknown {
+		t.Fatalf("unknown leg after 25h = %+v, %v", r, ok)
+	}
+	if _, ok := j2.Latest(Record{Type: TypeLeg, MessageID: "m2", To: "w2"}); ok {
+		t.Fatal("settled leg survived retention")
+	}
+}
