@@ -30,6 +30,10 @@ type Result struct {
 	Reason    string        `json:"reason,omitempty"`
 	// Hint tells the model its next step; Reason stays the stable code.
 	Hint string `json:"hint,omitempty"`
+	// Inbox and Responder are set for a send to a role inbox: its name and
+	// the agent_id of the member that holds the message's reply route.
+	Inbox     string `json:"inbox,omitempty"`
+	Responder string `json:"responder,omitempty"`
 }
 
 type MailboxEntry struct {

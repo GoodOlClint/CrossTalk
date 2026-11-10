@@ -318,11 +318,14 @@ func (st *AgentState) deliver(ctx context.Context, m msg.Message) mcpserver.Resu
 	case tgt.UnknownAlias != "":
 		return finish(m.To, adapter.Rejected, ReasonUnknownAlias)
 	}
+	if ib := tgt.Inbox; ib != nil {
+		return st.sendInbox(ctx, m, ib, finish)
+	}
 	if d := tgt.Desc; tgt.Registered {
 		if d.AgentID == st.agent.ID() {
 			return finish(d.AgentID, adapter.Rejected, ReasonSelf)
 		}
-		return st.sendRegistered(ctx, m, d)
+		return st.sendRegistered(ctx, m, d, d.AgentID)
 	}
 	if m.Kind != msg.Inform {
 		switch len(tgt.Native) {
@@ -365,7 +368,9 @@ func (st *AgentState) deliver(ctx context.Context, m msg.Message) mcpserver.Resu
 	return res
 }
 
-func (st *AgentState) sendRegistered(ctx context.Context, m msg.Message, d registry.Descriptor) mcpserver.Result {
+// sendRegistered sends m to the shim-served agent d; peer is the key the
+// per-peer nudge counts the send under.
+func (st *AgentState) sendRegistered(ctx context.Context, m msg.Message, d registry.Descriptor, peer string) mcpserver.Result {
 	res := mcpserver.Result{MessageID: m.MessageID}
 	if st.outbound(m, d.AgentID, journal.StateSubmitted, "", true) != nil {
 		res.State, res.Reason = adapter.Unreachable, receiver.ReasonJournal
@@ -380,7 +385,18 @@ func (st *AgentState) sendRegistered(ctx context.Context, m msg.Message, d regis
 	if d.HarnessEndpoint != nil {
 		res.Hint = joinHint(res.Hint, st.shim.backendHint(ctx, adapter.Harness(d.Harness), *d.HarnessEndpoint, d.SessionRef, state))
 	}
-	res.Hint = joinHint(res.Hint, st.countSend(d.AgentID, state))
+	res.Hint = joinHint(res.Hint, st.countSend(peer, state))
+	return res
+}
+
+// sendInbox sends m to the inbox's responder, its first member.
+func (st *AgentState) sendInbox(ctx context.Context, m msg.Message, ib *mcpserver.InboxTarget, finish func(string, adapter.State, string) mcpserver.Result) mcpserver.Result {
+	responder := ib.Members[0]
+	if responder.AgentID == st.agent.ID() {
+		return finish(responder.AgentID, adapter.Rejected, ReasonSelf)
+	}
+	res := st.sendRegistered(ctx, m, responder, "inbox:"+ib.Name)
+	res.Inbox, res.Responder = ib.Name, responder.AgentID
 	return res
 }
 
