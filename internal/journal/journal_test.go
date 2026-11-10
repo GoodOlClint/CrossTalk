@@ -585,3 +585,20 @@ func TestNudgeRecordsSurviveRetention(t *testing.T) {
 		t.Fatalf("%d nudge records after 25h, want 2", n)
 	}
 }
+
+func TestNameRecordRetained(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return now }
+	j, _ := open(t, dir, Options{Now: clock})
+	j.Append(Record{Type: TypeName, Name: "first"})
+	j.Append(Record{Type: TypeName, Name: "Second Name"})
+	j.Close()
+
+	now = now.Add(48 * time.Hour)
+	j2, _ := open(t, dir, Options{Now: clock})
+	defer j2.Close()
+	if r, ok := j2.Latest(Record{Type: TypeName}); !ok || r.Name != "Second Name" {
+		t.Fatalf("name record after truncation = %+v, %v", r, ok)
+	}
+}
