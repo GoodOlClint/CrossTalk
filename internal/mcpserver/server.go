@@ -450,7 +450,11 @@ func (s *Server) local(agentID string) *Agent {
 // resolve takes name and cwd from Discover when the harness could not name
 // the caller from the request alone.
 func (s *Server) resolve(ctx context.Context, req *mcp.CallToolRequest) (caller, error) {
-	c, err := resolveCaller(ctx, s.harnesses, requestContext(req, s.ppid))
+	return s.resolveContext(ctx, requestContext(req, s.ppid))
+}
+
+func (s *Server) resolveContext(ctx context.Context, rc harness.RequestContext) (caller, error) {
+	c, err := resolveCaller(ctx, s.harnesses, rc)
 	if err != nil || !c.bound() || c.name != "" {
 		return c, err
 	}
@@ -465,6 +469,40 @@ func (s *Server) resolve(ctx context.Context, req *mcp.CallToolRequest) (caller,
 		}
 	}
 	return c, nil
+}
+
+// RegisterSession registers the agent for the session req names, through the
+// same path as a first tools/call, without waiting for one. A later call for
+// that session finds the same agent. cwd is used when Discover has none.
+func (s *Server) RegisterSession(ctx context.Context, req harness.RequestContext, cwd string) error {
+	if req.ParentPID == 0 {
+		req.ParentPID = s.ppid
+	}
+	c, err := s.resolveContext(ctx, req)
+	if err != nil {
+		return err
+	}
+	if !c.bound() {
+		return &Error{Code: CodeUnbound, Reason: "no harness claims this session"}
+	}
+	if c.cwd == "" {
+		c.cwd = cwd
+	}
+	for {
+		a, _, e := s.agent(ctx, c)
+		if e == nil {
+			a.Done()
+			return nil
+		}
+		if e.Code != CodeNotReady || e.Reason != "binding_in_progress" {
+			return e
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
 }
 
 func toolError(err error) *Error {
