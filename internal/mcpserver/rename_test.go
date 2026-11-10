@@ -1,6 +1,9 @@
 package mcpserver
 
 import (
+	"bytes"
+	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 
@@ -192,5 +195,91 @@ func TestRenameJournalFailureRollsBack(t *testing.T) {
 	defer g.Close()
 	if g.Name() != "wanted" {
 		t.Errorf("rolled-back name still locked: other registration got %q", g.Name())
+	}
+}
+
+func TestRenamePinSurvivesRestart(t *testing.T) {
+	e := renameEnv(t, map[string]string{"T-1": "orig"})
+	e.mustOK(thread("T-1"), "rename", nameArg("pinned"))
+	e.stop()
+	e.start(999999)
+
+	out := e.mustOK(thread("T-1"), "send_message", sendArgs("x", "1"))
+	if d := e.descriptor(codexID("T-1")); d.Name != "pinned" {
+		t.Fatalf("alias after restart %q, want pinned", d.Name)
+	}
+	if n, ok := out["notice"]; ok {
+		t.Errorf("restart with a free pin gave a notice: %v", n)
+	}
+	e.fb.SetSessions(Session{Harness: "codex", SessionRef: "T-1", Name: "auto title", Cwd: "/w"})
+	e.mustOK(thread("T-1"), "send_message", sendArgs("x", "2"))
+	if d := e.descriptor(codexID("T-1")); d.Name != "pinned" {
+		t.Errorf("restored pin lost to the harness name: %q", d.Name)
+	}
+}
+
+func TestRenamePinHeldOnRestartRetriesWhenFree(t *testing.T) {
+	e := renameEnv(t, map[string]string{"T-1": "orig"})
+	e.mustOK(thread("T-1"), "rename", nameArg("pinned"))
+	e.stop()
+	holder, err := registry.New(e.stateDir).Acquire(registry.Request{AgentID: "ffffffffffffffff", HarnessName: "pinned", Harness: "codex", Cwd: "/w"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Close()
+	e.start(999999)
+
+	out := e.mustOK(thread("T-1"), "send_message", sendArgs("x", "1"))
+	id := codexID("T-1")
+	if d := e.descriptor(id); d.Name != "orig" && d.Name != "codex-w-"+id[:8] {
+		t.Fatalf("alias while the pin is held %q", d.Name)
+	}
+	if e.descriptor(id).Name == "pinned" {
+		t.Fatal("took a held name")
+	}
+	if n, _ := out["notice"].(string); !strings.Contains(n, "pinned") {
+		t.Errorf("no notice naming the held pin: %v", out)
+	}
+
+	e.fb.SetSessions(Session{Harness: "codex", SessionRef: "T-1", Name: "", Cwd: "/w"})
+	e.mustOK(thread("T-1"), "send_message", sendArgs("x", "2"))
+	if e.descriptor(id).Name == "pinned" {
+		t.Fatal("took the name while it was still held")
+	}
+	holder.Close()
+	e.mustOK(thread("T-1"), "send_message", sendArgs("x", "3"))
+	if d := e.descriptor(id); d.Name != "pinned" {
+		t.Errorf("alias after the holder ended %q, want pinned", d.Name)
+	}
+}
+
+func TestNameRecordSurvivesOldShimRewrite(t *testing.T) {
+	e := renameEnv(t, map[string]string{"T-1": "orig"})
+	e.mustOK(thread("T-1"), "rename", nameArg("pinned"))
+	e.stop()
+
+	path := journal.Path(e.stateDir, codexID("T-1"))
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []byte
+	for _, line := range bytes.Split(bytes.TrimSpace(raw), []byte("\n")) {
+		var m map[string]any
+		if err := json.Unmarshal(line, &m); err != nil {
+			t.Fatal(err)
+		}
+		delete(m, "name")
+		b, _ := json.Marshal(m)
+		out = append(append(out, b...), '\n')
+	}
+	if err := os.WriteFile(path, out, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	e.start(999999)
+	e.mustOK(thread("T-1"), "send_message", sendArgs("x", "1"))
+	if d := e.descriptor(codexID("T-1")); d.Name != "orig" {
+		t.Errorf("alias after the pin was lost %q, want the harness name", d.Name)
 	}
 }

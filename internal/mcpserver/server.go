@@ -279,6 +279,17 @@ func (s *Server) register(ctx context.Context, a *Agent, c caller) (notice strin
 	}
 	a.j, a.replay = j, rp
 	a.harnessName = c.name
+	var pinHeld string
+	if r, ok := j.Latest(journal.Record{Type: journal.TypeName}); ok && r.Name != "" {
+		a.pinned = r.Name
+		switch err := g.Rename(r.Name); {
+		case err == nil:
+		case errors.Is(err, registry.ErrNameHeld):
+			pinHeld = r.Name
+		default:
+			return "", err
+		}
+	}
 
 	d := registry.Descriptor{Harness: string(c.harness), Cwd: c.cwd, SessionRef: c.sessionRef, Role: registry.RolePrimary}
 	if c.harnessPID > 0 {
@@ -311,7 +322,10 @@ func (s *Server) register(ctx context.Context, a *Agent, c caller) (notice strin
 	if p, ok := s.backend.(Publisher); ok {
 		p.Published(a)
 	}
-	if c.name != "" && g.Name() != c.name {
+	if pinHeld != "" {
+		return fmt.Sprintf("registered as %q: the name set with rename, %q, is held by another live agent; a later call takes it", g.Name(), pinHeld), nil
+	}
+	if a.pinned == "" && c.name != "" && g.Name() != c.name {
 		notice = s.heldNotice("registered as", g.Name(), c.name)
 	}
 	return notice, nil
