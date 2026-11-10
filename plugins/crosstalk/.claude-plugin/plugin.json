@@ -1,6 +1,6 @@
 {
   "name": "crosstalk",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Message other running agent sessions (Claude Code, Codex) on this Mac by name.",
   "author": {
     "name": "GoodOlClint",
