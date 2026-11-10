@@ -602,3 +602,33 @@ func TestNameRecordRetained(t *testing.T) {
 		t.Fatalf("name record after truncation = %+v, %v", r, ok)
 	}
 }
+
+func TestAttachRecordSurvivesRetention(t *testing.T) {
+	dir := t.TempDir()
+	now := time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return now }
+	j, _ := open(t, dir, Options{Now: clock})
+	j.Append(Record{Type: TypeAttach, Inbox: "coord", Attached: true})
+	j.Append(Record{Type: TypeAttach, Inbox: "scribe", Attached: true})
+	j.Append(Record{Type: TypeAttach, Inbox: "scribe", Attached: false})
+	j.Close()
+
+	now = now.Add(25 * time.Hour)
+	j2, rp := open(t, dir, Options{Now: clock})
+	defer j2.Close()
+	if r, ok := j2.Latest(Record{Type: TypeAttach, Inbox: "coord"}); !ok || !r.Attached || !r.At.Equal(time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)) {
+		t.Fatalf("attach record after 25h = %+v, %v", r, ok)
+	}
+	if _, ok := j2.Latest(Record{Type: TypeAttach, Inbox: "scribe"}); ok {
+		t.Fatal("detached inbox record survived retention")
+	}
+	var kept []string
+	for _, r := range rp.Unresolved {
+		if r.Type == TypeAttach {
+			kept = append(kept, r.Inbox)
+		}
+	}
+	if len(kept) != 1 || kept[0] != "coord" {
+		t.Fatalf("replay attach records %v", kept)
+	}
+}
