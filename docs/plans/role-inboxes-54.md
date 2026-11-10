@@ -157,7 +157,45 @@ This is the end-to-end test for #54: before, a send to the old generation-number
 6. **Typo creates an inbox.** `attach("coordintor")` silently creates a new inbox and its owner. See Q2.
 7. **Size.** About fifteen commits and four ADR/doc files; the series is stacked so each can merge on green CI.
 
-## 8. Open questions for the operator
+## 8. Operator rulings and open questions
+
+Decided (operator ruling R143, 2026-11-10; not reopened):
+
+- **A1 (Q1).** The fallback walk (I8) runs right after the first inbox release: it is not in the series that ships inboxes and lands as a follow-up. Nothing in A1 to A4, I0 to I7, I9 or I10 depends on I8; without it, a send to an inbox whose responder comes back `unreachable` returns that state with no next member tried.
+- **A2 (Q2).** `attach` returns `created: true` when it created the inbox. Pinned by `TestAttachCreatesInboxOwnedByCaller` (I3 asserts the field in the tool result).
+- **A3 (Q3).** No downgrade path is accepted for inbox users; section 6 states the rollback barrier.
+- **A5 (Q5).** Keep ADR 0023's signed pre-bind design (MAC, lock, caps); A1 builds it.
+- **B4.** Tool docs list tools by name, never a count. Every new tool (`attach`, `detach`, `grant`) is added to every such list: design §8, README, the plugin skill, AGENTS.md and any page that names the tools. Pinned by `TestToolDocsNameEveryRegisteredTool` (I3), which reads the registered tool set and fails when a doc misses a tool or still counts them.
+- **Q4 (rename overlap).** Settled by the merge of #43 before this build: `rename` is the eighth tool, and inbox names share its reserved prefix constant (`inbox:`, any case, `internal/identity`).
+
+### Pre-registered tests
+
+Written before any code. Each commit's test must show the named failure on its parent commit and pass after it. I0 is the one exception: a pure move, pinned by the existing send, hint and receipt tests passing unchanged.
+
+| Commit | Test | Observable failure before the change |
+|---|---|---|
+| A1 | `TestPreBindEntryRoundTrip` | package `internal/prebind` does not exist (build fails) |
+| A1 | `TestPreBindDropsBadMACWrongBindingModeSymlinkNoToken`, `TestPreBindCapsSkipWrite`, `TestPreBindSweepsEntriesOlderThanTTL`, `TestPreBindDrainCrashPoints`, `TestPreBindCollisionDropsConflictingSenders` | same: no package |
+| A2 | `TestImportDeliveredOpensRouteWithSuppliedTime` | no `ImportDelivered`; `openRoute` stamps now, so `OpenedAt` is the import time, not the delivery time |
+| A2 | `TestImportDeliveredIsIdempotent`, `TestImportDeliveredNeverInjects`, `TestImportedRouteExpiresOneHourAfterDelivery` | no `ImportDelivered` (build fails) |
+| A3 | `TestNativeSendWritesPreBindEntryOnlyForAcceptedOrQueuedInform` | no file under `prebind/` after an accepted native inform |
+| A3 | `TestFailedPreBindWriteKeepsStateAndAddsHint` | no store write to fail, so no store hint |
+| A3 | `TestAcceptedNativeSendWarnsOneWay` (updated) | hint still says the recipient cannot answer with `reply` |
+| A4 | `TestPreBindReplySucceedsAfterBind` | `reply` after bind returns `invalid/no_such_message` |
+| A4 | `TestPreBindDrainRunsBeforePublish`, `TestPreBindReplyDrainsLateEntry`, `TestPreBindPartialImportRepairedOnRetry`, `TestPreBindEntryOlderThanTTLGivesPreBindHint` | no drain: `reply` misses, no route in the journal |
+| I1 | `TestAttachCreatesInboxOwnedByCaller`, `TestAttachOwnedInboxNeedsGrant`, `TestGrantOnlyByOwner`, `TestGrantOwnerHandsOverInOneWrite`, `TestOwnerDetachLeavesInboxOwnerlessAndKeepsGrants`, `TestClaimOwnerlessInbox`, `TestAttachOwnerlessRejectedWithClaimHint`, `TestClaimerInheritsGrants`, `TestInboxConcurrentClaimAndResume`, `TestInboxCrashBetweenFileAndDescriptor`, `TestDescriptorWithInboxesReadByOldShape`, `TestListSkipsSupersededMemberAndDeadMember` | no inbox store (build fails) |
+| I2 | `TestAttachRecordSurvivesRetention` | a 25-hour-old attach record is dropped at retention |
+| I2b | `TestInboxCopyOpensNoRoute`, `TestInboxForgedCopyFlagOnlyRemovesRoute`, `TestInboxCopyAuthorizedAgainstOriginalKind`, `TestInboxAskCopiesNeverFillOpenAsks`, `TestPendingCopyPersistedAsInformForOlderReaders` | the copy marker is ignored: a route opens and `reply` succeeds; ask copies fill `MaxOpenAsks` |
+| I3 | `TestInboxToolsRefuseSubagents`, `TestInboxActionsSelfOnlyAndUnbound`, `TestClaimInboxFormDoesNotResolveASession`, `TestReleaseInboxFormIsInvalidInbox`, `TestInvalidInboxNames`, `TestToolListHasAttachDetachGrant`, `TestToolDocsNameEveryRegisteredTool` | tools `attach`, `detach`, `grant` are not registered; `claim("inbox:x")` resolves as a session and is `no_such_agent` |
+| I4 | `TestInboxAttachSurvivesRestartAndKeepsOrder`, `TestInboxSupersededMemberDropsOut` | a restarted shim publishes no inboxes |
+| I5 | `TestInboxAddressNeverMatchesSessionName`, `TestInboxRemoteAddressRejected`, `TestInboxZeroMembersNoSuchAgent`, `TestListAgentsShowsInboxOwnerAndResponder` | `inbox:x` is looked up as a session name; `inbox:x@host` reaches the paired-alias path; rows show no inboxes |
+| I6 | `TestInboxNewestMemberResponds`, `TestInboxAskOneReply`, `TestInboxCommandOnlyToResponder`, `TestInboxCodexThreadsIndependent`, `TestInboxNudgeCountsInboxAsOnePeer` | a send to `inbox:x` with a member is `no_such_agent` |
+| I7 | `TestInboxFanOutResponderGetsKindOthersGetCopies`, `TestInboxCopyLegNeverOverwritesResponderLeg`, `TestInboxMixedBuildReceiverNeverGetsReplyableCopy` | only the responder receives the message; `copies` is empty |
+| I9 | `TestInboxMembershipNotices`, `TestInboxHandover`, `TestInboxColdHandoverClaim` | other members get no notice on attach, detach, hand-over or claim |
+| I10 | `TestSiteNamesEveryTool` (extended to `attach`, `detach`, `grant`, `rename`) | `examples.md` and `how-it-works.md` do not name the new tools |
+| I8 (follow-up, ruling A1) | `TestInboxFallbackPastUnreachableResponder`, `TestInboxFallbackAfterCanceledPendingLeg`, `TestInboxNoFallbackAfterAmbiguousDelivery`, `TestInboxCandidateRepliesBeforeSendReturns`, `TestInboxSenderCrashAfterCandidateAccepted`, `TestInboxAllMembersUnreachable`, `TestInboxWalkStopsOnJournalUnknown` | an `unreachable` responder ends the send; no next member is tried; no `passed` field |
+
+### Open questions (answered above)
 
 - **Q1. One series or two releases?** The fallback walk (I8) is the largest and riskiest part and is needed only when a responder dies mid-send. Recommendation: land A1 to A4 and I0 to I7, I9, I10 first (handover works because the newest member answers), and I8 right after, in the same release if its tests are green, else the next. This is a sequencing choice the rulings do not cover.
 - **Q2. Show `created: true` in the `attach` result, and a hint when it created a new inbox?** ADR 0024 does not say. It makes a typo visible to the model. Recommendation: yes; it adds one result field and no behaviour.
