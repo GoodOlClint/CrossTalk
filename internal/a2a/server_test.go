@@ -837,7 +837,7 @@ func TestTerminalWriteFailureIsNotCompleted(t *testing.T) {
 	ts := &failingTaskStore{}
 	st := newStore(ts, slog.New(slog.DiscardHandler))
 	m := msg.Message{MessageID: msg.NewUUIDv7(), ContextID: "ctx", Kind: msg.Ask}
-	task, _, err := st.create("peer", m, encode(m), 32, 256)
+	task, _, err := st.create("peer", m, encode(m), inboxMark{}, 32, 256)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -14,6 +14,7 @@ import (
 	"github.com/GoodOlClint/crosstalk/internal/mcpserver"
 	"github.com/GoodOlClint/crosstalk/internal/msg"
 	"github.com/GoodOlClint/crosstalk/internal/prebind"
+	"github.com/GoodOlClint/crosstalk/internal/receiver"
 )
 
 func TestIdenticalReplyRetryReturnsFirstResult(t *testing.T) {
@@ -271,5 +272,34 @@ func TestPreBindEntryOlderThanTTLGivesPreBindHint(t *testing.T) {
 	}
 	if rs := journalRecords(t, w, b.AgentID); slices.ContainsFunc(rs, func(r journal.Record) bool { return r.Type == journal.TypeRoute && r.MessageID == id }) {
 		t.Fatal("an entry older than the TTL opened a route")
+	}
+}
+
+func TestInboxCopyReplyIsRejectedInboxCopy(t *testing.T) {
+	w := newWorld(t)
+	alice := w.claude(4001, "sess-alice", "alice")
+	w.codex.addThread("T-bob", "bob")
+	w.token(alice.agentID())
+	na := w.node(alice.pid, w.lb, nil)
+	nb := w.node(1, w.lb, nil)
+	na.ok(nil, "receive_message", map[string]any{})
+	nb.ok(thread("T-bob"), "receive_message", map[string]any{})
+	st := nb.sh.Agent(bobTarget("T-bob").AgentID)
+
+	for _, kind := range []msg.Kind{msg.Inform, msg.Ask} {
+		id := msg.NewUUIDv7()
+		m := msg.Message{MessageID: id, ContextID: id, From: "alice", To: "bob", Kind: kind, Delivery: msg.Immediate, SentAt: time.Now(), Parts: []msg.Part{{Type: "text", Text: "watching"}}}
+		res := st.Receiver().Receive(context.Background(), receiver.Inbound{Ingress: receiver.A2A, Message: m, Sender: receiver.Sender{Verified: true, AgentID: alice.agentID(), Name: "alice", Role: "primary"}, Inbox: "coord", InboxCopy: true})
+		if res.State != "accepted" && res.State != "queued" {
+			t.Fatalf("%s copy: %+v", kind, res)
+		}
+		isErr, out := nb.call(thread("T-bob"), "reply", map[string]any{"message_id": id, "text": "answer"})
+		hint, _ := out["hint"].(string)
+		if !isErr || out["error"] != mcpserver.CodeRejected || out["reason"] != ReasonInboxCopy || !strings.Contains(hint, "responder") {
+			t.Fatalf("%s copy reply: %v %v", kind, isErr, out)
+		}
+	}
+	if len(alice.got()) != 0 {
+		t.Fatalf("a reply to a copy reached the sender: %q", alice.got())
 	}
 }

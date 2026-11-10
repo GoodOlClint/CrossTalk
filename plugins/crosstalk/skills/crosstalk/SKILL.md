@@ -48,7 +48,7 @@ Tool names are bare here; your harness may prefix them.
 - `name_held`: a live session already has that name; pick another, or retry once if that session has just ended.
 - `self`: pick another row.
 - `agent_held`: tell the user a second CrossTalk server may be installed.
-- `ask_closed`, `already_replied`: the `reply` text was NOT delivered; the hint gives the `send_message` call (to the sender, same text). `no_such_message`: `send_message` to the sender.
+- `ask_closed`, `already_replied`: the `reply` text was NOT delivered; the hint gives the `send_message` call (to the sender, same text). `no_such_message`: `send_message` to the sender. `inbox_copy`: the message reached you as a copy of one sent to a role inbox (its envelope shows `inbox`); only the inbox's responder answers, so do not reply.
 - `unbound`: only `list_agents` works. Tell the user.
 - `not_ready`: retry once.
 - `too_large`, `too_many_pending`, `too_many_asks`: shorten the text or wait.

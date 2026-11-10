@@ -609,3 +609,19 @@ func TestRenderCarriesSenderAgentID(t *testing.T) {
 		t.Fatalf("without id: %s", out)
 	}
 }
+
+func TestInjectShowsInboxName(t *testing.T) {
+	r := newRig(t, idleThread())
+	d := r.delivery(true, msg.Immediate)
+	d.Inbox = "coord"
+	if st, err := r.a.Inject(ctx(t), message("hello"), d); st != adapter.Accepted || err != nil {
+		t.Fatalf("Inject = %s, %v", st, err)
+	}
+	got := r.srv.Thread(thread)
+	if len(got.ToolOutputs) != 1 || !strings.Contains(got.ToolOutputs[0].Output, `"inbox":"coord"`) {
+		t.Fatalf("tool outputs %+v", got.ToolOutputs)
+	}
+	if strings.Contains(codex.Render(message("hello"), true, "", ""), `"inbox"`) {
+		t.Fatal("render without an inbox names one")
+	}
+}

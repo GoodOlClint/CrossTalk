@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"time"
 
@@ -26,6 +27,7 @@ const PrincipalCrossTalk = "crosstalk"
 const (
 	ReasonAskClosed      = "ask_closed"
 	ReasonAlreadyReplied = "already_replied"
+	ReasonInboxCopy      = "inbox_copy"
 )
 
 // NudgeFirst is the send count to one peer at which a result first asks the
@@ -567,6 +569,17 @@ func (st *AgentState) inbound(messageID string) (msg.Message, string, bool) {
 	return msg.Message{}, "", false
 }
 
+// inboxCopy reports whether messageID was delivered here as an inbox copy.
+func (st *AgentState) inboxCopy(messageID string) bool {
+	rs, err := st.agent.Journal().Records()
+	if err != nil {
+		return false
+	}
+	return slices.ContainsFunc(rs, func(r journal.Record) bool {
+		return r.Type == journal.TypeDedupe && r.MessageID == messageID && r.Copy
+	})
+}
+
 // addressable reports a reply key that names an agent, local or on a paired
 // host, as opposed to a principal such as local-user.
 func addressable(key string) bool { return mcpserver.IsAgentID(key) || receiver.IsRemoteKey(key) }
@@ -600,6 +613,9 @@ func (s *Shim) Reply(ctx context.Context, from *mcpserver.Agent, messageID, text
 	}
 	st.replyMu.Lock()
 	defer st.replyMu.Unlock()
+	if st.inboxCopy(messageID) {
+		return mcpserver.Result{}, &mcpserver.Error{Code: mcpserver.CodeRejected, Reason: ReasonInboxCopy}
+	}
 	orig, key, ok := st.inbound(messageID)
 	if !ok {
 		hint := hintNoRouteUnbound

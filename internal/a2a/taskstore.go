@@ -121,6 +121,11 @@ func (t *task) record(state string, appended *sdk.Message) journal.Record {
 		State:     state,
 		Delivery:  t.delivery,
 		Reason:    t.reason,
+		Inbox:     t.inbox,
+		Copy:      t.copy,
+	}
+	if t.copy {
+		r.OrigKind = string(t.origKind)
 	}
 	if !t.deadline.IsZero() {
 		d := t.deadline
@@ -164,7 +169,7 @@ func (st *store) replay(rs []journal.Record) {
 			continue
 		}
 		if t == nil {
-			t = &task{id: id, contextID: r.ContextID, principal: r.Principal, messageID: r.MessageID, kind: msg.Kind(r.Kind), done: make(chan struct{})}
+			t = &task{id: id, contextID: r.ContextID, principal: r.Principal, messageID: r.MessageID, kind: msg.Kind(r.Kind), inbox: r.Inbox, copy: r.Copy, origKind: msg.Kind(r.OrigKind), done: make(chan struct{})}
 			if r.Deadline != nil {
 				t.deadline = *r.Deadline
 			}

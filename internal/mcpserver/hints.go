@@ -15,6 +15,7 @@ var Hints = map[string]string{
 	"tls_pin_mismatch":          "The host at that address is not the one that was paired. Tell your user and do not retry send_message.",
 	"invalid_name":              "That name cannot be used: 1 to 64 bytes, no @, no control characters, no space at either end, not 16 hex digits, not starting with inbox: in any case. Pick another and call rename again.",
 	"name_held":                 "Another live session already has that name. Call list_agents to see who, pick a different name, or retry once if that session has just ended.",
+	"inbox_copy":                "That message reached this session as a copy of a message to a role inbox, and only the inbox's responder answers it. Do not reply; use send_message to the sender if you have something to add.",
 	"no_such_message":           "No reply route exists for that message_id. Use send_message to the sender instead.",
 }
 

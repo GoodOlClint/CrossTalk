@@ -461,3 +461,22 @@ func TestEnvelopeCarriesSenderAgentID(t *testing.T) {
 		t.Fatalf("without id: %q", got)
 	}
 }
+
+func TestInjectShowsInboxName(t *testing.T) {
+	a, s, f := setup(t, ackLine)
+	m := message("alice", "hello")
+	st, err := a.Inject(context.Background(), m, adapter.Delivery{Mode: msg.Immediate, Target: s.Binding(), VerifiedSender: true, Inbox: `co"ord`})
+	if st != adapter.Accepted || err != nil {
+		t.Fatalf("got %s %v", st, err)
+	}
+	var user userFrame
+	if err := json.Unmarshal([]byte(f.frames()[0][1]), &user); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(user.Message.Content, ` kind="inform" inbox="co&quot;ord"`) {
+		t.Fatalf("envelope %q", user.Message.Content)
+	}
+	if strings.Contains(Envelope("uds:/s", "alice", "", "", m), "inbox=") {
+		t.Fatal("envelope without an inbox names one")
+	}
+}

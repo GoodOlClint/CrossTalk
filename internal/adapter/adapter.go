@@ -55,6 +55,8 @@ type Delivery struct {
 	SenderHarness string
 	// SenderAgentID is the sending agent's agent_id, set only when the sender's shim injects into a session with no CrossTalk binding; "" otherwise.
 	SenderAgentID string
+	// Inbox is the role inbox the message was addressed to; "" for a direct message.
+	Inbox string
 	// ReplyAddress is the target harness's NativeReplyAddress for the
 	// injecting agent; "" when it has none.
 	ReplyAddress string

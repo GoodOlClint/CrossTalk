@@ -125,6 +125,11 @@ type Inbound struct {
 	// Native marks a frame with no CrossTalk metadata: it gets a fresh
 	// message_id and is exempt from message_id dedupe (§5 F6).
 	Native bool
+	// Inbox names the role inbox the message was addressed to. InboxCopy marks
+	// a watcher's copy: it is authorized as its Message.Kind, delivered, and
+	// given no reply route.
+	Inbox     string
+	InboxCopy bool
 }
 
 type Result struct {
@@ -273,7 +278,7 @@ func (r *Receiver) receive(ctx context.Context, in Inbound, resume bool) Result 
 	if err != nil {
 		return rejected(m.MessageID, ReasonInvalid)
 	}
-	prior, dup, err := r.j.AcceptRecord(journal.Record{Sender: key, MessageID: m.MessageID, State: journal.StateSubmitted, Message: body})
+	prior, dup, err := r.j.AcceptRecord(journal.Record{Sender: key, MessageID: m.MessageID, State: journal.StateSubmitted, Message: body, Inbox: in.Inbox, Copy: in.InboxCopy})
 	if errors.Is(err, journal.ErrIDInUse) {
 		return rejected(m.MessageID, ReasonIDInUse)
 	}
@@ -333,14 +338,14 @@ func (r *Receiver) receive(ctx context.Context, in Inbound, resume bool) Result 
 	}
 
 	rt := route{Session: self.Binding.SessionRef, MessageID: m.MessageID, Sender: key, Name: in.Sender.Name, Kind: m.Kind}
-	routed := in.Sender.routable()
+	routed := in.Sender.routable() && !in.InboxCopy
 	if routed {
 		if err := r.openRoute(rt); err != nil {
 			r.j.ResolveFor(scope, m.MessageID, string(adapter.Rejected))
 			return reject(ReasonJournal)
 		}
 	}
-	st, err := r.ad.Inject(ctx, m, adapter.Delivery{Mode: m.Delivery, Target: self.Binding, VerifiedSender: in.Sender.Verified, SenderHarness: in.Sender.Harness})
+	st, err := r.ad.Inject(ctx, m, adapter.Delivery{Mode: m.Delivery, Target: self.Binding, VerifiedSender: in.Sender.Verified, SenderHarness: in.Sender.Harness, Inbox: in.Inbox})
 	if !st.Injectable() {
 		st = adapter.Unknown
 	}

@@ -3,6 +3,7 @@ package a2a
 import (
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 
 	sdk "github.com/a2aproject/a2a-go/v2/a2a"
@@ -11,6 +12,7 @@ import (
 	"github.com/GoodOlClint/crosstalk/internal/journal"
 	"github.com/GoodOlClint/crosstalk/internal/msg"
 	"github.com/GoodOlClint/crosstalk/internal/receiver"
+	"github.com/GoodOlClint/crosstalk/internal/registry"
 )
 
 var errBadMessage = errors.New("a2a: invalid message")
@@ -96,6 +98,59 @@ func decode(am *sdk.Message) (msg.Message, error) {
 		m.DeadlineSeconds = int(f)
 	}
 	return m, nil
+}
+
+// inboxMark is the role inbox a message was addressed to, from
+// metadata.crosstalk.inbox, and whether this one is a watcher's copy, from
+// metadata.crosstalk.inbox_copy.
+type inboxMark struct {
+	name string
+	copy bool
+}
+
+func inboxOf(am *sdk.Message) (inboxMark, error) {
+	ct, _ := am.Metadata[MetaKey].(map[string]any)
+	var ib inboxMark
+	if v, ok := ct["inbox"]; ok && v != nil {
+		s, ok := v.(string)
+		if !ok {
+			return ib, badMessage("metadata.%s.inbox is not a string", MetaKey)
+		}
+		if err := registry.ValidInboxName(s); err != nil {
+			return ib, badMessage("metadata.%s.inbox: %v", MetaKey, err)
+		}
+		ib.name = s
+	}
+	if v, ok := ct["inbox_copy"]; ok && v != nil {
+		b, ok := v.(bool)
+		if !ok {
+			return ib, badMessage("metadata.%s.inbox_copy is not a boolean", MetaKey)
+		}
+		ib.copy = b
+	}
+	if ib.copy && ib.name == "" {
+		return ib, badMessage("metadata.%s.inbox_copy needs metadata.%s.inbox", MetaKey, MetaKey)
+	}
+	return ib, nil
+}
+
+// copyWire is the stored form of a copy's first message: its kind reads
+// inform, so a reader that ignores the copy markers resumes an inform, and
+// orig_kind keeps the kind it was authorized as.
+func copyWire(wire *sdk.Message, orig msg.Kind) *sdk.Message {
+	w := *wire
+	w.Metadata = maps.Clone(wire.Metadata)
+	if w.Metadata == nil {
+		w.Metadata = map[string]any{}
+	}
+	ct := map[string]any{}
+	if old, ok := w.Metadata[MetaKey].(map[string]any); ok {
+		ct = maps.Clone(old)
+	}
+	ct["kind"] = string(msg.Inform)
+	ct["orig_kind"] = string(orig)
+	w.Metadata[MetaKey] = ct
+	return &w
 }
 
 // encode is the client side of decode.

@@ -31,6 +31,9 @@ type task struct {
 	messageID string
 	handles   []string
 	kind      msg.Kind
+	inbox     string
+	copy      bool
+	origKind  msg.Kind // for a copy, whose kind is inform
 	state     sdk.TaskState
 	delivery  string
 	reason    string
@@ -79,7 +82,7 @@ func (st *store) alias(principal, clientID, fresh string) string {
 	return fresh
 }
 
-func (st *store) create(principal string, m msg.Message, wire *sdk.Message, maxAsks, maxPending int) (*task, bool, error) {
+func (st *store) create(principal string, m msg.Message, wire *sdk.Message, ib inboxMark, maxAsks, maxPending int) (*task, bool, error) {
 	st.mu.Lock()
 	defer st.mu.Unlock()
 	if t, ok := st.byMsg[m.MessageID]; ok {
@@ -97,7 +100,12 @@ func (st *store) create(principal string, m msg.Message, wire *sdk.Message, maxA
 	if unresolved >= maxPending {
 		return nil, false, rejection(m.MessageID, receiver.ReasonTooManyPending)
 	}
-	if m.Kind == msg.Ask {
+	kind := m.Kind
+	if ib.copy {
+		kind = msg.Inform
+		wire = copyWire(wire, m.Kind)
+	}
+	if kind == msg.Ask {
 		open := 0
 		for _, t := range st.byID {
 			if t.kind == msg.Ask && !t.state.Terminal() {
@@ -113,13 +121,18 @@ func (st *store) create(principal string, m msg.Message, wire *sdk.Message, maxA
 		contextID: m.ContextID,
 		principal: principal,
 		messageID: m.MessageID,
-		kind:      m.Kind,
+		kind:      kind,
+		inbox:     ib.name,
+		copy:      ib.copy,
 		state:     sdk.TaskStateSubmitted,
 		delivery:  journal.StateSubmitted,
 		updated:   time.Now().UTC(),
 		done:      make(chan struct{}),
 	}
-	if m.Kind == msg.Ask && m.DeadlineSeconds > 0 {
+	if ib.copy {
+		t.origKind = m.Kind
+	}
+	if kind == msg.Ask && m.DeadlineSeconds > 0 {
 		t.deadline = t.updated.Add(time.Duration(m.DeadlineSeconds) * time.Second)
 	}
 	wire.TaskID = t.id
@@ -145,6 +158,7 @@ func (st *store) resumeInbound(t *task, resolve func(string) (receiver.Sender, b
 		first = t.history[0]
 	}
 	who := t.principal
+	ib, orig := inboxMark{name: t.inbox, copy: t.copy}, t.origKind
 	st.mu.Unlock()
 	if !submitted {
 		return nil, true
@@ -177,7 +191,10 @@ func (st *store) resumeInbound(t *task, resolve func(string) (receiver.Sender, b
 			snd = receiver.Sender{Verified: true, AgentID: who}
 		}
 	}
-	return &receiver.Inbound{Ingress: receiver.A2A, Message: m, Sender: snd}, true
+	if ib.copy && orig != "" {
+		m.Kind = orig
+	}
+	return &receiver.Inbound{Ingress: receiver.A2A, Message: m, Sender: snd, Inbox: ib.name, InboxCopy: ib.copy}, true
 }
 
 func (st *store) remove(t *task) {
@@ -506,7 +523,11 @@ func (st *store) snapshot(t *task, historyLength *int) *sdk.Task {
 }
 
 func (st *store) snapshotLocked(t *task, historyLength *int) *sdk.Task {
-	ct := map[string]any{"completion": CompletionDelivered, "message_id": t.messageID, "kind": string(t.kind), "state": t.delivery}
+	shown := t.kind
+	if t.copy && t.origKind != "" {
+		shown = t.origKind
+	}
+	ct := map[string]any{"completion": CompletionDelivered, "message_id": t.messageID, "kind": string(shown), "state": t.delivery}
 	if t.reason != "" {
 		ct["reason"] = t.reason
 	}
@@ -625,6 +646,10 @@ func (h *handler) SendMessage(ctx context.Context, req *sdk.SendMessageRequest) 
 	if err != nil {
 		return nil, err
 	}
+	ib, err := inboxOf(req.Message)
+	if err != nil {
+		return nil, err
+	}
 	clientID := req.Message.ID
 	if clientID != m.MessageID && clientID != "" {
 		m.MessageID = s.tasks.alias(who, clientID, m.MessageID)
@@ -638,7 +663,7 @@ func (h *handler) SendMessage(ctx context.Context, req *sdk.SendMessageRequest) 
 	}
 
 	if req.Message.TaskID != "" {
-		return h.continuation(ctx, snd, m, wire, wait)
+		return h.continuation(ctx, snd, m, wire, ib, wait)
 	}
 	if m.ContextID == "" {
 		m.ContextID = m.MessageID
@@ -647,13 +672,13 @@ func (h *handler) SendMessage(ctx context.Context, req *sdk.SendMessageRequest) 
 	if textBytes(m) > s.cfg.Limits.MaxMessageBytes {
 		return nil, rejection(m.MessageID, receiver.ReasonTooLarge)
 	}
-	t, existing, err := s.tasks.create(who, m, wire, s.cfg.Limits.MaxOpenAsks, s.cfg.Limits.MaxPending)
+	t, existing, err := s.tasks.create(who, m, wire, ib, s.cfg.Limits.MaxOpenAsks, s.cfg.Limits.MaxPending)
 	if err != nil {
 		return nil, err
 	}
 	submitted := s.tasks.snapshot(t, nil)
 	if !existing {
-		if !s.start(t, receiver.Inbound{Ingress: receiver.A2A, Message: m, Sender: snd}, false) {
+		if !s.start(t, receiver.Inbound{Ingress: receiver.A2A, Message: m, Sender: snd, Inbox: ib.name, InboxCopy: ib.copy}, false) {
 			s.tasks.remove(t)
 			return nil, sdk.NewError(sdk.ErrServerError, "server closing")
 		}
@@ -815,7 +840,7 @@ func (s *Server) askClosed(t *task) {
 	s.cfg.OnAskClosed(s.tasks.messageIDs(t))
 }
 
-func (h *handler) continuation(ctx context.Context, snd receiver.Sender, m msg.Message, wire *sdk.Message, wait bool) (sdk.SendMessageResult, error) {
+func (h *handler) continuation(ctx context.Context, snd receiver.Sender, m msg.Message, wire *sdk.Message, ib inboxMark, wait bool) (sdk.SendMessageResult, error) {
 	s := h.s
 	t, ok := s.tasks.lookup(wire.TaskID, principal(snd))
 	if !ok {
@@ -845,7 +870,7 @@ func (h *handler) continuation(ctx context.Context, snd receiver.Sender, m msg.M
 		}
 		return nil, sdk.NewError(sdk.ErrInternalError, "message could not be recorded")
 	}
-	res := s.cfg.Receiver.Receive(s.base, receiver.Inbound{Ingress: receiver.A2A, Message: m, Sender: snd})
+	res := s.cfg.Receiver.Receive(s.base, receiver.Inbound{Ingress: receiver.A2A, Message: m, Sender: snd, Inbox: ib.name, InboxCopy: ib.copy})
 	if cont {
 		err = s.tasks.settleContinuation(t, wire.ID, string(res.State), res.Duplicate)
 		if s.tasks.terminal(t) {
