@@ -1,0 +1,48 @@
+package main
+
+import (
+	"fmt"
+	"net"
+	"os"
+	"strconv"
+	"syscall"
+	"time"
+
+	"golang.org/x/sys/unix"
+)
+
+func main() {
+	pid, _ := strconv.Atoi(os.Args[1])
+	k, err := unix.SysctlKinfoProc("kern.proc.pid", pid)
+	if err != nil {
+		fmt.Println("kinfo err", err)
+		return
+	}
+	st := k.Proc.P_starttime
+	fmt.Printf("pid=%d ppid=%d start=%s\n", pid, k.Eproc.Ppid, time.Unix(int64(st.Sec), int64(st.Usec)*1000).UTC().Format(time.RFC3339))
+	raw, err := unix.SysctlRaw("kern.procargs2", pid)
+	if err != nil {
+		fmt.Println("procargs2 err", err)
+	} else if len(raw) > 4 {
+		b := raw[4:]
+		end := 0
+		for end < len(b) && b[end] != 0 {
+			end++
+		}
+		fmt.Println("exec path:", string(b[:end]))
+	}
+	// peer credential over a unix socket
+	p := "/tmp/xtp-peer.sock"
+	os.Remove(p)
+	l, _ := net.Listen("unix", p)
+	go func() { c, _ := net.Dial("unix", p); time.Sleep(time.Second); c.Close() }()
+	c, _ := l.Accept()
+	f, _ := c.(*net.UnixConn).File()
+	pp, err := unix.GetsockoptInt(int(f.Fd()), unix.SOL_LOCAL, unix.LOCAL_PEERPID)
+	fmt.Println("LOCAL_PEERPID:", pp, err, "(self pid", os.Getpid(), ")")
+	os.Remove(p)
+	// flock probe
+	fd, _ := syscall.Open(os.Args[2], syscall.O_RDWR, 0)
+	e := syscall.Flock(fd, syscall.LOCK_EX|syscall.LOCK_NB)
+	fmt.Println("flock NB on lock file:", e)
+}
