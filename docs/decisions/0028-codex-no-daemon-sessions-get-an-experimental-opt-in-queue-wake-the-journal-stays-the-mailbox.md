@@ -4,7 +4,7 @@
 - **Date:** 2026-11-10
 - **Deciders:** operator (consent rulings 2026-11-10; build approval pending) + Claude + council (five advisors, one of them Codex)
 - **Implementation:** planned, not built. No hook command, no claim file, no `mailboxed` state, no `MailSignal`, no wake generation record and no SQLite driver exist in the code.
-- **Context source:** issue #112; [change plan](../plans/codex-no-daemon-queue.md); council record of 2026-11-10
+- **Context source:** issue #112; [change plan](https://github.com/GoodOlClint/CrossTalk/blob/main/docs/plans/codex-no-daemon-queue.md); council record of 2026-11-10
 
 ## Context
 
