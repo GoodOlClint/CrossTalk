@@ -150,7 +150,9 @@ func TestClaims_UnprovenClaims_ExpectNoAgentNoDescriptorNoRebind(t *testing.T) {
 		func() error { return c.AcceptLive(context.Background(), outsider, claim("T1")) },
 		func() error { return c.AcceptDurable(context.Background(), claim("T1")) },
 		func() error { return c.AcceptLive(context.Background(), hookPID, claim("T-existing")) },
-		func() error { return c.AcceptDurable(context.Background(), Claim{SessionID: "T-existing", Cwd: "/forged"}) },
+		func() error {
+			return c.AcceptDurable(context.Background(), Claim{SessionID: "T-existing", Cwd: "/forged"})
+		},
 	}
 	for i, accept := range cases {
 		if err := accept(); err == nil {
