@@ -24,9 +24,11 @@ type Agent struct {
 	// mu serializes alias changes and claim/release applied to this agent.
 	mu          sync.Mutex
 	harnessName string
-	reg         *registry.Registration
-	j           *journal.Journal
-	replay      journal.Replay
+	// pinned is the name set by rename; while set, the alias only moves toward it.
+	pinned string
+	reg    *registry.Registration
+	j      *journal.Journal
+	replay journal.Replay
 
 	callMu   sync.Mutex
 	draining bool

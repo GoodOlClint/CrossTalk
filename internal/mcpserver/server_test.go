@@ -135,15 +135,18 @@ func TestToolSurface(t *testing.T) {
 		t.Fatal(err)
 	}
 	var names []string
-	var send *mcp.Tool
+	var send, rename *mcp.Tool
 	for _, tl := range res.Tools {
 		names = append(names, tl.Name)
-		if tl.Name == "send_message" {
+		switch tl.Name {
+		case "send_message":
 			send = tl
+		case "rename":
+			rename = tl
 		}
 	}
 	slices.Sort(names)
-	want := []string{"ask", "claim", "list_agents", "receive_message", "release", "reply", "send_message"}
+	want := []string{"ask", "claim", "list_agents", "receive_message", "release", "rename", "reply", "send_message"}
 	if !slices.Equal(names, want) {
 		t.Fatalf("tools %v, want %v", names, want)
 	}
@@ -152,6 +155,9 @@ func TestToolSurface(t *testing.T) {
 		if !strings.Contains(string(b), s) {
 			t.Errorf("send_message schema %s lacks %s", b, s)
 		}
+	}
+	if b, _ := json.Marshal(rename.InputSchema); strings.Contains(string(b), "agent_id") {
+		t.Errorf("rename schema %s offers an agent_id", b)
 	}
 }
 
@@ -195,6 +201,7 @@ func TestUnboundServesOnlyListAgents(t *testing.T) {
 		e.mustErr(meta, "receive_message", map[string]any{}, CodeUnbound, "")
 		e.mustErr(meta, "claim", map[string]any{"name": "bob"}, CodeUnbound, "")
 		e.mustErr(meta, "release", map[string]any{"name": "bob"}, CodeUnbound, "")
+		e.mustErr(meta, "rename", map[string]any{"name": "bob"}, CodeUnbound, "")
 		out := e.mustOK(meta, "list_agents", map[string]any{})
 		if _, ok := out["agents"]; !ok {
 			t.Fatalf("list_agents %v", out)

@@ -30,6 +30,7 @@ const (
 	TypeRoute      Type = "route"
 	TypeObligation Type = "obligation"
 	TypeClaim      Type = "claim"
+	TypeName       Type = "name"
 	TypeOutbound   Type = "outbound"
 	TypeReceipt    Type = "receipt"
 	TypeNudge      Type = "nudge"
@@ -95,6 +96,7 @@ type Record struct {
 	To        string     `json:"to,omitempty"`
 	Owner     string     `json:"owner,omitempty"`
 	Claimed   bool       `json:"claimed,omitempty"`
+	Name      string     `json:"name,omitempty"`
 	ContextID string     `json:"context_id,omitempty"`
 	Delivery  string     `json:"delivery,omitempty"`
 	Reason    string     `json:"reason,omitempty"`
@@ -121,6 +123,8 @@ func (r Record) key() string {
 		return "o\x00" + r.MessageID
 	case TypeClaim:
 		return "c"
+	case TypeName:
+		return "u"
 	case TypeOutbound:
 		return "s\x00" + r.MessageID
 	case TypeReceipt:
@@ -171,6 +175,8 @@ func unresolved(latest Record) bool {
 		return true
 	case TypeClaim:
 		return latest.Claimed
+	case TypeName:
+		return latest.Name != ""
 	case TypeNudge:
 		return true
 	}

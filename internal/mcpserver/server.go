@@ -279,6 +279,17 @@ func (s *Server) register(ctx context.Context, a *Agent, c caller) (notice strin
 	}
 	a.j, a.replay = j, rp
 	a.harnessName = c.name
+	var pinHeld string
+	if r, ok := j.Latest(journal.Record{Type: journal.TypeName}); ok && r.Name != "" {
+		a.pinned = r.Name
+		switch err := g.Rename(r.Name); {
+		case err == nil:
+		case errors.Is(err, registry.ErrNameHeld):
+			pinHeld = r.Name
+		default:
+			return "", err
+		}
+	}
 
 	d := registry.Descriptor{Harness: string(c.harness), Cwd: c.cwd, SessionRef: c.sessionRef, Role: registry.RolePrimary}
 	if c.harnessPID > 0 {
@@ -311,7 +322,10 @@ func (s *Server) register(ctx context.Context, a *Agent, c caller) (notice strin
 	if p, ok := s.backend.(Publisher); ok {
 		p.Published(a)
 	}
-	if c.name != "" && g.Name() != c.name {
+	if pinHeld != "" {
+		return fmt.Sprintf("registered as %q: the name set with rename, %q, is held by another live agent; a later call takes it", g.Name(), pinHeld), nil
+	}
+	if a.pinned == "" && c.name != "" && g.Name() != c.name {
 		notice = s.heldNotice("registered as", g.Name(), c.name)
 	}
 	return notice, nil
@@ -328,11 +342,14 @@ func (s *Server) heldNotice(prefix, name, harnessName string) string {
 // the last call, and retries on every call while the harness name is held;
 // agent_id and every agent_id-keyed path stay (CQ9).
 func (s *Server) followRename(a *Agent, c caller) string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.pinned != "" {
+		return s.followPin(a, c)
+	}
 	if c.name == "" {
 		return ""
 	}
-	a.mu.Lock()
-	defer a.mu.Unlock()
 	changed := c.name != a.harnessName
 	if !changed && c.name == a.reg.Name() {
 		return ""
@@ -353,6 +370,27 @@ func (s *Server) followRename(a *Agent, c caller) string {
 		return s.heldNotice("still registered as", a.reg.Name(), c.name)
 	default:
 		return fmt.Sprintf("rename to %q failed: %v", c.name, err)
+	}
+}
+
+// followPin records the harness name and moves the alias only toward the pin,
+// retrying while the pinned name is held, whatever name the harness reports.
+// The caller holds a.mu.
+func (s *Server) followPin(a *Agent, c caller) string {
+	if c.name != "" {
+		a.harnessName = c.name
+	}
+	if a.reg.Name() == a.pinned {
+		return ""
+	}
+	err := a.reg.Rename(a.pinned)
+	switch {
+	case err == nil:
+		return fmt.Sprintf("now registered as %q: the name set with rename is free", a.pinned)
+	case errors.Is(err, registry.ErrNameHeld):
+		return ""
+	default:
+		return fmt.Sprintf("rename to %q failed: %v", a.pinned, err)
 	}
 }
 
@@ -576,4 +614,5 @@ func (s *Server) addTools() {
 	})
 
 	s.addClaimTools()
+	s.addRenameTool()
 }

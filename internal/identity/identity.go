@@ -3,9 +3,11 @@ package identity
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 const (
@@ -63,4 +65,48 @@ func cwdBase(cwd string) string {
 		}
 		return '_'
 	}, b)
+}
+
+const (
+	MaxNameBytes = 64
+	reservedName = "inbox:"
+)
+
+// ValidName reports why name cannot be a session alias: empty, over
+// MaxNameBytes, surrounding space (HTTP trims it from the A2A sender header),
+// a control character, "@" (separates a paired-host alias), the
+// shape of an agent_id (never matched as a name), or the reserved inbox: prefix in any case.
+func ValidName(name string) error {
+	switch {
+	case name == "":
+		return errors.New("name is empty")
+	case len(name) > MaxNameBytes:
+		return errors.New("name is longer than 64 bytes")
+	case strings.HasPrefix(strings.ToLower(name), reservedName):
+		return errors.New("name starts with the reserved prefix inbox:")
+	case strings.TrimSpace(name) != name:
+		return errors.New("name starts or ends with a space")
+	case strings.Contains(name, "@"):
+		return errors.New("name contains @")
+	case isHex16(name):
+		return errors.New("name has the shape of an agent_id")
+	}
+	for _, r := range name {
+		if unicode.IsControl(r) {
+			return errors.New("name contains a control character")
+		}
+	}
+	return nil
+}
+
+func isHex16(s string) bool {
+	if len(s) != 16 {
+		return false
+	}
+	for _, c := range s {
+		if !(c >= '0' && c <= '9' || c >= 'a' && c <= 'f') {
+			return false
+		}
+	}
+	return true
 }
