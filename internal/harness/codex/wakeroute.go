@@ -74,13 +74,32 @@ func (h *Harness) precheck(ctx context.Context, rt *wakeRoute, thread string) er
 // connection refused) hosts nothing, but one that accepts and then fails to
 // answer is an error.
 func (h *Harness) hosted(ctx context.Context, thread string) (bool, error) {
-	if a, ok := h.Threads.(*Adapter); ok {
-		return a.hostedStrict(ctx, thread)
-	}
-	return slices.ContainsFunc(h.LoadedThreads(ctx), func(t LoadedThread) bool { return t.ID == thread }), nil
+	n, err := h.hostCount(ctx, thread, true)
+	return n > 0, err
 }
 
-func (a *Adapter) hostedStrict(ctx context.Context, thread string) (bool, error) {
+// hostCount counts the endpoints that list thread as loaded. strict fails
+// closed as hosted does; otherwise an endpoint that cannot be asked is
+// skipped, as Register and rebind do.
+func (h *Harness) hostCount(ctx context.Context, thread string, strict bool) (int, error) {
+	a, ok := h.Threads.(*Adapter)
+	switch {
+	case !ok:
+		n := 0
+		for _, t := range h.LoadedThreads(ctx) {
+			if t.ID == thread {
+				n++
+			}
+		}
+		return n, nil
+	case strict:
+		return a.hostsStrict(ctx, thread)
+	}
+	return len(a.hosts(ctx, thread)), nil
+}
+
+func (a *Adapter) hostsStrict(ctx context.Context, thread string) (int, error) {
+	n := 0
 	for _, ep := range a.KnownEndpoints() {
 		ectx, cancel := context.WithTimeout(ctx, EndpointProbeTimeout)
 		c, err := a.connect(ectx, ep)
@@ -89,19 +108,19 @@ func (a *Adapter) hostedStrict(ctx context.Context, thread string) (bool, error)
 			if errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.ECONNREFUSED) {
 				continue
 			}
-			return false, fmt.Errorf("%s: %w", ep, err)
+			return 0, fmt.Errorf("%s: %w", ep, err)
 		}
 		ids, err := c.LoadedThreads(ectx)
 		c.Close()
 		cancel()
 		if err != nil {
-			return false, fmt.Errorf("%s: %w", ep, err)
+			return 0, fmt.Errorf("%s: %w", ep, err)
 		}
 		if slices.Contains(ids, thread) {
-			return true, nil
+			n++
 		}
 	}
-	return false, nil
+	return n, nil
 }
 
 // wakeEligible is plan 3.1 row 5: an immediate message from a verified

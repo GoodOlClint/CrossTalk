@@ -139,3 +139,15 @@ func TestNoBackendHintForCustomProviderThread(t *testing.T) {
 		t.Errorf("native: send %v", res)
 	}
 }
+
+func TestCodexMailboxedCarriesWakeHint(t *testing.T) {
+	w, na := backendWorld(t)
+	w.codex.ScriptInject(adapter.Outcome{State: adapter.Mailboxed})
+	res := na.ok(nil, "send_message", send("bob", "hi"))
+	if res["state"] != string(adapter.Mailboxed) {
+		t.Fatalf("send %v", res)
+	}
+	if h := hintOf(res); !strings.Contains(h, hintCodexMailboxed) || strings.Contains(h, "is in the thread") {
+		t.Fatalf("hint %q", h)
+	}
+}
