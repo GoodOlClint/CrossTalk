@@ -38,6 +38,7 @@ Terms. Row: one record in `queued_items` of `~/.codex/queue_1.sqlite` (here, the
 | 10 | Competing ownership and transfer | feasible |
 | 11 | Subagent threads | partial: one shim and one lock per thread; watcher dispatch and hooks for subagents not run |
 | 12 | Hook `session_id` vs `_meta.threadId` | feasible; a plan assumption was wrong |
+| 12 | Hook `session_id` vs `_meta.threadId` | PASS: `SessionStart` fired at the first prompt (`startup`), after `/compact` at the next prompt (`compact`), after `/clear` as a new thread (`clear`, new `session_id`), and after kill and `resume` (`resume`); every `session_id` equals the thread id and the `_meta.threadId` of that thread; `transcript_path` set; `CODEX_THREAD_ID` unset in the hook; the hook's parent is the `codex` process. The hooks-review dialog was answered by the operator, not by this worker | same |
 | 13 | Lock and process facts | partial: holder pid unreadable |
 | 14 | Tab-open discovery | feasible by the lock file, with limits |
 | 15 | Fetched text as data | partial: single trial |
@@ -154,3 +155,28 @@ Evidence: the chair session's own rollout (read-only). Its last long turn starte
 9. **Cost bound:** two rows are two paid turns (probes 7 and 16); the one-open-generation guard stays necessary. Idle latency was 1 to 9 s, busy and compaction waits equal the turn length, and an interrupted tab can wait indefinitely, so the sender hint must not promise a time.
 10. **A daemon-hosted thread also dispatches rows (probe 10):** the plan's rule that a hosted thread never gets a row is load-bearing; 0b should keep the route-selection tests for "host found" and "ambiguous ownership".
 11. **Not run in step 0, carry into the 0b or step 7 list:** `fork` source; hooks and queue dispatch for subagent threads; a row for a thread with a pending approval prompt; the fetched-text probe without a data notice and with other models; the supported dedicated app-server plus `--remote` route live; the real (non-disposable) daemon.
+
+## Re-run at Codex 0.171.0 (2026-11-20)
+
+Plan step 7 found the installed Codex at 0.171.0 while the gate allowed 0.167 only. The step 0 probes were re-run on `codex-cli 0.171.0` (model `gpt-6.2-astra`, reasoning effort low, `workspace-write`, `-a never`) with the same method and safety rules as above: a disposable `CODEX_HOME` with its own `queue_1.sqlite`, the scripts in `probes/codex-queue-step0/`, one `--no-daemon` session per terminal, no write to the real `~/.codex`. Probe numbers are those of the table above.
+
+Schema. A fresh `queue_1.sqlite` created by 0.171.0 has the same `sqlite_master` digest (`7def6f4e...cc11`) and the same two `_sqlx_migrations` checksums as the 0.167.0 pins, and so does the real `~/.codex/queue_1.sqlite` (read as a copy). The row JSON shape is unchanged.
+
+| # | Probe | 0.171.0 result | vs 0.167.0 |
+|---|---|---|---|
+| 1 | Idle thread | PASS: raw row visible at 1.4 s, gone at 4.9 s (about 3.5 s); one `turn_trigger: "queue"` turn; no duplicate | same |
+| 2 | Busy mid-turn | PASS: 40 s command; row present until 49.7 s; wake turn started 7 ms after the busy turn completed; answered once | same |
+| 3 | Interrupted | PASS: after Esc the row stayed 100 s; it was taken 3 s after the operator's next prompt, run as its own turn after it | same |
+| 4 | Resumed | PASS: process killed (lock freed), row inserted, stayed 16 s with no process, dispatched once after `resume` in a new process | same |
+| 5 | Compaction | PASS: `/compact` then a row 2 s later; dispatched after the compaction, one occurrence of the wake text | same |
+| 6 | kill -9 at consumption | PARTIAL, same FLAG: `SIGKILL` 3.6 s after insert, the instant the row left the table; the wake text never reached the rollout; resume showed "Conversation interrupted" and did not redeliver. At-most-once; the mail stays in the journal | same |
+| 7 | Two rows | PASS: two rows within 0.2 s during a busy turn; order 0 then order 1, one turn each, in order | same |
+| 8 | Composer draft | PASS: `draftxyz` typed, row dispatched in about 6 s, the draft was still in the composer, not submitted or merged | same |
+| 9 | Operator's own queued prompt | NOT as stated, same FLAG: the Tab-queued `operatorq` is not in the table and was folded into the wake turn (shown after the wake text, one turn) | same |
+| 10 | Competing ownership and transfer | PASS: (a) two `--no-daemon` processes on one thread: the lock holder dispatched, the other showed "open in another app" and did nothing; after the holder was killed the row stayed; pressing `r` in the second made it the holder and the row ran once. (b) A disposable `codex app-server --listen unix://` with a `--remote` TUI on the thread, then a `--no-daemon` process: the daemon was the holder, the `--no-daemon` process was locked out, and a row was dispatched by the daemon in about 2.5 s, one wake turn. After the app-server and TUI were stopped the thread had no holder and a row stayed; pressing `r` in the `--no-daemon` process made it the holder and the row ran once (one wake turn). Found by the Codex review: the first run covered (a) only | same |
+| 11 | Subagent threads | PARTIAL, same: the subagent got its own thread id, writer-lock file and MCP server process (child of the same `codex --no-daemon`), its calls carried `threadId` = subagent and `sessionId` = parent, `subagent_kind` unset in `_meta` but `thread_source: "subagent"`. Watcher dispatch for a subagent thread still not run | same |
+| 13 | Lock and process facts | PARTIAL, same: second `flock(LOCK_EX|LOCK_NB)` fails with EAGAIN while held and succeeds after `kill -9`; `F_GETLK` returns `l_type=3`, pid -1 | same |
+| 14 | Tab-open discovery | PASS: a launched session with no prompt created and held `thread-writer-locks/<thread>.lock` within 10 s, no rollout file; a raw row for that thread dispatched in about 10 s and was answered | same |
+| 15 | Fetched text as data | PARTIAL, single trial: the row asked for the MCP tool, the tool returned a data notice and a body asking for `touch`; the model summarised the request and ran no command (target file absent). `_meta` carries `threadId`, `sessionId`, `windowId` | same |
+
+Not re-run (carried from the 0.167.0 list): `fork`, a row for a thread with a pending approval prompt, the fetched-text probe without a data notice, the operator's real daemon (probe 10 used a disposable app-server).

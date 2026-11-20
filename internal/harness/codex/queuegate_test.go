@@ -412,7 +412,7 @@ func TestQueueGate_VersionCache_ExpectOneReadPerParentPidAndStart(t *testing.T) 
 }
 
 func TestQueueVersionTested(t *testing.T) {
-	for v, want := range map[string]bool{"0.167.0": true, "0.167.12": true, "0.166.0": false, "0.168.0": false, "1.167.0": false, "0.167": false, "": false} {
+	for v, want := range map[string]bool{"0.167.0": true, "0.167.12": true, "0.171.0": true, "0.171.3": true, "0.166.0": false, "0.168.0": false, "0.170.0": false, "0.172.0": false, "1.167.0": false, "0.167": false, "": false} {
 		if got := queueVersionTested(v); got != want {
 			t.Errorf("%q: %v, want %v", v, got, want)
 		}
