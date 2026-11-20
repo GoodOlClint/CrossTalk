@@ -93,7 +93,9 @@ tier0-codex)
 		exit 1
 	}
 	port="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')"
-	HOME="$home" CODEX_HOME="$home/.codex" OR_KEY=dummy timeout 60 codex exec --skip-git-repo-check \
+	TIMEOUT_CMD=
+	command -v timeout >/dev/null 2>&1 && TIMEOUT_CMD="timeout 60"
+	HOME="$home" CODEX_HOME="$home/.codex" OR_KEY=dummy $TIMEOUT_CMD codex exec --skip-git-repo-check \
 		-c "model_providers.closed={name=\"closed\",base_url=\"http://127.0.0.1:$port/v1\",env_key=\"OR_KEY\",wire_api=\"responses\"}" \
 		-c model_provider=closed -m closed/none hi >/dev/null 2>&1 || true
 	q="$home/.codex/queue_1.sqlite"
