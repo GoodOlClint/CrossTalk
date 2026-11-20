@@ -1,6 +1,7 @@
 package receiver
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 
@@ -135,9 +136,41 @@ func (r *Receiver) Confirm(messageID string) error {
 // marked confirmed (ADR 0028, R191). more is true when the page limit left
 // mailboxed entries behind. after is a message_id cursor over the whole
 // journal and settles nothing; limit <= 0 means no limit.
+//
+// After a successful pull an adapter.PullSignaler adapter gets MailPulled,
+// still under the pull lock, so no MailSignal runs between the pull's
+// snapshot and the hook. A pull with an after cursor reports more to the
+// hook: entries it skipped are not new arrivals.
 func (r *Receiver) Pull(after string, limit int) ([]Entry, bool, error) {
 	r.pullMu.Lock()
 	defer r.pullMu.Unlock()
+	out, more, err := r.pull(after, limit)
+	if err != nil {
+		return out, more, err
+	}
+	if ps, ok := r.ad.(adapter.PullSignaler); ok {
+		ps.MailPulled(context.Background(), r.self().Binding, more || after != "", r.mailboxedIDs)
+	}
+	return out, more, nil
+}
+
+// mailboxedIDs lists the message ids of inbound entries now mailboxed.
+func (r *Receiver) mailboxedIDs() ([]string, error) {
+	rs, err := r.j.Records()
+	if err != nil {
+		return nil, err
+	}
+	order, idx := dedupeEntries(rs)
+	var ids []string
+	for _, k := range order {
+		if idx[k].latest.State == journal.StateMailboxed {
+			ids = append(ids, k.id)
+		}
+	}
+	return ids, nil
+}
+
+func (r *Receiver) pull(after string, limit int) ([]Entry, bool, error) {
 	rs, err := r.j.Records()
 	if err != nil {
 		return nil, false, err

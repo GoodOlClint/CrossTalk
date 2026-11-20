@@ -91,6 +91,8 @@ type ClaimServer struct {
 	PeerPID  func(*net.UnixConn) (int, error)
 	Interval time.Duration
 	Logger   *slog.Logger
+	// OnTick runs after each recheck and scan.
+	OnTick func(context.Context)
 
 	// failed holds, per session, the At of a durable claim that failed, so
 	// each written claim is tried once per shim; a refire writes a new At.
@@ -133,6 +135,9 @@ func (s *ClaimServer) Serve(ctx context.Context) error {
 		case <-tick.C:
 			s.Claims.Recheck()
 			s.Scan(ctx)
+			if s.OnTick != nil {
+				s.OnTick(ctx)
+			}
 		}
 	}
 }
@@ -297,6 +302,10 @@ func (h *Harness) ServeClaims(ctx context.Context, r harness.SessionRegistrar) e
 		return err
 	}
 	c := NewClaims(ClaimOptions{Sys: cfg.Sys, Parent: parent, LockDir: filepath.Join(cfg.CodexHome, "thread-writer-locks"), Registrar: r, Logger: h.logger})
-	srv := &ClaimServer{Claims: c, Owner: parent, StateDir: cfg.StateDir, SockDir: cfg.SockDir, Interval: cfg.Interval, Logger: h.logger}
+	queue := filepath.Join(cfg.CodexHome, QueueFile)
+	rt := &wakeRoute{stateDir: cfg.StateDir, claims: c, wakes: &Wakes{Dir: WakeDir(cfg.StateDir), Gate: func() *QueueGate { return &QueueGate{Path: queue, Parent: parent} }}}
+	h.setWakeRoute(rt)
+	defer h.setWakeRoute(nil)
+	srv := &ClaimServer{Claims: c, Owner: parent, StateDir: cfg.StateDir, SockDir: cfg.SockDir, Interval: cfg.Interval, Logger: h.logger, OnTick: func(ctx context.Context) { rt.wakes.Tick(ctx, c.Bound) }}
 	return srv.Serve(ctx)
 }

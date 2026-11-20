@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/GoodOlClint/crosstalk/internal/adapter"
 	"github.com/GoodOlClint/crosstalk/internal/journal"
@@ -374,5 +375,165 @@ func TestRecover_CrashAfterMailboxedOutcomeBeforeDedupe_ExpectEntryPullableAndMa
 	}
 	if es, _ := e.pull("", 0); len(es) != 1 || es[0].MessageID != m.MessageID {
 		t.Fatalf("pull %+v", es)
+	}
+}
+
+type pulledCall struct {
+	target    adapter.Binding
+	more      bool
+	mailboxed []string
+}
+
+type pullSignalAdapter struct {
+	*adapter.Fake
+	calls  []pulledCall
+	during func()
+}
+
+func (p *pullSignalAdapter) MailPulled(_ context.Context, target adapter.Binding, more bool, mailboxed func() ([]string, error)) error {
+	if p.during != nil {
+		p.during()
+	}
+	ids, err := mailboxed()
+	if err != nil {
+		return err
+	}
+	p.calls = append(p.calls, pulledCall{target, more, ids})
+	return nil
+}
+
+func TestMailPulled_AfterEachPull_ExpectDrainFlagAndLiveMailboxedIDs(t *testing.T) {
+	e := newMailboxEnv(t)
+	pa := &pullSignalAdapter{Fake: e.fake}
+	e.r = New(Config{Journal: e.j, Adapter: pa, Self: e.self})
+	m1, m2 := e.mailboxed("one"), e.mailboxed("two")
+	e.pull("", 1)
+	if len(pa.calls) != 1 || !pa.calls[0].more || len(pa.calls[0].mailboxed) != 1 || pa.calls[0].mailboxed[0] != m2.MessageID {
+		t.Fatalf("first call %+v", pa.calls)
+	}
+	if pa.calls[0].target.SessionRef != e.self().Binding.SessionRef || pa.calls[0].target.SessionRef == "" {
+		t.Fatalf("target %+v", pa.calls[0].target)
+	}
+	var m3 msg.Message
+	pa.during = func() { m3 = e.mailboxed("arrived after the snapshot") }
+	e.pull("", 0)
+	c := pa.calls[1]
+	if c.more || len(c.mailboxed) != 1 || c.mailboxed[0] != m3.MessageID {
+		t.Fatalf("second call %+v (m1 %s m2 %s m3 %s)", c, m1.MessageID, m2.MessageID, m3.MessageID)
+	}
+}
+
+func TestMailPulled_PullFails_ExpectNotCalled(t *testing.T) {
+	e := newMailboxEnv(t)
+	pa := &pullSignalAdapter{Fake: e.fake}
+	e.r = New(Config{Journal: e.j, Adapter: pa, Self: e.self})
+	e.mailboxed("one")
+	if _, _, err := e.r.Pull("no-such-id", 0); !errors.Is(err, ErrUnknownCursor) {
+		t.Fatalf("err %v", err)
+	}
+	if len(pa.calls) != 0 {
+		t.Fatalf("calls %+v", pa.calls)
+	}
+}
+
+func TestMailSignal_PullCollectsBeforeSignalRuns_ExpectNoSignal(t *testing.T) {
+	e := newMailboxEnv(t)
+	sa := &signalAdapter{Fake: e.fake}
+	e.r = New(Config{Journal: e.j, Adapter: sa, Self: e.self})
+	e.r.beforeSignal = func(string) {
+		if es, _ := e.pull("", 0); len(es) != 1 {
+			t.Errorf("pull in the gap returned %d entries", len(es))
+		}
+	}
+	m := e.mailboxed("collected before its signal")
+	if got := sa.got(); len(got) != 0 {
+		t.Fatalf("signalled %v for an entry already %s", got, e.dedupe(m))
+	}
+}
+
+type bothSignals struct {
+	*adapter.Fake
+	signalled chan string
+	onSignal  func()
+	onPulled  func()
+	pulled    []bool
+}
+
+func (b *bothSignals) MailSignal(_ context.Context, m msg.Message, _ adapter.Delivery) error {
+	if b.onSignal != nil {
+		b.onSignal()
+	}
+	b.signalled <- m.MessageID
+	return nil
+}
+
+func (b *bothSignals) MailPulled(_ context.Context, _ adapter.Binding, more bool, _ func() ([]string, error)) error {
+	b.pulled = append(b.pulled, more)
+	if b.onPulled != nil {
+		b.onPulled()
+	}
+	return nil
+}
+
+func TestMailPulled_ArrivalDuringHook_ExpectSignalOnlyAfterHookReturns(t *testing.T) {
+	e := newMailboxEnv(t)
+	b := &bothSignals{Fake: e.fake, signalled: make(chan string, 4)}
+	e.r = New(Config{Journal: e.j, Adapter: b, Self: e.self})
+	done := make(chan struct{})
+	var early bool
+	b.onPulled = func() {
+		b.onPulled = nil
+		go func() { defer close(done); e.mailboxed("arrives while the hook runs") }()
+		select {
+		case <-b.signalled:
+			early = true
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+	e.pull("", 0)
+	<-done
+	if early {
+		t.Fatal("MailSignal ran between the pull's snapshot and its hook")
+	}
+	select {
+	case <-b.signalled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the arrival was never signalled")
+	}
+}
+
+func TestMailSignal_RunsUnderPullLock_ExpectConcurrentPullWaits(t *testing.T) {
+	e := newMailboxEnv(t)
+	b := &bothSignals{Fake: e.fake, signalled: make(chan string, 4)}
+	e.r = New(Config{Journal: e.j, Adapter: b, Self: e.self})
+	pulled := make(chan struct{})
+	var during bool
+	b.onSignal = func() {
+		b.onSignal = nil
+		go func() { defer close(pulled); e.r.Pull("", 0) }()
+		select {
+		case <-pulled:
+			during = true
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+	e.mailboxed("signalled")
+	<-pulled
+	if during {
+		t.Fatal("a pull completed while MailSignal ran")
+	}
+}
+
+func TestMailPulled_CursorPull_ExpectReportedAsMore(t *testing.T) {
+	e := newMailboxEnv(t)
+	b := &bothSignals{Fake: e.fake, signalled: make(chan string, 4)}
+	e.r = New(Config{Journal: e.j, Adapter: b, Self: e.self})
+	m1 := e.mailboxed("skipped by the cursor")
+	<-b.signalled
+	e.mailboxed("after the cursor")
+	<-b.signalled
+	e.pull(m1.MessageID, 0)
+	if len(b.pulled) != 1 || !b.pulled[0] {
+		t.Fatalf("hook more flags %v, want [true] for a cursor pull", b.pulled)
 	}
 }
