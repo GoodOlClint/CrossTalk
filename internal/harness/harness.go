@@ -7,6 +7,7 @@ package harness
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -52,6 +53,9 @@ type Session struct {
 	// Backend is BackendReachable, BackendUnreachable or BackendUnknown for
 	// a session whose harness can tell; "" otherwise.
 	Backend string
+	// DeliveryMode labels a non-default delivery route the harness uses for
+	// this session; "" means the default.
+	DeliveryMode string
 }
 
 const (
@@ -233,6 +237,12 @@ type InstallEnv struct {
 	// SkipRulePort lets install continue past old-prefix rules it cannot
 	// edit; the checks then warn about each.
 	SkipRulePort bool
+	// StateDir is CrossTalk's state directory; "" means under Home.
+	StateDir string
+	// Experimental names the opt-in features the user asked install for.
+	Experimental map[string]bool
+	// Out receives one-line notices from steps; nil discards them.
+	Out io.Writer
 	// Marketplace is what each harness's `plugin marketplace add` is given:
 	// owner/repo or a local directory holding a marketplace named crosstalk.
 	Marketplace string
