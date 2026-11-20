@@ -23,7 +23,7 @@ The renderer contract is limited: standalone output is a `functionCallOutput` cl
 
 ## Rejected alternatives
 
-- Keep user-message steering or `codex queue` as fallback: reintroduces operator-looking peer messages and can wake idle work.
+- Keep user-message steering or `codex queue` as fallback: reintroduces operator-looking peer messages and can wake idle work. Narrowed by [ADR 0028](0028-codex-no-daemon-sessions-get-an-experimental-opt-in-queue-wake-the-journal-stays-the-mailbox.md): for a `codex --no-daemon` thread only, with the experimental install-flag setting on (macOS only), CrossTalk may write one queue row of fixed text that carries no peer text and asks the model to call `receive_message`. That row is a user-role turn and a paid one; it is the only user-role turn CrossTalk starts, it never carries a peer's words, and a remote or role-inbox message never causes one. Everything above about tool output and deferred append still holds for threads an app-server hosts.
 - Inject `agent_message` as the production path: explicit author fields work for model context, but this does not provide a client-visible peer message or idle scheduling by itself.
 - Add a polling scheduler or receiver mailbox implementation here: unnecessary for deferred model-context delivery and conflicts with the separate receiver work. A strict next-turn guarantee would require its own scheduling contract.
 - Retry after ambiguous dispatch: may duplicate a message the harness already persisted.

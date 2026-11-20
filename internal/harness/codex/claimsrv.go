@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -22,8 +23,13 @@ import (
 
 // SettingFile, present in the state directory, turns on the experimental
 // --no-daemon claim handoff for every Codex session of this user on this
-// host. Absent, the hook and the shim do nothing.
-const SettingFile = "codex-no-daemon.on"
+// host. Absent, the hook and the shim do nothing. Only
+// `crosstalk install --codex-no-daemon-queue` writes it.
+const SettingFile = "codex-queue-wake.on"
+
+// LegacySettingFile was the switch before the install flag; its presence
+// never turns anything on.
+const LegacySettingFile = "codex-no-daemon.on"
 
 const (
 	DefaultRecheckInterval = 10 * time.Second
@@ -278,6 +284,9 @@ func (h *Harness) ServeClaims(ctx context.Context, r harness.SessionRegistrar) e
 		return nil
 	}
 	if cfg.Sys == nil {
+		if runtime.GOOS != "darwin" {
+			return nil
+		}
 		cfg.Sys = Kernel{}
 	}
 	if cfg.SockDir == "" {

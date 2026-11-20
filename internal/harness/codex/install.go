@@ -371,7 +371,14 @@ func configStep(env harness.InstallEnv) harness.Step {
 // InstallSteps adds the plugin before editing the config, since codex
 // plugin add rewrites config.toml.
 func (h *Harness) InstallSteps(env harness.InstallEnv) []harness.Step {
-	return []harness.Step{pluginStep(env), configStep(env)}
+	steps := []harness.Step{pluginStep(env), configStep(env)}
+	if l, ok := legacyStep(env); ok {
+		steps = append(steps, l)
+	}
+	if env.Experimental[QueueWakeOption] {
+		steps = append(steps, queueWakeStep(env))
+	}
+	return steps
 }
 
 // UninstallSteps removes the server table with its sub-tables, then the
@@ -379,6 +386,7 @@ func (h *Harness) InstallSteps(env harness.InstallEnv) []harness.Step {
 func (h *Harness) UninstallSteps(env harness.InstallEnv) []harness.Step {
 	path := configPath(env.Home)
 	return []harness.Step{
+		queueWakeRemoveStep(env),
 		{
 			Title:  "Codex MCP server",
 			Change: "remove [mcp_servers.crosstalk] and every [mcp_servers.crosstalk.*] table from " + path + " (backup next to it)",
@@ -540,7 +548,7 @@ func (h *Harness) Checks(ctx context.Context, env harness.InstallEnv) []harness.
 	r, err := registered(ctx, env)
 	if err != nil {
 		k5.Detail, k6.Detail = err.Error(), "no registered server to start"
-		return []harness.CheckResult{k1, k2, k3, k5, k6, h.k9(ctx, env)}
+		return []harness.CheckResult{k1, k2, k3, k5, k6, h.k9(ctx, env), h.k10(ctx, env)}
 	}
 	t := r.Transport
 	fi, serr := os.Stat(t.Command)
@@ -556,5 +564,5 @@ func (h *Harness) Checks(ctx context.Context, env harness.InstallEnv) []harness.
 	} else {
 		k6.OK, k6.Detail = true, "registered server lists the CrossTalk tools at "+env.Version
 	}
-	return []harness.CheckResult{k1, k2, k3, k5, k6, h.k9(ctx, env)}
+	return []harness.CheckResult{k1, k2, k3, k5, k6, h.k9(ctx, env), h.k10(ctx, env)}
 }

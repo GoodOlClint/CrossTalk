@@ -12,17 +12,20 @@ import (
 
 // Row is one list_agents entry (§3 Discovery).
 type Row struct {
-	Name      string  `json:"name"`
-	Harness   string  `json:"harness"`
-	Cwd       string  `json:"cwd"`
-	Status    string  `json:"status"`
-	CrossTalk bool    `json:"crosstalk"`
-	Reachable bool    `json:"reachable"`
-	Backend   string  `json:"backend,omitempty"`
-	AgentID   string  `json:"agent_id"`
-	Role      string  `json:"role,omitempty"`
-	Owner     *string `json:"owner"`
-	You       bool    `json:"you,omitempty"`
+	Name      string `json:"name"`
+	Harness   string `json:"harness"`
+	Cwd       string `json:"cwd"`
+	Status    string `json:"status"`
+	CrossTalk bool   `json:"crosstalk"`
+	Reachable bool   `json:"reachable"`
+	Backend   string `json:"backend,omitempty"`
+	// DeliveryMode is set only for a non-default route, e.g. a Codex
+	// --no-daemon session reached by the experimental queue wake.
+	DeliveryMode string  `json:"delivery_mode,omitempty"`
+	AgentID      string  `json:"agent_id"`
+	Role         string  `json:"role,omitempty"`
+	Owner        *string `json:"owner"`
+	You          bool    `json:"you,omitempty"`
 	// Inboxes lists the role inboxes a registered session is attached to.
 	Inboxes []RowInbox `json:"inboxes,omitempty"`
 }
@@ -128,7 +131,7 @@ func (s *Server) listAgents(ctx context.Context) ([]Row, []string) {
 	}
 	for _, ss := range sessions {
 		id := identity.AgentID(string(ss.Harness), ss.SessionRef)
-		rows[id] = &Row{Name: ss.Name, Harness: string(ss.Harness), Cwd: ss.Cwd, Status: ss.Status, Reachable: ss.Reachable, Backend: ss.Backend, AgentID: id}
+		rows[id] = &Row{Name: ss.Name, Harness: string(ss.Harness), Cwd: ss.Cwd, Status: ss.Status, Reachable: ss.Reachable, Backend: ss.Backend, DeliveryMode: ss.DeliveryMode, AgentID: id}
 	}
 
 	ds, err := s.reg.List()

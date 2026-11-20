@@ -20,14 +20,18 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/GoodOlClint/crosstalk/internal/harness"
+	"github.com/GoodOlClint/crosstalk/internal/harness/codex"
 	"github.com/GoodOlClint/crosstalk/internal/mcpserver"
 	"github.com/GoodOlClint/crosstalk/internal/registry"
 	"github.com/GoodOlClint/crosstalk/internal/remote"
 )
 
-const installUsage = `usage: crosstalk install   [claude|codex] [--yes] [--path] [--bin-dir DIR] [--skip-rule-port] [--check] [--remote --bind ADDR [--port N] [--alias NAME]]
+const installUsage = `usage: crosstalk install   [claude|codex] [--yes] [--path] [--bin-dir DIR] [--skip-rule-port] [--check] [--codex-no-daemon-queue] [--remote --bind ADDR [--port N] [--alias NAME]]
        crosstalk uninstall [claude|codex] [--yes] [--purge] [--bin-dir DIR]
-       crosstalk reinstall [claude|codex] [--yes] [--path] [--bin-dir DIR] [--skip-rule-port] [--remote --bind ADDR [--port N] [--alias NAME]]
+       crosstalk reinstall [claude|codex] [--yes] [--path] [--bin-dir DIR] [--skip-rule-port] [--codex-no-daemon-queue] [--remote --bind ADDR [--port N] [--alias NAME]]
+
+  --codex-no-daemon-queue  EXPERIMENTAL, Codex only, macOS only, off unless given: wake an idle codex --no-daemon session
+                           through Codex's local queue when a message arrives; each wake is a paid model turn
 `
 
 type installOpts struct {
@@ -35,7 +39,7 @@ type installOpts struct {
 	names                           []string
 	yes, path, purge, check, noPort bool
 	binDir                          string
-	remote                          bool
+	remote, queueWake               bool
 	bind, alias                     string
 	port                            int
 	set                             map[string]bool
@@ -53,6 +57,7 @@ func parseInstallArgs(mode string, args []string) (installOpts, error) {
 		fs.BoolVar(&o.path, "path", false, "")
 		fs.BoolVar(&o.noPort, "skip-rule-port", false, "")
 		fs.BoolVar(&o.remote, "remote", false, "")
+		fs.BoolVar(&o.queueWake, "codex-no-daemon-queue", false, "")
 		fs.StringVar(&o.bind, "bind", "", "")
 		fs.IntVar(&o.port, "port", 0, "")
 		fs.StringVar(&o.alias, "alias", "", "")
@@ -80,6 +85,12 @@ func parseInstallArgs(mode string, args []string) (installOpts, error) {
 		if o.set[n] && !o.remote {
 			return o, fmt.Errorf("--%s needs --remote", n)
 		}
+	}
+	if o.queueWake && codex.QueueWakeOS != "darwin" {
+		return o, errors.New("--codex-no-daemon-queue is macOS only")
+	}
+	if o.queueWake && len(o.names) > 0 && !slices.Contains(o.names, "codex") {
+		return o, errors.New("--codex-no-daemon-queue is for codex")
 	}
 	if o.remote && o.yes && !o.set["bind"] {
 		return o, errors.New("--remote with --yes needs --bind ADDR; nothing remote is set up without it")
@@ -187,6 +198,11 @@ func runInstall(mode string, args []string, in io.Reader, tty bool, stdout, stde
 		Handshake:    installHandshake,
 		SkipRulePort: o.noPort,
 		Marketplace:  cmp.Or(os.Getenv("CROSSTALK_MARKETPLACE"), "GoodOlClint/CrossTalk"),
+		StateDir:     stateDir,
+		Out:          stdout,
+	}
+	if o.queueWake && mode != "uninstall" {
+		env.Experimental = map[string]bool{codex.QueueWakeOption: true}
 	}
 	ctx := context.Background()
 	cfgDir := filepath.Join(home, ".config", "crosstalk")

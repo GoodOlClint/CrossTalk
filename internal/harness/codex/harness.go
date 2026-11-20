@@ -101,7 +101,25 @@ func (h *Harness) Discover(ctx context.Context) ([]harness.Session, error) {
 		out = append(out, harness.Session{Harness: adapter.Codex, SessionRef: t.ID, Name: t.Name, Cwd: t.Cwd, Status: t.Status,
 			Reachable: t.Session.Reachable, Endpoint: t.Endpoint, Backend: t.Backend})
 	}
+	if rt := h.wakeRoute(); rt != nil {
+		for _, th := range rt.claims.Threads() {
+			if h.queueWakeReaches(ctx, rt, th) {
+				b, _ := rt.claims.Binding(th)
+				out = append(out, harness.Session{Harness: adapter.Codex, SessionRef: th, Cwd: b.Claim.Cwd, DeliveryMode: DeliveryQueueWake})
+			}
+		}
+	}
 	return out, nil
+}
+
+// queueWakeReaches is true when the setting is on, the thread's claim is
+// owner-proven now, the gate passes and no app-server hosts the thread.
+func (h *Harness) queueWakeReaches(ctx context.Context, rt *wakeRoute, thread string) bool {
+	if h.capability(ctx, rt, thread) != nil {
+		return false
+	}
+	hosted, err := h.hosted(ctx, thread)
+	return err == nil && !hosted
 }
 
 func (h *Harness) Notice() string { return Preamble }
