@@ -21,6 +21,10 @@ const QueueWakeOption = "codex-no-daemon-queue"
 // that the queue wake can reach.
 const DeliveryQueueWake = "queue-wake (experimental)"
 
+// QueueWakeOS is the platform the install step and K10 judge the route
+// against; tests set it.
+var QueueWakeOS = runtime.GOOS
+
 const hookArgs = "hook codex session-start"
 
 func hooksPath(home string) string { return filepath.Join(codexHome(home), "hooks.json") }
@@ -32,8 +36,13 @@ func stateDirOf(env harness.InstallEnv) string {
 	return filepath.Join(env.Home, ".local", "state", "crosstalk")
 }
 
-func hookCommand(bin string) string { return "'" + bin + "' " + hookArgs }
+func shQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
+func hookCommand(bin string) string { return shQuote(bin) + " " + hookArgs }
+
+// isOurHook matches only a command that is exactly one shell-quoted absolute
+// path to a crosstalk binary followed by hookArgs, so a user's compound
+// command that ends in the same invocation is left alone.
 func isOurHook(h any) bool {
 	m, ok := h.(map[string]any)
 	if !ok {
@@ -41,7 +50,11 @@ func isOurHook(h any) bool {
 	}
 	c, _ := m["command"].(string)
 	exe, found := strings.CutSuffix(c, " "+hookArgs)
-	return found && filepath.Base(strings.Trim(exe, `'"`)) == "crosstalk"
+	if !found || !strings.HasPrefix(exe, "'") || !strings.HasSuffix(exe, "'") || len(exe) < 2 {
+		return false
+	}
+	p := strings.ReplaceAll(exe[1:len(exe)-1], `'\''`, "'")
+	return shQuote(p) == exe && filepath.IsAbs(p) && filepath.Base(p) == "crosstalk"
 }
 
 func readHooks(path string) (map[string]any, bool, error) {
@@ -52,9 +65,9 @@ func readHooks(path string) (map[string]any, bool, error) {
 	if err != nil {
 		return nil, false, err
 	}
-	doc := map[string]any{}
-	if err := json.Unmarshal(b, &doc); err != nil {
-		return nil, true, fmt.Errorf("%s is not a JSON object: %w", path, err)
+	var doc map[string]any
+	if err := json.Unmarshal(b, &doc); err != nil || doc == nil {
+		return nil, true, fmt.Errorf("%s is not a JSON object: %v", path, err)
 	}
 	return doc, true, nil
 }
@@ -194,13 +207,16 @@ func queueWakeStep(env harness.InstallEnv) harness.Step {
 		Change: fmt.Sprintf("create %s and add a SessionStart hook (%s) to %s (backup next to it).\n"+
 			"A message to an idle codex --no-daemon session then queues a wake turn in Codex's local queue, and each wake is a paid model turn. macOS only. Codex may ask you to trust the new hook.", sp, hookCommand(env.Bin), hp),
 		Apply: func(context.Context) error {
+			if QueueWakeOS != "darwin" {
+				return errors.New("the queue wake is macOS only (operator ruling R197)")
+			}
+			if err := addHook(hp, env.Bin); err != nil {
+				return err
+			}
 			if err := os.MkdirAll(filepath.Dir(sp), 0o700); err != nil {
 				return err
 			}
-			if err := os.WriteFile(sp, nil, 0o600); err != nil {
-				return err
-			}
-			return addHook(hp, env.Bin)
+			return os.WriteFile(sp, nil, 0o600)
 		},
 	}
 }
@@ -231,7 +247,7 @@ func (h *Harness) k10(ctx context.Context, env harness.InstallEnv) harness.Check
 		return r
 	}
 	var bad []string
-	if runtime.GOOS != "darwin" {
+	if QueueWakeOS != "darwin" {
 		bad = append(bad, "the route is macOS only")
 	}
 	if !hasHook(hooksPath(env.Home)) {

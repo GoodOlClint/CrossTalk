@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -12,6 +13,12 @@ import (
 )
 
 const userHooks = `{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"sh /x/check","timeout":3}]}],"Stop":[{"hooks":[{"type":"command","command":"sh /x/stop"}]}]},"extra":{"keep":true}}`
+
+func queueWakeOS(t *testing.T, goos string) {
+	old := codex.QueueWakeOS
+	codex.QueueWakeOS = goos
+	t.Cleanup(func() { codex.QueueWakeOS = old })
+}
 
 func hooksJSON(t *testing.T, p string) map[string]any {
 	t.Helper()
@@ -23,6 +30,7 @@ func hooksJSON(t *testing.T, p string) map[string]any {
 }
 
 func TestInstallQueueWakeFlag_OnAndUninstall_ExpectOnlyOwnEntriesChange(t *testing.T) {
+	queueWakeOS(t, "darwin")
 	home := installSandbox(t, "claude", "codex")
 	state := filepath.Join(home, ".local", "state", "crosstalk")
 	hp := filepath.Join(home, ".codex", "hooks.json")
@@ -68,6 +76,7 @@ func TestInstallQueueWakeFlag_OnAndUninstall_ExpectOnlyOwnEntriesChange(t *testi
 }
 
 func TestInstallQueueWakeFlag_NoHooksFile_ExpectFileCreatedThenRemoved(t *testing.T) {
+	queueWakeOS(t, "darwin")
 	home := installSandbox(t, "codex")
 	hp := filepath.Join(home, ".codex", "hooks.json")
 	bin := filepath.Join(home, "bin")
@@ -130,5 +139,77 @@ func TestInstallCheck_K10_OffByDefault(t *testing.T) {
 	_, out := installRunCmd(t, "install", "--check", "--bin-dir", filepath.Join(home, "bin"))
 	if !strings.Contains(out, "K10 codex PASS experimental --no-daemon queue wake is off") {
 		t.Errorf("K10 line missing:\n%s", out)
+	}
+}
+
+func TestInstallQueueWakeFlag_FailedHookWrite_ExpectSettingStaysOff(t *testing.T) {
+	queueWakeOS(t, "darwin")
+	for name, content := range map[string]string{"malformed": "{not json", "null": "null", "array": "[]"} {
+		t.Run(name, func(t *testing.T) {
+			home := installSandbox(t, "codex")
+			state := filepath.Join(home, ".local", "state", "crosstalk")
+			installWrite(t, filepath.Join(home, ".codex", "hooks.json"), content)
+			if code, out := installRunCmd(t, "install", "--yes", "--codex-no-daemon-queue", "--bin-dir", filepath.Join(home, "bin")); code == 0 {
+				t.Fatalf("install succeeded on a bad hooks.json:\n%s", out)
+			}
+			if codex.ClaimsEnabled(state) {
+				t.Error("a failed opt-in left the setting on")
+			}
+			if got := installRead(t, filepath.Join(home, ".codex", "hooks.json")); got != content {
+				t.Errorf("hooks.json rewritten: %q", got)
+			}
+		})
+	}
+}
+
+func TestInstallQueueWakeFlag_NotMacOS_ExpectRefusedSettingOff(t *testing.T) {
+	queueWakeOS(t, "linux")
+	home := installSandbox(t, "codex")
+	state := filepath.Join(home, ".local", "state", "crosstalk")
+	if code, _ := installRunCmd(t, "install", "--yes", "--codex-no-daemon-queue", "--bin-dir", filepath.Join(home, "bin")); code == 0 {
+		t.Fatal("install accepted the flag off macOS")
+	}
+	if codex.ClaimsEnabled(state) {
+		t.Error("setting on")
+	}
+	if _, err := os.Stat(filepath.Join(home, ".codex", "hooks.json")); !os.IsNotExist(err) {
+		t.Errorf("hooks.json written: %v", err)
+	}
+}
+
+func TestUninstall_UserCompoundHookEndingInOurCommand_ExpectKept(t *testing.T) {
+	home := installSandbox(t, "codex")
+	hp := filepath.Join(home, ".codex", "hooks.json")
+	user := `{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"setup-env && '/opt/x/crosstalk' hook codex session-start"}]}]}}`
+	installWrite(t, hp, user)
+	bin := filepath.Join(home, "bin")
+	for _, mode := range []string{"install", "uninstall"} {
+		if code, out := installRunCmd(t, mode, "--yes", "--bin-dir", bin); code != 0 {
+			t.Fatalf("%s: %d\n%s", mode, code, out)
+		}
+		if got := installRead(t, hp); got != user {
+			t.Fatalf("after %s hooks.json = %q, want the user's file untouched", mode, got)
+		}
+	}
+}
+
+func TestInstallQueueWakeFlag_ApostropheInBinDir_ExpectHookInvokesBinaryAsOneArgument(t *testing.T) {
+	queueWakeOS(t, "darwin")
+	home := installSandbox(t, "codex")
+	bin := filepath.Join(home, "O'Brien", "bin")
+	if code, out := installRunCmd(t, "install", "--yes", "--codex-no-daemon-queue", "--bin-dir", bin); code != 0 {
+		t.Fatalf("install: %d\n%s", code, out)
+	}
+	h := hooksJSON(t, filepath.Join(home, ".codex", "hooks.json"))["hooks"].(map[string]any)["SessionStart"].([]any)
+	cmd := h[0].(map[string]any)["hooks"].([]any)[0].(map[string]any)["command"].(string)
+	out, err := exec.Command("/bin/sh", "-c", strings.TrimSuffix(cmd, " hook codex session-start")+" --version-probe-not-run; true").CombinedOutput()
+	if err != nil || strings.Contains(string(out), "syntax error") || strings.Contains(string(out), "unexpected EOF") {
+		t.Fatalf("shell cannot parse %q: %v %s", cmd, err, out)
+	}
+	if code, out := installRunCmd(t, "uninstall", "--yes", "--bin-dir", bin); code != 0 {
+		t.Fatalf("uninstall: %d\n%s", code, out)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".codex", "hooks.json")); !os.IsNotExist(err) {
+		t.Errorf("the apostrophe-path hook was not removed: %v", err)
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -283,6 +284,9 @@ func (h *Harness) ServeClaims(ctx context.Context, r harness.SessionRegistrar) e
 		return nil
 	}
 	if cfg.Sys == nil {
+		if runtime.GOOS != "darwin" {
+			return nil
+		}
 		cfg.Sys = Kernel{}
 	}
 	if cfg.SockDir == "" {
