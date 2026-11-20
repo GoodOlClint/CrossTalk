@@ -12,7 +12,9 @@ import (
 
 	"github.com/GoodOlClint/crosstalk/internal/adapter"
 	"github.com/GoodOlClint/crosstalk/internal/harness"
+	"github.com/GoodOlClint/crosstalk/internal/identity"
 	"github.com/GoodOlClint/crosstalk/internal/msg"
+	"github.com/GoodOlClint/crosstalk/internal/registry"
 )
 
 type HarnessOptions struct {
@@ -31,6 +33,11 @@ type HarnessOptions struct {
 	// PollInterval is how often ServeClaims reads that session file; 0
 	// means DefaultPollInterval.
 	PollInterval time.Duration
+	// Directory is the live descriptor set ServeClaims checks before each
+	// registration; nil means it registers on every poll.
+	Directory interface {
+		List() ([]registry.Descriptor, error)
+	}
 }
 
 const DefaultPollInterval = 2 * time.Second
@@ -43,6 +50,9 @@ type Harness struct {
 	ingress  func(harness.IngressConfig) harness.Ingress
 	ppid     int
 	interval time.Duration
+	dir      interface {
+		List() ([]registry.Descriptor, error)
+	}
 }
 
 var (
@@ -66,31 +76,28 @@ func NewHarness(opt HarnessOptions) (*Harness, error) {
 	if opt.PollInterval <= 0 {
 		opt.PollInterval = DefaultPollInterval
 	}
-	return &Harness{a: Adapter{SessionsDir: opt.SessionsDir, Alive: opt.Alive}, ingress: opt.Ingress, ppid: opt.PPID, interval: opt.PollInterval}, nil
+	return &Harness{a: Adapter{SessionsDir: opt.SessionsDir, Alive: opt.Alive}, ingress: opt.Ingress, ppid: opt.PPID, interval: opt.PollInterval, dir: opt.Directory}, nil
 }
 
-// ServeClaims registers the session named in the parent's session file when
-// it first appears, when /clear or /resume swaps it, and when it is renamed,
-// so a session is an agent before its model calls a tool. The file may not
-// exist yet when the shim starts. A failed registration is retried every
-// tick and logged once per session, name and error.
+// ServeClaims registers the session named in the parent's session file
+// whenever no live descriptor holds it under its harness name: when the file
+// first appears (it may not exist yet at shim start), after /clear or
+// /resume, on a harness rename, and while a fallback or retired registration
+// leaves it so. A failure is retried every poll and logged once per session,
+// name and error.
 func (h *Harness) ServeClaims(ctx context.Context, r harness.SessionRegistrar) error {
 	tick := time.NewTicker(h.interval)
 	defer tick.Stop()
-	var done, failed string
+	var failed string
 	for {
-		if s, err := h.a.readSession(h.ppid); err == nil {
-			key := s.SessionID + "\x00" + s.Name
-			if key != done {
-				// ponytail: a held agent (a second shim for the session) retries every tick, with a Discover each time when the file has no name.
-				if err := r.RegisterSession(ctx, harness.RequestContext{ParentPID: h.ppid}, s.Cwd); err != nil {
-					if f := key + "\x00" + err.Error(); f != failed && ctx.Err() == nil {
-						failed = f
-						slog.Warn("claude: registering session", "session", s.SessionID, "err", err)
-					}
-				} else {
-					done, failed = key, ""
+		if s, err := h.a.readSession(h.ppid); err == nil && !h.held(s) {
+			if err := r.RegisterSession(ctx, harness.RequestContext{ParentPID: h.ppid}, s.Cwd); err != nil {
+				if f := s.SessionID + "\x00" + s.Name + "\x00" + err.Error(); f != failed && ctx.Err() == nil {
+					failed = f
+					slog.Warn("claude: registering session", "session", s.SessionID, "err", err)
 				}
+			} else {
+				failed = ""
 			}
 		}
 		select {
@@ -99,6 +106,25 @@ func (h *Harness) ServeClaims(ctx context.Context, r harness.SessionRegistrar) e
 		case <-tick.C:
 		}
 	}
+}
+
+// held reports that a live descriptor, this shim's or another's, holds s
+// under its harness name.
+func (h *Harness) held(s Session) bool {
+	if h.dir == nil {
+		return false
+	}
+	ds, err := h.dir.List()
+	if err != nil {
+		return false
+	}
+	id := identity.AgentID(string(adapter.Claude), s.SessionID)
+	for _, d := range ds {
+		if d.AgentID == id {
+			return s.Name == "" || d.Name == s.Name
+		}
+	}
+	return false
 }
 
 func (h *Harness) Name() adapter.Harness { return adapter.Claude }

@@ -31,7 +31,7 @@ type eager struct {
 
 func (w *world) eagerNode(ppid int) *eager {
 	t := w.t
-	ch, err := claude.NewHarness(claude.HarnessOptions{SessionsDir: w.sessions, Alive: fakePID, Ingress: udsingress.NewIngress, PPID: ppid, PollInterval: eagerTick})
+	ch, err := claude.NewHarness(claude.HarnessOptions{SessionsDir: w.sessions, Alive: fakePID, Ingress: udsingress.NewIngress, PPID: ppid, PollInterval: eagerTick, Directory: registry.New(w.state)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,4 +272,20 @@ func TestEagerRegistrationDuplicateShimLeavesFirstHolder(t *testing.T) {
 	}
 	second.fails(nil, "receive_message", map[string]any{}, "rejected", "agent_held")
 	first.assertOne(w, "sess-1", "bob")
+}
+
+// A session registered under a fallback name because a live agent held its
+// harness name takes the name once the holder exits, with no call.
+func TestEagerRegistrationTakesNameWhenHolderExits(t *testing.T) {
+	w := newWorld(t)
+	carol := w.claude(4003, "sess-c", "carol")
+	w.become(carol, "sess-c", "bob")
+	nc := w.node(carol.pid, w.lb, nil)
+	recv(nc, nil)
+	bob := w.claude(4002, "sess-1", "bob")
+	w.eagerNode(bob.pid)
+	waitFor(t, "fallback registration", func() bool { d, ok := w.descriptor(bob.agentID()); return ok && d.Name != "bob" })
+
+	nc.stop()
+	waitFor(t, "harness name taken without a call", func() bool { d, _ := w.descriptor(bob.agentID()); return d.Name == "bob" })
 }
