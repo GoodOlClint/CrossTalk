@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -73,9 +74,15 @@ func newRouteEnv(t *testing.T, claimed bool) *routeEnv {
 	}
 	e.h = NewHarness(HarnessOptions{Adapter: e.threads})
 	e.setting(true)
-	w := e.wakes(e.state)
-	w.Enabled = func() bool { return ClaimsEnabled(e.state) }
-	e.h.setWakeRoute(&wakeRoute{stateDir: e.state, claims: e.claims, wakes: w})
+	rt := newWakeRoute(e.state, e.claims, func() *QueueGate {
+		g := testGate(e.queue)
+		if e.gate != nil {
+			e.gate(g)
+		}
+		return g
+	})
+	rt.wakes.Now, rt.wakes.Bound = e.clk.now, time.Minute
+	e.h.setWakeRoute(rt)
 	e.open(e.h)
 	return e
 }
@@ -575,4 +582,50 @@ func TestRoute_SettingOffWhileWriteWaits_ExpectNoRow(t *testing.T) {
 	if g := gen(t, e.h.wakeRoute().wakes); g.State != GenFailed {
 		t.Fatalf("generation %+v, want failed", g)
 	}
+}
+
+func TestRoute_RemoteSenderOrInboxCopy_ExpectMailboxedNoWake(t *testing.T) {
+	fp := strings.Repeat("a", 64)
+	remotePeer := receiver.Sender{Verified: true, Host: fp, HostAlias: "desk", AgentID: "e1e1e1e1e1e1e1e1", Name: "alice@desk", Role: registry.RolePrimary, Principal: receiver.RemoteKey(fp, "e1e1e1e1e1e1e1e1")}
+	cases := []struct {
+		name string
+		in   func(m msg.Message) receiver.Inbound
+		d    adapter.Delivery
+	}{
+		{"remote sender", func(m msg.Message) receiver.Inbound {
+			return receiver.Inbound{Ingress: receiver.A2A, Message: m, Sender: remotePeer}
+		}, adapter.Delivery{Mode: msg.Immediate, VerifiedSender: true, SenderRemote: true, Target: adapter.Binding{Harness: adapter.Codex, SessionRef: wThread}}},
+		{"inbox copy", func(m msg.Message) receiver.Inbound {
+			return receiver.Inbound{Ingress: receiver.A2A, Message: m, Sender: verifiedPeer, Inbox: "ops", InboxCopy: true}
+		}, adapter.Delivery{Mode: msg.Immediate, VerifiedSender: true, Inbox: "ops", InboxCopy: true, Target: adapter.Binding{Harness: adapter.Codex, SessionRef: wThread}}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			e := newRouteEnv(t, true)
+			m := routeMsg(msg.Inform, msg.Immediate)
+			e.wantRoute(m, c.d, RouteMailbox)
+			if res := e.r.Receive(context.Background(), c.in(m)); res.State != adapter.Mailboxed {
+				t.Fatalf("%+v", res)
+			}
+			e.wantRows(0)
+			if st := e.pulled()[m.MessageID]; st != journal.StateDelivered {
+				t.Fatalf("entry %q, want pullable", st)
+			}
+		})
+	}
+}
+
+func TestRoute_SenderSideInjectIntoUnboundSession_ExpectNeverMailboxed(t *testing.T) {
+	e := newRouteEnv(t, true)
+	m := routeMsg(msg.Inform, msg.Immediate)
+	d := delivery(msg.Immediate, true)
+	d.SenderAgentID = "a1a1a1a1a1a1a1a1"
+	st, err := e.h.Inject(context.Background(), m, d)
+	if st == adapter.Mailboxed {
+		t.Fatalf("sender-side inject returned mailboxed (%v) with no entry in the recipient's journal", err)
+	}
+	if n := e.appServerCalls(); n != 1 {
+		t.Fatalf("app-server injects %d, want the pre-step adapter's Inject", n)
+	}
+	e.wantRows(0)
 }

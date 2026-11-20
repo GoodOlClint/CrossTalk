@@ -50,7 +50,7 @@ const (
 	hintCodexNoEndpoint         = "This Codex session has no app-server endpoint CrossTalk can reach, so it can send but not receive. It was launched with --no-daemon or a -c config override, either of which gives it a private app-server, or it is a codex exec run, which never receives. Tell its user to restart Codex without --no-daemon or -c and put any setting in ~/.codex/config.toml."
 	hintCodexBackendDown        = "That Codex session's app-server cannot reach its OpenAI backend right now. The message is in the thread, but the session may not act on it or reply until the network returns. Do not resend. Tell your user; restarting the Codex app-server (codex app-server daemon restart) may fix it, and it interrupts running Codex work."
 	hintCodexBackendDownUnknown = "Delivery to that Codex session is unconfirmed, and its app-server also cannot reach its OpenAI backend right now. Do not resend blind: check receive_message for this message_id later. Tell your user; restarting the Codex app-server (codex app-server daemon restart) may fix it, and it interrupts running Codex work."
-	hintCodexMailboxed          = "The message is in that Codex session's mailbox, not yet delivered: the session sees it at its next receive_message. An immediate message from you may also start one wake turn, best effort, only once the session is idle (Codex checks about every 10 seconds), so it is not a deadline. Do not resend."
+	hintMailboxed               = "The message is in that session's mailbox, not yet delivered: the session sees it at its next receive_message. Where the harness offers a wake, an immediate message from you may also start one turn, best effort, only once the session is idle, so it is not a deadline. Do not resend."
 	hintAmbiguousName           = "Several sessions carry this name. Find the one you mean in list_agents and address it by agent_id."
 )
 
@@ -384,8 +384,8 @@ func (st *AgentState) sendRegistered(ctx context.Context, m msg.Message, d regis
 	if reason == receiver.ReasonNoEndpoint || state == adapter.Unreachable && d.Harness == string(adapter.Codex) && d.HarnessEndpoint == nil {
 		res.Hint = hintCodexNoEndpoint
 	}
-	if state == adapter.Mailboxed && d.Harness == string(adapter.Codex) {
-		res.Hint = hintCodexMailboxed
+	if state == adapter.Mailboxed {
+		res.Hint = hintMailboxed
 	}
 	if d.HarnessEndpoint != nil {
 		res.Hint = joinHint(res.Hint, st.shim.backendHint(ctx, adapter.Harness(d.Harness), *d.HarnessEndpoint, d.SessionRef, state))

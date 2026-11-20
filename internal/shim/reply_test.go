@@ -329,3 +329,39 @@ func TestReplyIntoMailboxIsDeliveredNotRetried(t *testing.T) {
 		t.Fatalf("retry %v, codex injects %d", again, len(w.codex.Writes()))
 	}
 }
+
+func TestReplyResumeWithSavedMailboxedOutbound_ExpectNotResent(t *testing.T) {
+	w := newWorld(t)
+	alice := w.claude(4001, "sess-alice", "alice")
+	w.codex.addThread("T-bob", "bob")
+	na := w.node(alice.pid, w.lb, func(o *Options) {
+		o.OnReply = func(context.Context, *AgentState, msg.Message, msg.Message) error { return nil }
+	})
+	nb := w.node(1, w.lb, nil)
+	na.ok(nil, "receive_message", map[string]any{})
+	nb.ok(thread("T-bob"), "receive_message", map[string]any{})
+	ask := nb.ok(thread("T-bob"), "ask", send("alice", "question?"))
+	askID := ask["message_id"].(string)
+
+	st := na.sh.Agent(identity.AgentID("claude", "sess-alice"))
+	orig, key, _ := st.inbound(askID)
+	r := st.newMessage(orig.From, msg.Inform, msg.Immediate, "answer")
+	r.InReplyTo, r.ContextID = &askID, orig.ContextID
+	if err := st.agent.Journal().Append(st.obligation(r, key, journal.StatePending, true, "")); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.outbound(r, key, adapter.Mailboxed, "", false); err != nil {
+		t.Fatal(err)
+	}
+	before := len(w.codex.Writes())
+	out := na.ok(nil, "reply", map[string]any{"message_id": askID, "text": "answer"})
+	if out["message_id"] != r.MessageID || out["state"] != string(adapter.Mailboxed) {
+		t.Fatalf("resume %v, want %s mailboxed", out, r.MessageID)
+	}
+	if n := len(w.codex.Writes()) - before; n != 0 {
+		t.Fatalf("reply already in the asker's mailbox was sent again (%d injects)", n)
+	}
+	if l, _ := st.agent.Journal().Latest(journal.Record{Type: journal.TypeObligation, MessageID: r.MessageID}); l.State != journal.StateDelivered {
+		t.Fatalf("obligation %+v", l)
+	}
+}

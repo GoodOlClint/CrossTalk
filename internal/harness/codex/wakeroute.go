@@ -36,6 +36,12 @@ type wakeRoute struct {
 	wakes    *Wakes
 }
 
+// newWakeRoute is the route ServeClaims installs; its Wakes re-read the
+// setting inside each write transaction.
+func newWakeRoute(stateDir string, c *Claims, gate func() *QueueGate) *wakeRoute {
+	return &wakeRoute{stateDir: stateDir, claims: c, wakes: &Wakes{Dir: WakeDir(stateDir), Gate: gate, Enabled: func() bool { return ClaimsEnabled(stateDir) }}}
+}
+
 func (h *Harness) setWakeRoute(rt *wakeRoute) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -127,14 +133,15 @@ func (a *Adapter) hostsStrict(ctx context.Context, thread string) (int, error) {
 	return n, nil
 }
 
-// wakeEligible is plan 3.1 row 5: an immediate message from a verified
-// sender. next_turn and unverified senders are mailbox only.
+// wakeEligible is plan 3.1 row 5: an immediate message from a verified local
+// sender. next_turn, unverified and remote senders, and inbox copies, are
+// mailbox only.
 func wakeEligible(m msg.Message, d adapter.Delivery) bool {
 	mode := d.Mode
 	if mode == "" {
 		mode = m.Delivery
 	}
-	return mode != msg.NextTurn && d.VerifiedSender
+	return mode != msg.NextTurn && d.VerifiedSender && !d.SenderRemote && !d.InboxCopy
 }
 
 // MailSignal opens a wake generation for a mailboxed entry when the thread
