@@ -3,7 +3,7 @@
 - **Status:** Provisional (operator 2026-11-20; design only, nothing built)
 - **Date:** 2026-11-20
 - **Deciders:** operator (rulings 2026-11-20, amendment on macOS runners the same day) + Claude (Opus 5.5)
-- **Context source:** [change plan](../plans/harness-compat-ci.md); ADR 0015, 0019, 0028
+- **Context source:** [change plan](https://github.com/GoodOlClint/CrossTalk/blob/main/docs/plans/harness-compat-ci.md); ADR 0015, 0019, 0028
 
 ## Context
 
