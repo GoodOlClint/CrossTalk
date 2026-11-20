@@ -96,3 +96,20 @@ func TestRequestBodyBounded(t *testing.T) {
 		t.Fatalf("%d tasks created for an oversized request", n)
 	}
 }
+
+func TestMailboxedInformFreesItsPendingSlot(t *testing.T) {
+	e := newEnv(t, receiver.Limits{MaxPending: 1}, Limits{}, nil)
+	e.fake.SetDefaultInject(adapter.Outcome{State: adapter.Mailboxed})
+	client, ctx := e.peer()
+	first, err := send(t, client, ctx, textMsg("one", nil), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := waitState(t, client, ctx, first.ID, sdk.TaskStateCompleted)
+	if got := DeliveryState(done); got != adapter.Mailboxed {
+		t.Fatalf("delivery state %q, want mailboxed", got)
+	}
+	if _, err := send(t, client, ctx, textMsg("two", nil), true); err != nil {
+		t.Fatalf("second send behind a mailboxed inform: %v", err)
+	}
+}

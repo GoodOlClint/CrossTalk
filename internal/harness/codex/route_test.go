@@ -73,7 +73,9 @@ func newRouteEnv(t *testing.T, claimed bool) *routeEnv {
 	}
 	e.h = NewHarness(HarnessOptions{Adapter: e.threads})
 	e.setting(true)
-	e.h.setWakeRoute(&wakeRoute{stateDir: e.state, claims: e.claims, wakes: e.wakes(e.state)})
+	w := e.wakes(e.state)
+	w.Enabled = func() bool { return ClaimsEnabled(e.state) }
+	e.h.setWakeRoute(&wakeRoute{stateDir: e.state, claims: e.claims, wakes: w})
 	e.open(e.h)
 	return e
 }
@@ -534,5 +536,43 @@ func TestRoute_ThreadResumedOnAppServer_ExpectQueueRouteStopsMailboxedStaysPulla
 	e.wantRows(0)
 	if st := e.pulled()[m1.MessageID]; st != journal.StateDelivered {
 		t.Fatalf("m1 %q, want returned by the pull (marked delivered on first return)", st)
+	}
+}
+
+type failingDirectory struct{}
+
+func (failingDirectory) List() ([]registry.Descriptor, error) {
+	return nil, errors.New("descriptor directory unreadable")
+}
+
+func TestRoute_ClaimAndEndpointListFails_ExpectUnreachableNoRow(t *testing.T) {
+	e := newRouteEnv(t, true)
+	e.h.Threads = &Adapter{ControlSocket: filepath.Join(shortSockDir(t), "none.sock"), Directory: failingDirectory{}}
+	m := routeMsg(msg.Inform, msg.Immediate)
+	e.wantRoute(m, delivery(msg.Immediate, true), RouteAmbiguous)
+	if res := e.send(verifiedPeer, m); res.State != adapter.Unreachable {
+		t.Fatalf("%+v", res)
+	}
+	if err := e.h.MailSignal(context.Background(), m, delivery(msg.Immediate, true)); !errors.Is(err, ErrHostProbe) {
+		t.Fatalf("signal err %v, want ErrHostProbe", err)
+	}
+	e.wantRows(0)
+}
+
+func TestRoute_SettingOffWhileWriteWaits_ExpectNoRow(t *testing.T) {
+	e := newRouteEnv(t, true)
+	gates := 0
+	e.gate = func(g *QueueGate) {
+		if gates++; gates == 2 {
+			g.afterBegin = func() { e.setting(false) }
+		}
+	}
+	m := routeMsg(msg.Inform, msg.Immediate)
+	if res := e.send(verifiedPeer, m); res.State != adapter.Mailboxed {
+		t.Fatalf("%+v", res)
+	}
+	e.wantRows(0)
+	if g := gen(t, e.h.wakeRoute().wakes); g.State != GenFailed {
+		t.Fatalf("generation %+v, want failed", g)
 	}
 }

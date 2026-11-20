@@ -829,6 +829,12 @@ func (st *AgentState) obligation(r msg.Message, to, state string, withBody bool,
 	return rec
 }
 
+// handedOff reports a forward the recipient took: in its harness, or
+// durably in its mailbox.
+func handedOff(s adapter.State) bool {
+	return s == adapter.Accepted || s == adapter.Queued || s == adapter.Mailboxed
+}
+
 // forwardReply sends r to the asker. An outbound record already accepted or
 // queued is the forward's evidence: it is not sent again.
 func (st *AgentState) forwardReply(ctx context.Context, r msg.Message, key, askTask string) mcpserver.Result {
@@ -836,7 +842,7 @@ func (st *AgentState) forwardReply(ctx context.Context, r msg.Message, key, askT
 	delivered := func() {
 		st.agent.Journal().Append(st.obligation(r, key, journal.StateDelivered, false, askTask))
 	}
-	if o, ok := st.agent.Journal().Latest(journal.Record{Type: journal.TypeOutbound, MessageID: r.MessageID}); ok && (o.State == string(adapter.Accepted) || o.State == string(adapter.Queued)) {
+	if o, ok := st.agent.Journal().Latest(journal.Record{Type: journal.TypeOutbound, MessageID: r.MessageID}); ok && handedOff(adapter.State(o.State)) {
 		delivered()
 		res.State, res.Reason = adapter.State(o.State), o.Reason
 		return res
@@ -855,7 +861,7 @@ func (st *AgentState) forwardReply(ctx context.Context, r msg.Message, key, askT
 	var taskID string
 	res.State, res.Reason, taskID = st.viaTransport(ctx, d, r)
 	st.outboundTask(r, d.AgentID, res.State, res.Reason, false, taskID)
-	if res.State == adapter.Accepted || res.State == adapter.Queued {
+	if handedOff(res.State) {
 		delivered()
 	}
 	return res

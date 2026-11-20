@@ -89,6 +89,9 @@ type Wakes struct {
 	// DefaultLockTimeout. On timeout nothing is written: no record change,
 	// no row.
 	LockTimeout time.Duration
+	// Enabled, when set, is read inside the write transaction just before
+	// the insert; false writes no row.
+	Enabled func() bool
 
 	mu       sync.Mutex
 	threads  map[string]*sync.Mutex
@@ -343,6 +346,9 @@ func (w *Wakes) open(ctx context.Context, g *Generation, precheck func() error) 
 		return err
 	}
 	err := w.Gate().Tx(ctx, true, func(conn *sql.Conn) error {
+		if w.Enabled != nil && !w.Enabled() {
+			return ErrWakeOff
+		}
 		return insertWake(ctx, conn, g.Thread, g.WakeID, w.now())
 	})
 	switch {

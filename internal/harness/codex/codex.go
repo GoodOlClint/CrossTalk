@@ -70,11 +70,21 @@ func (a *Adapter) clientInfo() appserver.ClientInfo {
 }
 
 func (a *Adapter) KnownEndpoints(extra ...string) []string {
+	eps, _ := a.knownEndpoints(extra...)
+	return eps
+}
+
+// knownEndpoints is KnownEndpoints plus the first error that left an
+// endpoint out: no home directory for the control socket, or an unreadable
+// descriptor directory.
+func (a *Adapter) knownEndpoints(extra ...string) ([]string, error) {
+	var first error
 	cs := a.ControlSocket
 	if cs == "" {
 		var err error
 		if cs, err = appserver.DefaultControlSocket(); err != nil {
 			a.logger().Warn("codex: no home directory for control socket", "err", err)
+			first = err
 		}
 	}
 	eps := append([]string{cs}, a.Endpoints...)
@@ -87,6 +97,9 @@ func (a *Adapter) KnownEndpoints(extra ...string) []string {
 			}
 		} else {
 			a.logger().Warn("codex: endpoint directory unavailable", "err", err)
+			if first == nil {
+				first = err
+			}
 		}
 	}
 	var out []string
@@ -97,13 +110,16 @@ func (a *Adapter) KnownEndpoints(extra ...string) []string {
 		n, err := appserver.NormalizeEndpoint(ep)
 		if err != nil {
 			a.logger().Warn("codex: skipping endpoint", "endpoint", ep, "err", err)
+			if first == nil {
+				first = err
+			}
 			continue
 		}
 		if !slices.Contains(out, n) {
 			out = append(out, n)
 		}
 	}
-	return out
+	return out, first
 }
 
 func (a *Adapter) connect(ctx context.Context, ep string) (*appserver.Client, error) {

@@ -99,8 +99,12 @@ func (h *Harness) hostCount(ctx context.Context, thread string, strict bool) (in
 }
 
 func (a *Adapter) hostsStrict(ctx context.Context, thread string) (int, error) {
+	eps, err := a.knownEndpoints()
+	if err != nil {
+		return 0, fmt.Errorf("endpoint list: %w", err)
+	}
 	n := 0
-	for _, ep := range a.KnownEndpoints() {
+	for _, ep := range eps {
 		ectx, cancel := context.WithTimeout(ctx, EndpointProbeTimeout)
 		c, err := a.connect(ectx, ep)
 		if err != nil {

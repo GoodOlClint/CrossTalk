@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/GoodOlClint/crosstalk/internal/adapter"
 	"github.com/GoodOlClint/crosstalk/internal/identity"
 	"github.com/GoodOlClint/crosstalk/internal/journal"
 	"github.com/GoodOlClint/crosstalk/internal/mcpserver"
@@ -301,5 +302,30 @@ func TestInboxCopyReplyIsRejectedInboxCopy(t *testing.T) {
 	}
 	if len(alice.got()) != 0 {
 		t.Fatalf("a reply to a copy reached the sender: %q", alice.got())
+	}
+}
+
+func TestReplyIntoMailboxIsDeliveredNotRetried(t *testing.T) {
+	w := newWorld(t)
+	alice := w.claude(4001, "sess-alice", "alice")
+	w.codex.addThread("T-bob", "bob")
+	na := w.node(alice.pid, w.lb, nil)
+	nb := w.node(1, w.lb, nil)
+	na.ok(nil, "receive_message", map[string]any{})
+	nb.ok(thread("T-bob"), "receive_message", map[string]any{})
+	ask := nb.ok(thread("T-bob"), "ask", send("alice", "question?"))
+	askID := ask["message_id"].(string)
+	w.codex.SetDefaultInject(adapter.Outcome{State: adapter.Mailboxed})
+	out := na.ok(nil, "reply", map[string]any{"message_id": askID, "text": "answer"})
+	if out["state"] != string(adapter.Mailboxed) {
+		t.Fatalf("reply %v", out)
+	}
+	st := na.sh.Agent(identity.AgentID("claude", "sess-alice"))
+	if l, _ := st.agent.Journal().Latest(journal.Record{Type: journal.TypeObligation, MessageID: out["message_id"].(string)}); l.State != journal.StateDelivered {
+		t.Fatalf("obligation %+v, want delivered", l)
+	}
+	again := na.ok(nil, "reply", map[string]any{"message_id": askID, "text": "answer"})
+	if again["message_id"] != out["message_id"] || len(w.codex.Writes()) != 1 {
+		t.Fatalf("retry %v, codex injects %d", again, len(w.codex.Writes()))
 	}
 }
