@@ -86,6 +86,9 @@ func parseInstallArgs(mode string, args []string) (installOpts, error) {
 			return o, fmt.Errorf("--%s needs --remote", n)
 		}
 	}
+	if o.queueWake && codex.QueueWakeOS != "darwin" {
+		return o, errors.New("--codex-no-daemon-queue is macOS only")
+	}
 	if o.queueWake && len(o.names) > 0 && !slices.Contains(o.names, "codex") {
 		return o, errors.New("--codex-no-daemon-queue is for codex")
 	}

@@ -105,7 +105,7 @@ func TestInstallQueueWakeFlag_ClaudeOnly_ExpectUsageError(t *testing.T) {
 }
 
 func TestInstall_StaleLegacySwitchFile_ExpectRemovedWithNoticeAndNeverEnables(t *testing.T) {
-	home := installSandbox(t, "codex")
+	home := installSandbox(t, "claude", "codex")
 	state := filepath.Join(home, ".local", "state", "crosstalk")
 	old := filepath.Join(state, codex.LegacySettingFile)
 	if code, out := installRunCmd(t, "install", "--yes", "--bin-dir", filepath.Join(home, "bin")); code != 0 {
@@ -125,6 +125,13 @@ func TestInstall_StaleLegacySwitchFile_ExpectRemovedWithNoticeAndNeverEnables(t 
 	}
 	if _, err := os.Stat(old); !os.IsNotExist(err) {
 		t.Errorf("stale file still there: %v", err)
+	}
+	installWrite(t, old, "")
+	if code, out := installRunCmd(t, "install", "claude", "--yes", "--bin-dir", filepath.Join(home, "bin")); code != 0 {
+		t.Fatalf("install claude: %d\n%s", code, out)
+	}
+	if _, err := os.Stat(old); err != nil {
+		t.Errorf("a claude-only install touched the codex switch file: %v", err)
 	}
 	if !strings.Contains(out, "--codex-no-daemon-queue") || codex.ClaimsEnabled(state) {
 		t.Errorf("no notice naming the flag, or setting on:\n%s", out)
@@ -162,18 +169,70 @@ func TestInstallQueueWakeFlag_FailedHookWrite_ExpectSettingStaysOff(t *testing.T
 	}
 }
 
-func TestInstallQueueWakeFlag_NotMacOS_ExpectRefusedSettingOff(t *testing.T) {
+func TestInstallQueueWakeFlag_NotMacOS_ExpectRefusedAtParseBeforeAnyStep(t *testing.T) {
 	queueWakeOS(t, "linux")
-	home := installSandbox(t, "codex")
+	home := installSandbox(t, "claude", "codex")
 	state := filepath.Join(home, ".local", "state", "crosstalk")
-	if code, _ := installRunCmd(t, "install", "--yes", "--codex-no-daemon-queue", "--bin-dir", filepath.Join(home, "bin")); code == 0 {
-		t.Fatal("install accepted the flag off macOS")
+	bin := filepath.Join(home, "bin")
+	cfg := filepath.Join(home, ".codex", "config.toml")
+	installWrite(t, cfg, "model = \"x\"\n")
+	code, out := installRunCmd(t, "install", "--yes", "--codex-no-daemon-queue", "--bin-dir", bin)
+	if code != 2 || !strings.Contains(out, "macOS only") {
+		t.Fatalf("exit %d, want 2 with a macOS message\n%s", code, out)
+	}
+	if _, err := os.Stat(filepath.Join(bin, "crosstalk")); !os.IsNotExist(err) {
+		t.Errorf("binary installed before the refusal: %v", err)
+	}
+	if installRead(t, cfg) != "model = \"x\"\n" {
+		t.Error("config.toml changed before the refusal")
 	}
 	if codex.ClaimsEnabled(state) {
 		t.Error("setting on")
 	}
 	if _, err := os.Stat(filepath.Join(home, ".codex", "hooks.json")); !os.IsNotExist(err) {
 		t.Errorf("hooks.json written: %v", err)
+	}
+}
+
+func TestQueueWake_HooksJSONOfWrongShape_ExpectRefusedNothingWrittenOnInstallAndUninstall(t *testing.T) {
+	queueWakeOS(t, "darwin")
+	for name, content := range map[string]string{
+		"hooks is an array":         `{"hooks":[1,2]}`,
+		"SessionStart is an object": `{"hooks":{"SessionStart":{"x":1}}}`,
+		"two documents":             `{"hooks":{}} {"a":1}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			home := installSandbox(t, "codex")
+			state := filepath.Join(home, ".local", "state", "crosstalk")
+			hp := filepath.Join(home, ".codex", "hooks.json")
+			installWrite(t, hp, content)
+			code, out := installRunCmd(t, "install", "--yes", "--codex-no-daemon-queue", "--bin-dir", filepath.Join(home, "bin"))
+			if code == 0 || !strings.Contains(out, "hooks.json") {
+				t.Fatalf("install exit %d, want a failure naming hooks.json\n%s", code, out)
+			}
+			if installRead(t, hp) != content || codex.ClaimsEnabled(state) {
+				t.Fatalf("install changed hooks.json or turned the setting on: %q", installRead(t, hp))
+			}
+			if code, out := installRunCmd(t, "uninstall", "--yes", "--bin-dir", filepath.Join(home, "bin")); code == 0 || installRead(t, hp) != content {
+				t.Fatalf("uninstall exit %d, hooks.json %q\n%s", code, installRead(t, hp), out)
+			}
+		})
+	}
+}
+
+func TestInstallQueueWakeFlag_LargeIntegersInHooksJSON_ExpectPreserved(t *testing.T) {
+	queueWakeOS(t, "darwin")
+	home := installSandbox(t, "codex")
+	hp := filepath.Join(home, ".codex", "hooks.json")
+	installWrite(t, hp, `{"big":9007199254740993,"hooks":{"Stop":[{"hooks":[{"type":"command","command":"x","timeout":9007199254740993}]}]}}`)
+	bin := filepath.Join(home, "bin")
+	for _, args := range [][]string{{"install", "--yes", "--codex-no-daemon-queue", "--bin-dir", bin}, {"uninstall", "--yes", "--bin-dir", bin}} {
+		if code, out := installRunCmd(t, args[0], args[1:]...); code != 0 {
+			t.Fatalf("%v: %d\n%s", args, code, out)
+		}
+		if got := installRead(t, hp); strings.Count(got, "9007199254740993") != 2 {
+			t.Fatalf("after %s the integers changed: %s", args[0], got)
+		}
 	}
 }
 

@@ -1,10 +1,12 @@
 package codex
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -66,8 +68,21 @@ func readHooks(path string) (map[string]any, bool, error) {
 		return nil, false, err
 	}
 	var doc map[string]any
-	if err := json.Unmarshal(b, &doc); err != nil || doc == nil {
-		return nil, true, fmt.Errorf("%s is not a JSON object: %v", path, err)
+	dec := json.NewDecoder(bytes.NewReader(b))
+	dec.UseNumber()
+	if err := dec.Decode(&doc); err != nil || doc == nil || dec.Decode(&struct{}{}) != io.EOF {
+		return nil, true, fmt.Errorf("%s is not a single JSON object; CrossTalk wrote nothing", path)
+	}
+	if h, ok := doc["hooks"]; ok {
+		hm, isObj := h.(map[string]any)
+		if !isObj {
+			return nil, true, fmt.Errorf("%s: \"hooks\" is not an object; CrossTalk wrote nothing", path)
+		}
+		if g, ok := hm["SessionStart"]; ok {
+			if _, isArr := g.([]any); !isArr {
+				return nil, true, fmt.Errorf("%s: \"hooks.SessionStart\" is not an array; CrossTalk wrote nothing", path)
+			}
+		}
 	}
 	return doc, true, nil
 }
@@ -239,7 +254,7 @@ func (h *Harness) k10(ctx context.Context, env harness.InstallEnv) harness.Check
 	r := harness.CheckResult{ID: "K10", OK: true, WarnOnly: true}
 	var stale string
 	if _, err := os.Lstat(legacyPath(env)); err == nil {
-		stale = fmt.Sprintf("; stale %s found, it has no effect (crosstalk install removes it)", legacyPath(env))
+		stale = fmt.Sprintf("; stale %s found, it has no effect (crosstalk install for Codex removes it)", legacyPath(env))
 	}
 	if !ClaimsEnabled(stateDirOf(env)) {
 		r.Detail = "experimental --no-daemon queue wake is off (crosstalk install --" + QueueWakeOption + " turns it on)" + stale
