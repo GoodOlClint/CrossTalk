@@ -3,6 +3,7 @@ package shim
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -22,6 +23,7 @@ const eagerTick = 2 * time.Millisecond
 type eager struct {
 	*node
 	claude *claude.Harness
+	ppid   int
 	open   atomic.Int64
 	cancel context.CancelFunc
 	done   chan error
@@ -33,7 +35,7 @@ func (w *world) eagerNode(ppid int) *eager {
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := &eager{claude: ch, done: make(chan error, 1)}
+	e := &eager{claude: ch, ppid: ppid, done: make(chan error, 1)}
 	e.node = w.node(ppid, w.lb, func(o *Options) {
 		o.Harnesses = []harness.Harness{codex.NewHarness(codex.HarnessOptions{Adapter: w.codex, Directory: registry.New(w.state)}), ch}
 		o.StartA2A = func(_ context.Context, st *AgentState) (A2AListener, error) {
@@ -82,7 +84,8 @@ func (e *eager) firstCall() {
 	}
 }
 
-func claudeDescriptors(t *testing.T, w *world) []registry.Descriptor {
+// claudeDescriptors are the live descriptors of the Claude process ppid.
+func claudeDescriptors(t *testing.T, w *world, ppid int) []registry.Descriptor {
 	t.Helper()
 	ds, err := registry.New(w.state).List()
 	if err != nil {
@@ -90,7 +93,7 @@ func claudeDescriptors(t *testing.T, w *world) []registry.Descriptor {
 	}
 	var out []registry.Descriptor
 	for _, d := range ds {
-		if d.Harness == "claude" {
+		if d.Harness == "claude" && d.HarnessPID != nil && *d.HarnessPID == ppid {
 			out = append(out, d)
 		}
 	}
@@ -102,7 +105,7 @@ func claudeDescriptors(t *testing.T, w *world) []registry.Descriptor {
 func (e *eager) assertOne(w *world, sessionID, name string) {
 	t := e.t
 	t.Helper()
-	ds := claudeDescriptors(t, w)
+	ds := claudeDescriptors(t, w, e.ppid)
 	if len(ds) != 1 || ds[0].AgentID != w.claudeAgentID(sessionID) || ds[0].Name != name {
 		t.Fatalf("descriptors %+v, want one for %s named %q", ds, sessionID, name)
 	}
@@ -132,7 +135,7 @@ func TestEagerRegistrationRacesFirstCallAndClear(t *testing.T) {
 			e = w.eagerNode(bob.pid)
 			close(ready)
 			wg.Wait()
-			waitFor(t, "registration", func() bool { return len(claudeDescriptors(t, w)) == 1 })
+			waitFor(t, "registration", func() bool { return len(claudeDescriptors(t, w, bob.pid)) == 1 })
 			e.assertOne(w, "sess-1", "bob")
 
 			wg.Go(func() { w.become(bob, "sess-2", "bob") })
@@ -143,7 +146,7 @@ func TestEagerRegistrationRacesFirstCallAndClear(t *testing.T) {
 			})
 			wg.Wait()
 			waitFor(t, "registration after /clear", func() bool {
-				ds := claudeDescriptors(t, w)
+				ds := claudeDescriptors(t, w, bob.pid)
 				return len(ds) == 1 && ds[0].AgentID == w.claudeAgentID("sess-2")
 			})
 			waitFor(t, "old listener closed", func() bool { return e.open.Load() == 1 })
@@ -154,9 +157,119 @@ func TestEagerRegistrationRacesFirstCallAndClear(t *testing.T) {
 			if n := e.open.Load(); n != 0 {
 				t.Fatalf("%d A2A listeners left open after exit", n)
 			}
-			if ds := claudeDescriptors(t, w); len(ds) != 0 {
+			if ds := claudeDescriptors(t, w, bob.pid); len(ds) != 0 {
 				t.Fatalf("descriptors after exit %+v", ds)
 			}
 		})
 	}
+}
+
+func bobRow(t *testing.T, n *node) map[string]any {
+	t.Helper()
+	got := rows(t, n.ok(nil, "list_agents", map[string]any{}), "bob")
+	if len(got) != 1 {
+		t.Fatalf("bob rows %v", got)
+	}
+	return got[0]
+}
+
+// Done when 1 and 2 of #145: with no call by its model, the session is a
+// CrossTalk agent in a peer's list_agents and accepts an ask.
+func TestEagerRegistrationListsSessionAndAcceptsAskBeforeFirstCall(t *testing.T) {
+	w := newWorld(t)
+	alice := w.claude(4001, "sess-alice", "alice")
+	bob := w.claude(4002, "sess-1", "bob")
+	na := w.node(alice.pid, w.lb, nil)
+	recv(na, nil)
+	w.eagerNode(bob.pid)
+
+	waitFor(t, "bob listed as a CrossTalk agent", func() bool { return bobRow(t, na)["crosstalk"] == true })
+	if r := bobRow(t, na); r["agent_id"] != bob.agentID() || r["reachable"] != true {
+		t.Fatalf("bob row %v", r)
+	}
+	if res := na.ok(nil, "ask", send("bob", "question?")); res["state"] != "accepted" {
+		t.Fatalf("ask before bob's first call %v", res)
+	}
+	waitFor(t, "ask delivered", func() bool { return len(bob.got()) == 1 && strings.Contains(bob.got()[0], "question?") })
+}
+
+// Done when 3 of #145 and design test 32: after /clear the new session is an
+// agent under the same name with no call, and the old one is gone.
+func TestEagerRegistrationAfterClearKeepsNameWithoutCall(t *testing.T) {
+	w := newWorld(t)
+	alice := w.claude(4001, "sess-alice", "alice")
+	bob := w.claude(4002, "sess-1", "bob")
+	na := w.node(alice.pid, w.lb, nil)
+	recv(na, nil)
+	e := w.eagerNode(bob.pid)
+	waitFor(t, "first registration", func() bool { _, ok := w.descriptor(bob.agentID()); return ok })
+	oldID := bob.agentID()
+
+	w.become(bob, "sess-2", "bob")
+	waitFor(t, "registration after /clear", func() bool {
+		d, ok := w.descriptor(bob.agentID())
+		_, old := w.descriptor(oldID)
+		return ok && d.Name == "bob" && !old
+	})
+	e.assertOne(w, "sess-2", "bob")
+	if r := bobRow(t, na); r["agent_id"] != bob.agentID() || r["crosstalk"] != true {
+		t.Fatalf("bob row %v", r)
+	}
+	if res := na.ok(nil, "ask", send("bob", "after clear?")); res["state"] != "accepted" {
+		t.Fatalf("ask after /clear %v", res)
+	}
+}
+
+func TestEagerRegistrationFollowsHarnessRename(t *testing.T) {
+	w := newWorld(t)
+	bob := w.claude(4002, "sess-1", "bob")
+	w.eagerNode(bob.pid)
+	waitFor(t, "registration", func() bool { _, ok := w.descriptor(bob.agentID()); return ok })
+	w.become(bob, "sess-1", "robert")
+	waitFor(t, "rename followed", func() bool { d, _ := w.descriptor(bob.agentID()); return d.Name == "robert" })
+}
+
+func TestEagerRegistrationWaitsForSessionFile(t *testing.T) {
+	w := newWorld(t)
+	e := w.eagerNode(4002)
+	time.Sleep(20 * eagerTick)
+	if ds := claudeDescriptors(t, w, 4002); len(ds) != 0 {
+		t.Fatalf("registered with no session file: %+v", ds)
+	}
+	w.claude(4002, "sess-1", "bob")
+	waitFor(t, "registration once the file appears", func() bool { return len(claudeDescriptors(t, w, 4002)) == 1 })
+	e.assertOne(w, "sess-1", "bob")
+}
+
+func TestEagerRegistrationStopsWithContext(t *testing.T) {
+	w := newWorld(t)
+	e := w.eagerNode(4002)
+	e.stopClaims()
+	w.claude(4002, "sess-1", "bob")
+	time.Sleep(20 * eagerTick)
+	if ds := claudeDescriptors(t, w, 4002); len(ds) != 0 {
+		t.Fatalf("registered after ServeClaims stopped: %+v", ds)
+	}
+}
+
+// A second shim for the same session (a duplicate install) leaves the first
+// holder's record alone and keeps the existing agent_held answer to calls.
+func TestEagerRegistrationDuplicateShimLeavesFirstHolder(t *testing.T) {
+	w := newWorld(t)
+	bob := w.claude(4002, "sess-1", "bob")
+	first := w.eagerNode(bob.pid)
+	waitFor(t, "first registration", func() bool { _, ok := w.descriptor(bob.agentID()); return ok })
+	before, _ := w.descriptor(bob.agentID())
+
+	second := w.eagerNode(bob.pid)
+	time.Sleep(20 * eagerTick)
+	after, ok := w.descriptor(bob.agentID())
+	if !ok || after.InstanceID != before.InstanceID || after.Name != "bob" {
+		t.Fatalf("record changed: %+v -> %+v", before, after)
+	}
+	if second.sh.Agent(bob.agentID()) != nil || second.open.Load() != 0 {
+		t.Fatalf("second shim holds an agent")
+	}
+	second.fails(nil, "receive_message", map[string]any{}, "rejected", "agent_held")
+	first.assertOne(w, "sess-1", "bob")
 }
