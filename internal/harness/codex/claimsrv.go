@@ -303,7 +303,7 @@ func (h *Harness) ServeClaims(ctx context.Context, r harness.SessionRegistrar) e
 	}
 	c := NewClaims(ClaimOptions{Sys: cfg.Sys, Parent: parent, LockDir: filepath.Join(cfg.CodexHome, "thread-writer-locks"), Registrar: r, Logger: h.logger})
 	queue := filepath.Join(cfg.CodexHome, QueueFile)
-	rt := &wakeRoute{stateDir: cfg.StateDir, claims: c, wakes: &Wakes{Dir: WakeDir(cfg.StateDir), Gate: func() *QueueGate { return &QueueGate{Path: queue, Parent: parent} }}}
+	rt := newWakeRoute(cfg.StateDir, c, func() *QueueGate { return &QueueGate{Path: queue, Parent: parent} })
 	h.setWakeRoute(rt)
 	defer h.setWakeRoute(nil)
 	srv := &ClaimServer{Claims: c, Owner: parent, StateDir: cfg.StateDir, SockDir: cfg.SockDir, Interval: cfg.Interval, Logger: h.logger, OnTick: func(ctx context.Context) { rt.wakes.Tick(ctx, c.Bound) }}

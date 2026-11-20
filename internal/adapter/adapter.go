@@ -53,6 +53,8 @@ type Delivery struct {
 	Mode           msg.Delivery
 	Target         Binding
 	VerifiedSender bool
+	// SenderRemote marks a sender on a paired host.
+	SenderRemote bool
 	// SenderHarness is the sender's harness name as the transport proved it; "" when unknown.
 	SenderHarness string
 	// SenderAgentID is the sending agent's agent_id, set only when the sender's shim injects into a session with no CrossTalk binding; "" otherwise.

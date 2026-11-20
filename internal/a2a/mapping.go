@@ -225,10 +225,12 @@ func rejection(messageID, reason string) error {
 }
 
 // outcome maps a receiver state to a task state (§5 task mapping). ask
-// leaves an accepted or queued task working until CompleteAsk.
+// leaves an accepted, queued or mailboxed task working until CompleteAsk. A
+// mailboxed message is in the recipient's journal, so the handoff is done;
+// its delivery state stays mailboxed in the task metadata.
 func outcome(k msg.Kind, st adapter.State) sdk.TaskState {
 	switch st {
-	case adapter.Accepted, adapter.Queued:
+	case adapter.Accepted, adapter.Queued, adapter.Mailboxed:
 		if k == msg.Ask {
 			return sdk.TaskStateWorking
 		}

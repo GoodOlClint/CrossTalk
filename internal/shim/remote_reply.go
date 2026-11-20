@@ -93,7 +93,7 @@ func (st *AgentState) endReply(r msg.Message, key, taskID, state, reason string)
 // name. A gateway answer other than accepted or queued is not delivery.
 func (st *AgentState) forwardRemoteReply(ctx context.Context, orig, r msg.Message, key, taskID string) mcpserver.Result {
 	res := mcpserver.Result{MessageID: r.MessageID}
-	if o, ok := st.agent.Journal().Latest(journal.Record{Type: journal.TypeOutbound, MessageID: r.MessageID}); ok && (o.State == string(adapter.Accepted) || o.State == string(adapter.Queued)) {
+	if o, ok := st.agent.Journal().Latest(journal.Record{Type: journal.TypeOutbound, MessageID: r.MessageID}); ok && handedOff(adapter.State(o.State)) {
 		st.agent.Journal().Append(st.obligation(r, key, journal.StateDelivered, false, taskID))
 		res.State, res.Reason = adapter.State(o.State), o.Reason
 		return res
@@ -141,7 +141,7 @@ func (st *AgentState) forwardRemoteReply(ctx context.Context, orig, r msg.Messag
 	}
 	st.outboundTask(r, key, state, reason, false, tid)
 	switch state {
-	case adapter.Accepted, adapter.Queued:
+	case adapter.Accepted, adapter.Queued, adapter.Mailboxed:
 		st.agent.Journal().Append(st.obligation(r, key, journal.StateDelivered, false, taskID))
 		res.State, res.Reason = state, reason
 		return res

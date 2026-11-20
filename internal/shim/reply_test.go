@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/GoodOlClint/crosstalk/internal/adapter"
 	"github.com/GoodOlClint/crosstalk/internal/identity"
 	"github.com/GoodOlClint/crosstalk/internal/journal"
 	"github.com/GoodOlClint/crosstalk/internal/mcpserver"
@@ -301,5 +302,66 @@ func TestInboxCopyReplyIsRejectedInboxCopy(t *testing.T) {
 	}
 	if len(alice.got()) != 0 {
 		t.Fatalf("a reply to a copy reached the sender: %q", alice.got())
+	}
+}
+
+func TestReplyIntoMailboxIsDeliveredNotRetried(t *testing.T) {
+	w := newWorld(t)
+	alice := w.claude(4001, "sess-alice", "alice")
+	w.codex.addThread("T-bob", "bob")
+	na := w.node(alice.pid, w.lb, nil)
+	nb := w.node(1, w.lb, nil)
+	na.ok(nil, "receive_message", map[string]any{})
+	nb.ok(thread("T-bob"), "receive_message", map[string]any{})
+	ask := nb.ok(thread("T-bob"), "ask", send("alice", "question?"))
+	askID := ask["message_id"].(string)
+	w.codex.SetDefaultInject(adapter.Outcome{State: adapter.Mailboxed})
+	out := na.ok(nil, "reply", map[string]any{"message_id": askID, "text": "answer"})
+	if out["state"] != string(adapter.Mailboxed) {
+		t.Fatalf("reply %v", out)
+	}
+	st := na.sh.Agent(identity.AgentID("claude", "sess-alice"))
+	if l, _ := st.agent.Journal().Latest(journal.Record{Type: journal.TypeObligation, MessageID: out["message_id"].(string)}); l.State != journal.StateDelivered {
+		t.Fatalf("obligation %+v, want delivered", l)
+	}
+	again := na.ok(nil, "reply", map[string]any{"message_id": askID, "text": "answer"})
+	if again["message_id"] != out["message_id"] || len(w.codex.Writes()) != 1 {
+		t.Fatalf("retry %v, codex injects %d", again, len(w.codex.Writes()))
+	}
+}
+
+func TestReplyResumeWithSavedMailboxedOutbound_ExpectNotResent(t *testing.T) {
+	w := newWorld(t)
+	alice := w.claude(4001, "sess-alice", "alice")
+	w.codex.addThread("T-bob", "bob")
+	na := w.node(alice.pid, w.lb, func(o *Options) {
+		o.OnReply = func(context.Context, *AgentState, msg.Message, msg.Message) error { return nil }
+	})
+	nb := w.node(1, w.lb, nil)
+	na.ok(nil, "receive_message", map[string]any{})
+	nb.ok(thread("T-bob"), "receive_message", map[string]any{})
+	ask := nb.ok(thread("T-bob"), "ask", send("alice", "question?"))
+	askID := ask["message_id"].(string)
+
+	st := na.sh.Agent(identity.AgentID("claude", "sess-alice"))
+	orig, key, _ := st.inbound(askID)
+	r := st.newMessage(orig.From, msg.Inform, msg.Immediate, "answer")
+	r.InReplyTo, r.ContextID = &askID, orig.ContextID
+	if err := st.agent.Journal().Append(st.obligation(r, key, journal.StatePending, true, "")); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.outbound(r, key, adapter.Mailboxed, "", false); err != nil {
+		t.Fatal(err)
+	}
+	before := len(w.codex.Writes())
+	out := na.ok(nil, "reply", map[string]any{"message_id": askID, "text": "answer"})
+	if out["message_id"] != r.MessageID || out["state"] != string(adapter.Mailboxed) {
+		t.Fatalf("resume %v, want %s mailboxed", out, r.MessageID)
+	}
+	if n := len(w.codex.Writes()) - before; n != 0 {
+		t.Fatalf("reply already in the asker's mailbox was sent again (%d injects)", n)
+	}
+	if l, _ := st.agent.Journal().Latest(journal.Record{Type: journal.TypeObligation, MessageID: r.MessageID}); l.State != journal.StateDelivered {
+		t.Fatalf("obligation %+v", l)
 	}
 }

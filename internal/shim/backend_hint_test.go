@@ -1,12 +1,17 @@
 package shim
 
 import (
+	"context"
 	"errors"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/GoodOlClint/crosstalk/internal/adapter"
+	"github.com/GoodOlClint/crosstalk/internal/msg"
+	"github.com/GoodOlClint/crosstalk/internal/registry"
+	"github.com/GoodOlClint/crosstalk/internal/remote"
 )
 
 const backendMarker = "OpenAI backend"
@@ -138,4 +143,42 @@ func TestNoBackendHintForCustomProviderThread(t *testing.T) {
 	if h := hintOf(res); res["state"] != "accepted" || strings.Contains(h, backendMarker) {
 		t.Errorf("native: send %v", res)
 	}
+}
+
+func TestMailboxedCarriesHintWhateverTheHarness(t *testing.T) {
+	w, na := backendWorld(t)
+	w.codex.ScriptInject(adapter.Outcome{State: adapter.Mailboxed})
+	res := na.ok(nil, "send_message", send("bob", "hi"))
+	if res["state"] != string(adapter.Mailboxed) {
+		t.Fatalf("send %v", res)
+	}
+	if h := hintOf(res); !strings.Contains(h, hintMailboxed) || strings.Contains(h, "is in the thread") {
+		t.Fatalf("hint %q", h)
+	}
+
+	w2 := newWorld(t)
+	alice := w2.claude(4001, "sess-alice", "alice")
+	carol := w2.claude(4002, "sess-carol", "carol")
+	w2.node(carol.pid, w2.lb, nil).ok(nil, "receive_message", map[string]any{})
+	na2 := w2.node(alice.pid, &stateTransport{state: adapter.Mailboxed}, nil)
+	res = na2.ok(nil, "send_message", send("carol", "hi"))
+	if res["state"] != string(adapter.Mailboxed) || !strings.Contains(hintOf(res), hintMailboxed) {
+		t.Fatalf("mailboxed send to a Claude session: %v", res)
+	}
+}
+
+// stateTransport answers every send, local or to a paired host, with state.
+type stateTransport struct {
+	state adapter.State
+	n     atomic.Int32
+}
+
+func (s *stateTransport) Send(context.Context, registry.Descriptor, registry.Descriptor, msg.Message, bool) (adapter.State, error) {
+	s.n.Add(1)
+	return s.state, nil
+}
+
+func (s *stateTransport) SendRemote(context.Context, registry.Descriptor, remote.Host, remote.Peer, string, msg.Message) (string, adapter.State, error) {
+	s.n.Add(1)
+	return "", s.state, nil
 }

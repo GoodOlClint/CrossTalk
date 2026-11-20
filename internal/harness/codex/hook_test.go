@@ -397,3 +397,23 @@ func TestClaimServer_DurableFileNameDisagreesWithBody_ExpectIgnored(t *testing.T
 		t.Fatalf("mismatched claim file accepted: registered %v", reg.got())
 	}
 }
+
+func TestServeClaims_InstalledWakesReReadTheSetting(t *testing.T) {
+	e := newHookEnv(t, true)
+	h := NewHarness(HarnessOptions{Adapter: threadsFake{}, Claims: ClaimsConfig{StateDir: e.state, SockDir: e.sock, Sys: e.sys, ParentPID: parentPID, CodexHome: "/codex", Interval: time.Hour}})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- h.ServeClaims(ctx, &fakeRegistrar{}) }()
+	defer func() { cancel(); <-done }()
+	waitUntil(t, "wake route", func() bool { return h.wakeRoute() != nil })
+	w := h.wakeRoute().wakes
+	if w.Enabled == nil || !w.Enabled() {
+		t.Fatal("installed wakes do not read the setting")
+	}
+	if err := os.Remove(filepath.Join(e.state, SettingFile)); err != nil {
+		t.Fatal(err)
+	}
+	if w.Enabled() {
+		t.Fatal("installed wakes still enabled with the setting off")
+	}
+}

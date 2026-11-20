@@ -2,6 +2,7 @@ package shim
 
 import (
 	"context"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -93,5 +94,37 @@ func TestReplyLimitAnchoredOnReceiptNotSentAt(t *testing.T) {
 				t.Fatalf("obligation ended %+v", l)
 			}
 		}
+	}
+}
+
+func TestRemoteReplyIntoMailbox_ExpectDeliveredNotRetried(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "remote")
+	if _, err := remote.LoadOrCreateHost(dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := remote.NewPeers(dir).Upsert(remote.Peer{Alias: "desk", Address: "127.0.0.1:7745", Fingerprint: remoteHost}); err != nil {
+		t.Fatal(err)
+	}
+	w := newWorld(t)
+	w.codex.addThread("T-bob", "bob")
+	tr := &stateTransport{state: adapter.Mailboxed}
+	nb := w.node(1, tr, func(o *Options) {
+		o.RemoteConfigDir = dir
+		o.OnReply = func(context.Context, *AgentState, msg.Message, msg.Message) error { return nil }
+	})
+	nb.ok(thread("T-bob"), "receive_message", map[string]any{})
+	st := nb.sh.Agent(identity.AgentID("codex", "T-bob"))
+	ask := receiveRemote(t, st, msg.Ask, "question?")
+	args := map[string]any{"message_id": ask.MessageID, "text": "answer"}
+	out := nb.ok(thread("T-bob"), "reply", args)
+	if out["state"] != string(adapter.Mailboxed) || out["reason"] == ReasonRemoteReplyPending {
+		t.Fatalf("reply %v, want mailboxed and handed off", out)
+	}
+	if l, _ := st.agent.Journal().Latest(journal.Record{Type: journal.TypeObligation, MessageID: out["message_id"].(string)}); l.State != journal.StateDelivered {
+		t.Fatalf("obligation %+v, want delivered", l)
+	}
+	nb.ok(thread("T-bob"), "reply", args)
+	if n := tr.n.Load(); n != 1 {
+		t.Fatalf("SendRemote called %d times, want 1", n)
 	}
 }

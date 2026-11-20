@@ -36,6 +36,12 @@ type wakeRoute struct {
 	wakes    *Wakes
 }
 
+// newWakeRoute is the route ServeClaims installs; its Wakes re-read the
+// setting inside each write transaction.
+func newWakeRoute(stateDir string, c *Claims, gate func() *QueueGate) *wakeRoute {
+	return &wakeRoute{stateDir: stateDir, claims: c, wakes: &Wakes{Dir: WakeDir(stateDir), Gate: gate, Enabled: func() bool { return ClaimsEnabled(stateDir) }}}
+}
+
 func (h *Harness) setWakeRoute(rt *wakeRoute) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -74,14 +80,37 @@ func (h *Harness) precheck(ctx context.Context, rt *wakeRoute, thread string) er
 // connection refused) hosts nothing, but one that accepts and then fails to
 // answer is an error.
 func (h *Harness) hosted(ctx context.Context, thread string) (bool, error) {
-	if a, ok := h.Threads.(*Adapter); ok {
-		return a.hostedStrict(ctx, thread)
-	}
-	return slices.ContainsFunc(h.LoadedThreads(ctx), func(t LoadedThread) bool { return t.ID == thread }), nil
+	n, err := h.hostCount(ctx, thread, true)
+	return n > 0, err
 }
 
-func (a *Adapter) hostedStrict(ctx context.Context, thread string) (bool, error) {
-	for _, ep := range a.KnownEndpoints() {
+// hostCount counts the endpoints that list thread as loaded. strict fails
+// closed as hosted does; otherwise an endpoint that cannot be asked is
+// skipped, as Register and rebind do.
+func (h *Harness) hostCount(ctx context.Context, thread string, strict bool) (int, error) {
+	a, ok := h.Threads.(*Adapter)
+	switch {
+	case !ok:
+		n := 0
+		for _, t := range h.LoadedThreads(ctx) {
+			if t.ID == thread {
+				n++
+			}
+		}
+		return n, nil
+	case strict:
+		return a.hostsStrict(ctx, thread)
+	}
+	return len(a.hosts(ctx, thread)), nil
+}
+
+func (a *Adapter) hostsStrict(ctx context.Context, thread string) (int, error) {
+	eps, err := a.knownEndpoints()
+	if err != nil {
+		return 0, fmt.Errorf("endpoint list: %w", err)
+	}
+	n := 0
+	for _, ep := range eps {
 		ectx, cancel := context.WithTimeout(ctx, EndpointProbeTimeout)
 		c, err := a.connect(ectx, ep)
 		if err != nil {
@@ -89,29 +118,30 @@ func (a *Adapter) hostedStrict(ctx context.Context, thread string) (bool, error)
 			if errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.ECONNREFUSED) {
 				continue
 			}
-			return false, fmt.Errorf("%s: %w", ep, err)
+			return 0, fmt.Errorf("%s: %w", ep, err)
 		}
 		ids, err := c.LoadedThreads(ectx)
 		c.Close()
 		cancel()
 		if err != nil {
-			return false, fmt.Errorf("%s: %w", ep, err)
+			return 0, fmt.Errorf("%s: %w", ep, err)
 		}
 		if slices.Contains(ids, thread) {
-			return true, nil
+			n++
 		}
 	}
-	return false, nil
+	return n, nil
 }
 
-// wakeEligible is plan 3.1 row 5: an immediate message from a verified
-// sender. next_turn and unverified senders are mailbox only.
+// wakeEligible is plan 3.1 row 5: an immediate message from a verified local
+// sender. next_turn, unverified and remote senders, and inbox copies, are
+// mailbox only.
 func wakeEligible(m msg.Message, d adapter.Delivery) bool {
 	mode := d.Mode
 	if mode == "" {
 		mode = m.Delivery
 	}
-	return mode != msg.NextTurn && d.VerifiedSender
+	return mode != msg.NextTurn && d.VerifiedSender && !d.SenderRemote && !d.InboxCopy
 }
 
 // MailSignal opens a wake generation for a mailboxed entry when the thread
