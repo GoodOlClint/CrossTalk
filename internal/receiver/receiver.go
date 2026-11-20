@@ -208,6 +208,8 @@ type Receiver struct {
 	pullMu sync.Mutex
 
 	beforeClaim func(messageID string)
+	// beforeSignal runs between the mailboxed record and MailSignal.
+	beforeSignal func(messageID string)
 }
 
 func New(c Config) *Receiver {
@@ -374,7 +376,7 @@ func (r *Receiver) receive(ctx context.Context, in Inbound, resume bool) Result 
 		return Result{MessageID: m.MessageID, State: adapter.Unknown, Reason: ReasonJournal}
 	}
 	if ms, ok := r.ad.(adapter.MailSignaler); ok && st == adapter.Mailboxed {
-		ms.MailSignal(ctx, m, delivery)
+		r.mailSignal(ctx, ms, key, m, delivery)
 	}
 	return Result{MessageID: m.MessageID, State: st, Reason: reason}
 }
@@ -649,4 +651,18 @@ func scopeOfKey(k string) string {
 		return k
 	}
 	return ""
+}
+
+// mailSignal calls MailSignal under the pull lock and only while the entry
+// is still mailboxed, so a pull that collected it first leaves no wake.
+func (r *Receiver) mailSignal(ctx context.Context, ms adapter.MailSignaler, key string, m msg.Message, d adapter.Delivery) {
+	if r.beforeSignal != nil {
+		r.beforeSignal(m.MessageID)
+	}
+	r.pullMu.Lock()
+	defer r.pullMu.Unlock()
+	if st, _ := r.j.Dedupe(key, m.MessageID); st != journal.StateMailboxed {
+		return
+	}
+	ms.MailSignal(ctx, m, d)
 }

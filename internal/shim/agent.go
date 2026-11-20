@@ -341,3 +341,12 @@ func (i injector) MailSignal(ctx context.Context, m msg.Message, d adapter.Deliv
 	d.ReplyAddress = i.reply
 	return ms.MailSignal(ctx, m, d)
 }
+
+// MailPulled forwards to the harness when it implements adapter.PullSignaler.
+func (i injector) MailPulled(ctx context.Context, target adapter.Binding, more bool, mailboxed func() ([]string, error)) error {
+	ps, ok := i.Harness.(adapter.PullSignaler)
+	if !ok {
+		return nil
+	}
+	return ps.MailPulled(ctx, target, more, mailboxed)
+}

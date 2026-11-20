@@ -72,6 +72,7 @@ type QueueGate struct {
 	beforeBegin  func()
 	afterBegin   func()
 	beforeCommit func()
+	atCommit     func(*sql.Conn)
 }
 
 // Tx runs fn inside one transaction on the queue: BEGIN IMMEDIATE when
@@ -146,6 +147,9 @@ func (g *QueueGate) Tx(ctx context.Context, write bool, fn func(*sql.Conn) error
 		return err
 	}
 	committed = true
+	if g.atCommit != nil {
+		g.atCommit(conn)
+	}
 	if _, err := conn.ExecContext(ctx, "COMMIT"); err != nil {
 		return fmt.Errorf("%w: %w", ErrQueueAmbiguous, err)
 	}
