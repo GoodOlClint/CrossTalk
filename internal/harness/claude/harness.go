@@ -4,13 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
+	"time"
 
 	"github.com/GoodOlClint/crosstalk/internal/adapter"
 	"github.com/GoodOlClint/crosstalk/internal/harness"
+	"github.com/GoodOlClint/crosstalk/internal/identity"
 	"github.com/GoodOlClint/crosstalk/internal/msg"
+	"github.com/GoodOlClint/crosstalk/internal/registry"
 )
 
 type HarnessOptions struct {
@@ -23,20 +27,39 @@ type HarnessOptions struct {
 	// cmd/crosstalk passes udsingress.NewIngress, which cannot be imported
 	// here because its tests import this package. nil means no ingress.
 	Ingress func(harness.IngressConfig) harness.Ingress
+	// PPID is the Claude Code process whose session ServeClaims registers;
+	// 0 means os.Getppid().
+	PPID int
+	// PollInterval is how often ServeClaims reads that session file; 0
+	// means DefaultPollInterval.
+	PollInterval time.Duration
+	// Directory is the live descriptor set ServeClaims checks before each
+	// registration; nil means it registers on every poll.
+	Directory interface {
+		List() ([]registry.Descriptor, error)
+	}
 }
+
+const DefaultPollInterval = 2 * time.Second
 
 // Harness is Claude Code behind harness.Harness: the caller is the session
 // whose record names the parent pid, and the reply address is the injecting
 // agent's uds path.
 type Harness struct {
-	a       Adapter
-	ingress func(harness.IngressConfig) harness.Ingress
+	a        Adapter
+	ingress  func(harness.IngressConfig) harness.Ingress
+	ppid     int
+	interval time.Duration
+	dir      interface {
+		List() ([]registry.Descriptor, error)
+	}
 }
 
 var (
 	_ harness.Harness       = (*Harness)(nil)
 	_ harness.NativeIngress = (*Harness)(nil)
 	_ harness.Supersession  = (*Harness)(nil)
+	_ harness.ClaimSource   = (*Harness)(nil)
 )
 
 func NewHarness(opt HarnessOptions) (*Harness, error) {
@@ -47,7 +70,61 @@ func NewHarness(opt HarnessOptions) (*Harness, error) {
 		}
 		opt.SessionsDir = d
 	}
-	return &Harness{a: Adapter{SessionsDir: opt.SessionsDir, Alive: opt.Alive}, ingress: opt.Ingress}, nil
+	if opt.PPID == 0 {
+		opt.PPID = os.Getppid()
+	}
+	if opt.PollInterval <= 0 {
+		opt.PollInterval = DefaultPollInterval
+	}
+	return &Harness{a: Adapter{SessionsDir: opt.SessionsDir, Alive: opt.Alive}, ingress: opt.Ingress, ppid: opt.PPID, interval: opt.PollInterval, dir: opt.Directory}, nil
+}
+
+// ServeClaims registers the session named in the parent's session file
+// whenever no live descriptor holds it under its harness name: when the file
+// first appears (it may not exist yet at shim start), after /clear or
+// /resume, on a harness rename, and while a fallback or retired registration
+// leaves it so. A failure is retried every poll and logged once per session,
+// name and error.
+func (h *Harness) ServeClaims(ctx context.Context, r harness.SessionRegistrar) error {
+	tick := time.NewTicker(h.interval)
+	defer tick.Stop()
+	var failed string
+	for {
+		if s, err := h.a.readSession(h.ppid); err == nil && !h.held(s) {
+			if err := r.RegisterSession(ctx, harness.RequestContext{ParentPID: h.ppid}, s.Cwd); err != nil {
+				if f := s.SessionID + "\x00" + s.Name + "\x00" + err.Error(); f != failed && ctx.Err() == nil {
+					failed = f
+					slog.Warn("claude: registering session", "session", s.SessionID, "err", err)
+				}
+			} else {
+				failed = ""
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-tick.C:
+		}
+	}
+}
+
+// held reports that a live descriptor, this shim's or another's, holds s
+// under its harness name.
+func (h *Harness) held(s Session) bool {
+	if h.dir == nil {
+		return false
+	}
+	ds, err := h.dir.List()
+	if err != nil {
+		return false
+	}
+	id := identity.AgentID(string(adapter.Claude), s.SessionID)
+	for _, d := range ds {
+		if d.AgentID == id {
+			return s.Name == "" || d.Name == s.Name
+		}
+	}
+	return false
 }
 
 func (h *Harness) Name() adapter.Harness { return adapter.Claude }
