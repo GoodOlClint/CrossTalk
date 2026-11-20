@@ -34,7 +34,7 @@ var (
 
 // QueueTestedMinors are the Codex major.minor pairs whose queue the step 0
 // probes measured; any other version fails the gate.
-var QueueTestedMinors = []string{"0.167"}
+var QueueTestedMinors = []string{"0.167", "0.171"}
 
 const DefaultQueueBusyTimeout = 2 * time.Second
 
