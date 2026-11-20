@@ -58,31 +58,29 @@ tier0-claude)
 	HOME="$home" ANTHROPIC_BASE_URL="http://127.0.0.1:$port" ANTHROPIC_AUTH_TOKEN=dummy ANTHROPIC_API_KEY= \
 		claude -p hi >/dev/null 2>&1 &
 	pid=$!
-	n=0
-	f="$home/.claude/sessions/$pid.json"
-	while [ ! -f "$f" ] && [ "$n" -lt 40 ]; do
-		sleep 0.5
-		n=$((n + 1))
-	done
 	trap 'kill "$pid" 2>/dev/null || true' EXIT
-	[ -f "$f" ] || {
-		echo "no session file $f" >&2
-		exit 1
-	}
-	jq -e --argjson pid "$pid" '(.pid == $pid) and (.sessionId | type == "string" and length > 0) and (.kind | type == "string" and length > 0) and (.messagingSocketPath | type == "string" and length > 0)' "$f" >/dev/null || {
-		echo "session file lacks the fields the adapter reads: $f" >&2
-		exit 1
-	}
-	s="$(jq -r .messagingSocketPath "$f")"
-	case "$s" in "$sock"/*) ;; *)
-		echo "socket outside $sock: $s" >&2
-		exit 1
-		;;
-	esac
-	[ -S "$s" ] || {
-		echo "socket missing: $s" >&2
-		exit 1
-	}
+	f="$home/.claude/sessions/$pid.json"
+	n=0
+	while :; do
+		why=
+		if [ ! -f "$f" ]; then
+			why="no session file $f"
+		else
+			s="$(jq -r --argjson pid "$pid" 'select((.pid == $pid) and (.sessionId | type == "string" and length > 0) and (.kind | type == "string" and length > 0) and (.messagingSocketPath | type == "string" and length > 0)) | .messagingSocketPath' "$f" 2>/dev/null || true)"
+			case "$s" in
+			"") why="session file lacks the fields the adapter reads: $f" ;;
+			"$sock"/*) [ -S "$s" ] || why="socket missing: $s" ;;
+			*) why="socket outside $sock: $s" ;;
+			esac
+		fi
+		[ -z "$why" ] && break
+		n=$((n + 1))
+		[ "$n" -lt 40 ] || {
+			echo "$why" >&2
+			exit 1
+		}
+		sleep 0.5
+	done
 	echo "claude session file and socket ok"
 	;;
 tier0-codex)
@@ -90,7 +88,7 @@ tier0-codex)
 	home="${2:?$usage}"
 	mkdir -p "$home/.codex"
 	out="$(HOME="$home" CODEX_HOME="$home/.codex" codex --version)"
-	printf '%s\n' "$out" | grep -Eq '^codex-cli [0-9]+\.[0-9]+\.[0-9]+[[:space:]]*$' || {
+	[ "$(printf '%s\n' "$out" | wc -l)" -eq 1 ] && printf '%s\n' "$out" | grep -Eq '^codex-cli [0-9]+\.[0-9]+\.[0-9]+[[:space:]]*$' || {
 		echo "codex --version no longer parses: $out" >&2
 		exit 1
 	}

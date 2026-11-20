@@ -77,3 +77,31 @@ func TestHarnessCompatWorkflowSafe(t *testing.T) {
 		t.Error("slice 1 is dispatch-only")
 	}
 }
+
+func TestHarnessCompatTier0CodexFailsClosed(t *testing.T) {
+	cases := []struct {
+		name, version, exec string
+		ok                  bool
+	}{
+		{"banner before version", "echo banner; echo 'codex-cli 0.171.0'", "true", false},
+		{"unparseable", "echo 'codex 0.171.0'", "true", false},
+		{"no queue created", "echo 'codex-cli 0.171.0'", "true", false},
+		{"queue created", "echo 'codex-cli 0.171.0'", `touch "$CODEX_HOME/queue_1.sqlite"`, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			bin, home := t.TempDir(), t.TempDir()
+			fake := "#!/bin/sh\ncase \"$1\" in --version) " + c.version + " ;; exec) " + c.exec + " ;; esac\n"
+			if err := os.WriteFile(filepath.Join(bin, "codex"), []byte(fake), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			root := releaseRepoRoot(t)
+			cmd := exec.Command(filepath.Join(root, "scripts", "harness-compat.sh"), "tier0-codex", home)
+			cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+			out, err := cmd.CombinedOutput()
+			if (err == nil) != c.ok {
+				t.Fatalf("err = %v, want ok=%v\n%s", err, c.ok, out)
+			}
+		})
+	}
+}

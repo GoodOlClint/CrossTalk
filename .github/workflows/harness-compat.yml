@@ -89,7 +89,8 @@ jobs:
         run: |
           set -eu
           if [ "$HARNESS" = codex ]; then
-            q="$(scripts/harness-compat.sh tier0-codex "$SCRATCH_HOME" | tail -n 1)"
+            q="$(scripts/harness-compat.sh tier0-codex "$SCRATCH_HOME")"
+            test -f "$q"
             CROSSTALK_COMPAT_QUEUE_DB="$q" go test ./internal/harness/codex -run TestInstalledCodexQueueSchema -count=1 -v
           else
             scripts/harness-compat.sh tier0-claude "$SCRATCH_HOME"
