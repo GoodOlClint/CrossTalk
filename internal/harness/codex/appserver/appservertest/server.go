@@ -42,6 +42,11 @@ type Thread struct {
 	CanAcceptDirectInput *bool
 	// ModelProvider is thread/read's modelProvider; "" means "openai".
 	ModelProvider string
+	// Source is thread/read's raw source JSON (e.g. `{"subAgent":"review"}`);
+	// ParentThreadID is parentThreadId. Both are omitted from thread/read when
+	// empty, like an older server.
+	Source         string
+	ParentThreadID string
 	// Turns, oldest first.
 	Turns []appserver.Turn
 	// NotSteerable, when "review" or "compact", makes steer and start fail
@@ -457,6 +462,12 @@ func (s *Server) handle(method string, raw json.RawMessage) (any, *appserver.RPC
 		}
 		if t.Name != "" {
 			th["name"] = t.Name
+		}
+		if t.Source != "" {
+			th["source"] = json.RawMessage(t.Source)
+		}
+		if t.ParentThreadID != "" {
+			th["parentThreadId"] = t.ParentThreadID
 		}
 		if t.CanAcceptDirectInput != nil {
 			th["canAcceptDirectInput"] = *t.CanAcceptDirectInput

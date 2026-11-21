@@ -99,6 +99,26 @@ type Thread struct {
 	// CanAcceptDirectInput is absent from the 0.166.0 generated schema; nil
 	// means the server did not say.
 	CanAcceptDirectInput *bool `json:"canAcceptDirectInput,omitempty"`
+	// Source, Ephemeral and ParentThreadID say where the thread came from;
+	// older servers omit them.
+	Source         json.RawMessage `json:"source,omitempty"`
+	Ephemeral      bool            `json:"ephemeral,omitempty"`
+	ParentThreadID *string         `json:"parentThreadId,omitempty"`
+}
+
+// IsSubAgent reports a thread Codex started for itself: a subAgent source
+// (review, compact, memory_consolidation, thread_spawn, ...) or a parent
+// thread. Ephemeral alone does not count.
+func (t Thread) IsSubAgent() bool {
+	if t.ParentThreadID != nil && *t.ParentThreadID != "" {
+		return true
+	}
+	var src map[string]json.RawMessage
+	if json.Unmarshal(t.Source, &src) != nil {
+		return false
+	}
+	_, ok := src["subAgent"]
+	return ok
 }
 
 func (c *Client) ReadThread(ctx context.Context, threadID string) (Thread, error) {
