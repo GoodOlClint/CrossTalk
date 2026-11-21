@@ -58,7 +58,19 @@ wait_agent() {
 	done
 }
 
+agent_ids_of() { # state harness [exclude] -> ids of bound descriptors
+	cat "$1"/agents/*.json 2>/dev/null | jq -rs --arg h "$2" --arg x "${3-}" 'map(select(.harness == $h and .agent_id != $x)) | sort_by(.agent_id) | .[].agent_id'
+}
+
 case "${1:-}" in
+agent-id)
+	ids="$(agent_ids_of "${2:?usage: harness-compat-live.sh agent-id STATE HARNESS [EXCLUDE]}" "${3:?}" "${4-}")"
+	[ "$(printf '%s\n' "$ids" | grep -c .)" -eq 1 ] || {
+		echo "expected exactly one ${3} descriptor${4:+ besides $4}, got: $ids" >&2
+		exit 1
+	}
+	printf '%s\n' "$ids"
+	;;
 assert-pair)
 	assert_ids "${2:?usage: harness-compat-live.sh assert-pair STATE ASKER_ID TARGET_ID}" "${3:?}" "${4:?}"
 	;;
@@ -197,17 +209,9 @@ leg)
 		) &
 		pids="$pids $!"
 	}
-	agent_ids() { # harness -> ids in registration order (descriptor started_at)
-		cat "$state"/agents/*.json 2>/dev/null | jq -rs --arg h "$1" 'map(select(.harness == $h)) | sort_by(.started_at) | .[].agent_id'
-	}
-	only_id() { # harness; fails unless exactly one bound descriptor
-		ids="$(agent_ids "$1")"
-		[ "$(printf '%s\n' "$ids" | grep -c .)" -eq 1 ] || {
-			echo "expected exactly one $1 descriptor, got: $ids" >&2
-			return 1
-		}
-		printf '%s\n' "$ids"
-	}
+	agent_ids() { agent_ids_of "$state" "$1"; }
+	only_id() { "$0" agent-id "$state" "$1"; }
+	other_id() { "$0" agent-id "$state" "$1" "$2"; }
 	wait_n() { # harness count
 		w=0
 		while [ "$(agent_ids "$1" | grep -c .)" -lt "$2" ]; do
@@ -255,7 +259,7 @@ PY
 		recv="$(only_id claude)"
 		start_claude ask 9 "$auth Call the crosstalk list_agents tool first and confirm that agent_id $recv appears. Then use the crosstalk ask tool to ask the agent whose agent_id is $recv: compat-C, reply with the single word PONG. Then wait for its reply."
 		wait_n claude 2
-		asker="$(agent_ids claude | sed -n 2p)"
+		asker="$(other_id claude "$recv")"
 		await_pair "$asker" "$recv"
 		"$0" assert-discovery "$logs/claude-ask.jsonl" "$recv"
 		;;
@@ -266,7 +270,7 @@ PY
 		recv="$(only_id codex)"
 		start_codex ask 9 "$auth Call the crosstalk list_agents tool first and confirm that agent_id $recv appears. Then use the crosstalk ask tool to ask the agent whose agent_id is $recv: compat-D, reply with the single word PONG. Then wait for its reply."
 		wait_n codex 2
-		asker="$(agent_ids codex | sed -n 2p)"
+		asker="$(other_id codex "$recv")"
 		await_pair "$asker" "$recv"
 		;;
 	cross)
