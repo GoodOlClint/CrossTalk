@@ -2,6 +2,7 @@ package codex
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -63,4 +64,31 @@ func TestK9DefaultsToHomeUnderEnv(t *testing.T) {
 	if c := k9(t, nil); !c.OK || c.Detail != "no managed Codex app-server running" {
 		t.Errorf("K9 = %+v", c)
 	}
+}
+
+func TestK9FindsDaemonUnderCodexHome(t *testing.T) {
+	s := appservertest.New(t)
+	ch, err := os.MkdirTemp("/tmp", "ch")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(ch) })
+	dir := filepath.Join(ch, "app-server-control")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(s.Path, filepath.Join(dir, "app-server-control.sock")); err != nil {
+		t.Fatal(err)
+	}
+	env, _ := codexEnv(t, "")
+	t.Setenv("CODEX_HOME", ch)
+	for _, c := range new(Harness).Checks(context.Background(), env) {
+		if c.ID == "K9" {
+			if !c.OK || !strings.Contains(c.Detail, "reaches its OpenAI backend") {
+				t.Errorf("K9 = %+v", c)
+			}
+			return
+		}
+	}
+	t.Fatal("no K9 result")
 }

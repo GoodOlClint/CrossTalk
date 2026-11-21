@@ -17,8 +17,19 @@ import (
 	"time"
 )
 
-// ControlSocketRel is the managed daemon socket, relative to the home directory.
-const ControlSocketRel = ".codex/app-server-control/app-server-control.sock"
+// ControlSocketRel is the managed daemon socket, relative to the Codex home.
+const ControlSocketRel = "app-server-control/app-server-control.sock"
+
+// CodexHome is $CODEX_HOME made absolute, else .codex under home.
+func CodexHome(home string) string {
+	if d := os.Getenv("CODEX_HOME"); d != "" {
+		if a, err := filepath.Abs(d); err == nil {
+			return a
+		}
+		return d
+	}
+	return filepath.Join(home, ".codex")
+}
 
 // WriteTimeout bounds every websocket write, including the close frame; a
 // caller's earlier context deadline takes precedence.
@@ -33,13 +44,13 @@ var (
 	ErrBadEndpoint = errors.New("appserver: unsupported endpoint")
 )
 
-// DefaultControlSocket returns the managed daemon socket path under $HOME.
+// DefaultControlSocket returns the managed daemon socket path under the Codex home.
 func DefaultControlSocket() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(home, ControlSocketRel), nil
+	return filepath.Join(CodexHome(home), ControlSocketRel), nil
 }
 
 // NormalizeEndpoint returns the canonical form of an endpoint: unix://<abs

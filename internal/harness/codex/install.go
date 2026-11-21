@@ -31,12 +31,7 @@ func (h *Harness) Found() bool {
 	return err == nil
 }
 
-func codexHome(home string) string {
-	if d := os.Getenv("CODEX_HOME"); d != "" {
-		return d
-	}
-	return filepath.Join(home, ".codex")
-}
+func codexHome(home string) string { return appserver.CodexHome(home) }
 
 func configPath(home string) string { return filepath.Join(codexHome(home), "config.toml") }
 
@@ -480,7 +475,7 @@ func (h *Harness) k9(ctx context.Context, env harness.InstallEnv) harness.CheckR
 	r := harness.CheckResult{ID: "K9", OK: true, WarnOnly: true}
 	a, ok := h.Threads.(*Adapter)
 	if !ok {
-		a = &Adapter{ControlSocket: filepath.Join(env.Home, appserver.ControlSocketRel)}
+		a = &Adapter{ControlSocket: filepath.Join(codexHome(env.Home), appserver.ControlSocketRel)}
 	}
 	var up, unknown []string
 	for _, c := range a.checkBackends(ctx) {
