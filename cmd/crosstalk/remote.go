@@ -23,8 +23,12 @@ import (
 const remoteUsage = `usage: crosstalk remote <command>
 
 commands:
-  config [--bind IP] [--advertise ADDR] [--port N] [--alias NAME] [--force] [--yes]
+  config [--bind IP|all] [--advertise ADDR] [--port N] [--alias NAME] [--force] [--yes]
              print this host's remote config, or write it
+             --bind IP listens on one address of this host (peers dial it unless --advertise is set)
+             --bind all listens on every address and needs --advertise
+             --advertise ADDR is what peers dial: a tailnet name or IP (100.64.0.0/10) is
+             recommended, because it survives a change of network
   serve      run the gateway in the foreground until SIGINT or SIGTERM
   pair [--alias NAME]
              print a one-time token for another host and wait for it to join
@@ -34,8 +38,9 @@ commands:
              remove one paired host from this host's peers
   status [--json]
              show config, gateway state, login unit and each peer's reachability
-  enable [--bind ADDR] [--port N] [--alias NAME] [--yes]
+  enable [--bind IP|all] [--port N] [--alias NAME] [--yes]
              write the login unit that starts the gateway at login, and start it
+             (--bind all needs an advertise address stored first: config --bind all --advertise ADDR)
   disable [--yes]
              stop and remove the login unit CrossTalk wrote
 `
@@ -369,7 +374,7 @@ func (f cfgFlags) apply(cur remote.Config, have bool) (remote.Config, error) {
 	next := cur
 	if !have {
 		if !f.set["bind"] {
-			return next, errUsage("--bind IP is required the first time")
+			return next, errUsage("--bind IP or --bind all is required the first time")
 		}
 		next = remote.Config{Alias: remote.DefaultAlias(), Port: remote.DefaultPort}
 	}
