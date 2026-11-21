@@ -20,10 +20,10 @@ func TestUninstallDropsOnlyOurHookTrustRecord(t *testing.T) {
 	}
 	key := func(ref string) string { return `[hooks.state."` + hp + `:session_start:` + ref + `"]` }
 	cfg := "[hooks.state]\n\n" + key("0:0") + "\ntrusted_hash = \"sha256:user\"\n\n" +
-		key("1:0") + "\ntrusted_hash = \"sha256:ours\"\n\n" +
+		key("1:0") + "\ntrusted_hash = \"sha256:ours\"\n" +
+		"[projects.\"/work/app[1]\"]\ntrust_level = \"trusted\"\n\n" +
 		`[hooks.state."other@x:hooks.json:session_start:1:0"]` + "\ntrusted_hash = \"sha256:plugin\"\n\n" +
-		key("2:0") + "\ntrusted_hash = \"sha256:stale-index\"\n\n" +
-		"[projects.\"/work/app[1]\"]\ntrust_level = \"trusted\"\n"
+		key("2:0") + "\ntrusted_hash = \"sha256:stale-index\"\n"
 	if err := os.WriteFile(r.path, []byte(cfg), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -93,5 +93,47 @@ func TestCodexRegisteredThroughSymlink(t *testing.T) {
 	env.Bin = real
 	if ok, err := (&Harness{}).Registered(env); err != nil || !ok {
 		t.Errorf("Registered = %v, %v; want true for a symlink to the binary", ok, err)
+	}
+}
+
+func TestTrustRecordRemovalIsByteExactAroundIt(t *testing.T) {
+	env, r := codexEnv(t, "")
+	hp := hooksPath(env.Home)
+	os.MkdirAll(filepath.Dir(hp), 0o700)
+	if err := addHook(hp, env.Bin); err != nil {
+		t.Fatal(err)
+	}
+	ours := `[hooks.state."` + hp + `:session_start:0:0"]`
+	before := "[a]\nx = 1\n\n"
+	after := "# keep me\n\n[b]\ny = 2\n"
+	if err := os.WriteFile(r.path, []byte(before+ours+"\ntrusted_hash = \"sha256:ours\"\n"+after), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := queueWakeRemoveStep(env).Apply(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(r.path); string(b) != before+after {
+		t.Errorf("config = %q, want %q", b, before+after)
+	}
+}
+
+func TestTrustRecordHeaderInsideMultilineStringIsKept(t *testing.T) {
+	env, r := codexEnv(t, "")
+	hp := hooksPath(env.Home)
+	os.MkdirAll(filepath.Dir(hp), 0o700)
+	if err := addHook(hp, env.Bin); err != nil {
+		t.Fatal(err)
+	}
+	ours := `[hooks.state."` + hp + `:session_start:0:0"]`
+	cfg := "[notes]\ntext = \"\"\"\n" + ours + "\nk = 1\n\"\"\"\n\n" + ours + "\ntrusted_hash = \"sha256:ours\"\n"
+	if err := os.WriteFile(r.path, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := queueWakeRemoveStep(env).Apply(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	want := "[notes]\ntext = \"\"\"\n" + ours + "\nk = 1\n\"\"\"\n\n"
+	if b, _ := os.ReadFile(r.path); string(b) != want {
+		t.Errorf("config = %q, want %q", b, want)
 	}
 }
