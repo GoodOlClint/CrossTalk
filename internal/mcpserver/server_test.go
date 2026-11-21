@@ -687,3 +687,18 @@ func TestIdentifyRejectsInvalidSessionFile(t *testing.T) {
 		})
 	}
 }
+
+// An already registered session whose file later names another pid is refused
+// on the next call: registration does not outlive the identity proof.
+func TestIdentifyRefusesRegisteredSessionWhoseFileGoesBad(t *testing.T) {
+	e := newEnv(t, 4242, NewFakeBackend())
+	writeClaudeSession(t, e.sessionDir, 4242, "claude-sess", "alpha", "/work/alpha")
+	e.mustOK(nil, "send_message", sendArgs("bob", "hi"))
+	if err := os.WriteFile(filepath.Join(e.sessionDir, "4242.json"), []byte(`{"pid":1,"sessionId":"claude-sess","name":"alpha"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	e.mustErr(nil, "send_message", sendArgs("bob", "again"), CodeFailed, "")
+	if c := e.fb.Calls(); len(c) != 1 {
+		t.Fatalf("backend calls %d after the file went bad, want 1", len(c))
+	}
+}
