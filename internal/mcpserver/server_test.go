@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -475,6 +476,8 @@ func TestCloseKeepsOwnershipWhenAgentCloseTimesOut(t *testing.T) {
 	if d := e.descriptor(id); d.AgentID != id {
 		t.Fatalf("descriptor %+v", d)
 	}
+	runtime.GC()
+	runtime.GC()
 	_, err := registry.New(e.stateDir).Acquire(registry.Request{AgentID: id, HarnessName: "other", Harness: "codex", Cwd: "/w"})
 	if !errors.Is(err, registry.ErrAgentHeld) {
 		t.Fatalf("Acquire err = %v, want ErrAgentHeld while a handler may still run", err)

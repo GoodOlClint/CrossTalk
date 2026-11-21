@@ -223,7 +223,11 @@ func (s *Server) Close() error {
 				cerr = ac.CloseAgent(a)
 				errs = append(errs, cerr)
 			}
-			if !errors.Is(cerr, ErrCloseTimeout) {
+			if errors.Is(cerr, ErrCloseTimeout) {
+				s.mu.Lock()
+				s.timedOut = append(s.timedOut, a)
+				s.mu.Unlock()
+			} else {
 				errs = append(errs, a.close())
 			}
 		}
