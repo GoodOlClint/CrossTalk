@@ -215,10 +215,10 @@ func TestHarnessCompatStageLogsScrubsNestedKey(t *testing.T) {
 	}
 	raw, dest := t.TempDir(), filepath.Join(t.TempDir(), "out")
 	const key = "sk-or-v1-dummykey"
-	if err := os.MkdirAll(filepath.Join(raw, "state", "journal"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(raw, "state", "journal"), 0o755); err != nil || os.MkdirAll(filepath.Join(raw, "codex-sessions", "2026", "11", "21"), 0o755) != nil {
 		t.Fatal(err)
 	}
-	for _, f := range []string{"state/journal/a.jsonl", "top.log"} {
+	for _, f := range []string{"state/journal/a.jsonl", "codex-sessions/2026/11/21/rollout.jsonl", "top.log"} {
 		if err := os.WriteFile(filepath.Join(raw, f), []byte(`{"text":"leak `+key+`"}`), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -228,7 +228,7 @@ func TestHarnessCompatStageLogsScrubsNestedKey(t *testing.T) {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
-	for _, f := range []string{"state/journal/a.jsonl", "top.log"} {
+	for _, f := range []string{"state/journal/a.jsonl", "codex-sessions/2026/11/21/rollout.jsonl", "top.log"} {
 		b, err := os.ReadFile(filepath.Join(dest, f))
 		if err != nil {
 			t.Fatal(err)
@@ -270,5 +270,125 @@ func TestHarnessCompatScriptsShellcheck(t *testing.T) {
 	out, err := exec.Command(sc, "-s", "sh", "-S", "warning", filepath.Join(root, "scripts", "harness-compat.sh"), filepath.Join(root, "scripts", "harness-compat-live.sh")).CombinedOutput()
 	if err != nil {
 		t.Fatalf("shellcheck:\n%s", out)
+	}
+}
+
+func TestHarnessCompatTier0ClaudeSocketPath(t *testing.T) {
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not on PATH")
+	}
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not on PATH")
+	}
+	cases := []struct {
+		name, dir string
+		makeSock  bool
+		ok        bool
+		link      bool
+	}{
+		{"tmp cc-socks (macOS)", "cc-socks", true, true, false},
+		{"runtime dir cc-socks (Linux)", "run/user/1001/cc-socks", true, true, false},
+		{"outside a cc-socks dir", "elsewhere", true, false, false},
+		{"socket file missing", "cc-socks", false, false, false},
+		{"symlink to a socket", "cc-socks", true, false, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			bin, home := t.TempDir(), t.TempDir()
+			// unix socket paths are length-limited, so the socket lives under /tmp.
+			sd, err := os.MkdirTemp("/tmp", "ccs")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { os.RemoveAll(sd) })
+			dir := filepath.Join(sd, c.dir)
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			mk := ""
+			if c.makeSock {
+				target := `"$SOCK"`
+				if c.link {
+					target = `"$SOCK.real"`
+				}
+				mk = `python3 -c 'import socket,sys; s=socket.socket(socket.AF_UNIX); s.bind(sys.argv[1]); import time; time.sleep(30)' ` + target + " &"
+				if c.link {
+					mk += "\nsleep 1\nln -s \"$SOCK.real\" \"$SOCK\""
+				}
+			}
+			fake := "#!/bin/sh\nmkdir -p \"$HOME/.claude/sessions\"\nSOCK=\"" + dir + "/$$.sock\"\n" + mk + "\n" +
+				"printf '{\"pid\":%s,\"sessionId\":\"s\",\"kind\":\"interactive\",\"messagingSocketPath\":\"%s\"}' $$ \"$SOCK\" > \"$HOME/.claude/sessions/$$.json\"\nsleep 30\n"
+			if err := os.WriteFile(filepath.Join(bin, "claude"), []byte(fake), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.Command(filepath.Join(releaseRepoRoot(t), "scripts", "harness-compat.sh"), "tier0-claude", home)
+			cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "COMPAT_WAIT_TRIES=6")
+			out, err := cmd.CombinedOutput()
+			if (err == nil) != c.ok {
+				t.Fatalf("err = %v, want ok=%v\n%s", err, c.ok, out)
+			}
+		})
+	}
+}
+
+func TestHarnessCompatKeyUsage(t *testing.T) {
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not on PATH")
+	}
+	bin, out := t.TempDir(), t.TempDir()
+	args := filepath.Join(out, "curl-args")
+	fake := "#!/bin/sh\necho \"$@\" > " + args + "\nfor a; do case \"$a\" in @*) cat \"${a#@}\" > " + filepath.Join(out, "hdr-seen") + " ;; esac; done\necho '{\"data\":{\"usage\":1.5,\"limit\":10,\"limit_remaining\":8.5,\"label\":\"x\"}}'\n"
+	if err := os.WriteFile(filepath.Join(bin, "curl"), []byte(fake), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const key = "sk-or-v1-dummykey"
+	cmd := exec.Command(filepath.Join(releaseRepoRoot(t), "scripts", "harness-compat-live.sh"), "key-usage", "before", out)
+	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "OPENROUTER_API_KEY="+key)
+	stdout, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v\n%s", err, stdout)
+	}
+	if strings.Contains(string(stdout), key) {
+		t.Errorf("key printed: %s", stdout)
+	}
+	a, _ := os.ReadFile(args)
+	if strings.Contains(string(a), key) {
+		t.Errorf("key on the curl command line: %s", a)
+	}
+	if h, _ := os.ReadFile(filepath.Join(out, "hdr-seen")); !strings.Contains(string(h), key) {
+		t.Errorf("auth header file did not carry the key: %q", h)
+	}
+	b, err := os.ReadFile(filepath.Join(out, "key-before.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.TrimSpace(string(b)), `{"usage":1.5,"limit":10,"limit_remaining":8.5}`; got != want {
+		t.Fatalf("got %s, want %s", got, want)
+	}
+}
+
+func TestHarnessCompatKeyUsageLookupFailure(t *testing.T) {
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not on PATH")
+	}
+	for name, body := range map[string]string{"curl fails": "exit 22", "no usage field": "echo '{\"data\":{}}'", "empty body": "true"} {
+		t.Run(name, func(t *testing.T) {
+			bin, out := t.TempDir(), t.TempDir()
+			if err := os.WriteFile(filepath.Join(bin, "curl"), []byte("#!/bin/sh\n"+body+"\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.Command(filepath.Join(releaseRepoRoot(t), "scripts", "harness-compat-live.sh"), "key-usage", "before", out)
+			cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "OPENROUTER_API_KEY=sk-or-v1-x")
+			stdout, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("%v\n%s", err, stdout)
+			}
+			if !strings.Contains(string(stdout), "unavailable") {
+				t.Errorf("want unavailable, got %s", stdout)
+			}
+			if _, err := os.Stat(filepath.Join(out, "key-before.json")); err == nil {
+				t.Error("a snapshot was saved for a failed lookup")
+			}
+		})
 	}
 }
