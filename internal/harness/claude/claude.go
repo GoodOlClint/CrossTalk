@@ -112,11 +112,11 @@ func (a *Adapter) readSession(pid int) (Session, error) {
 		return Session{}, ErrNoSession
 	}
 	if err != nil {
-		return Session{}, err
+		return Session{}, fmt.Errorf("claude: session file %d.json: %w", pid, err)
 	}
 	var s Session
 	if err := json.Unmarshal(b, &s); err != nil {
-		return Session{}, fmt.Errorf("claude: session %d: %w", pid, err)
+		return Session{}, fmt.Errorf("claude: session file %d.json: %w", pid, err)
 	}
 	if s.PID != pid || s.SessionID == "" {
 		return Session{}, fmt.Errorf("claude: session file %d.json names pid %d session %q", pid, s.PID, s.SessionID)

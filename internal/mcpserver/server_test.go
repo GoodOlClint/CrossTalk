@@ -659,3 +659,46 @@ func TestListAgentsNoticeNamesUnreadableSessionFile(t *testing.T) {
 		t.Fatalf("notice does not name the unreadable session file: %q", n)
 	}
 }
+
+// A session file that fails the shared validation (wrong pid, empty
+// sessionId) is an identity error: list_agents shows the notice and a bound
+// tool is refused, not served as unbound or bound.
+func TestIdentifyRejectsInvalidSessionFile(t *testing.T) {
+	for name, tc := range map[string]struct{ body, want string }{
+		"wrong pid": {`{"pid":1,"sessionId":"S","name":"alpha"}`, `not registered: claude: session file 4242.json names pid 1 session "S"`},
+		"empty id":  {`{"pid":4242,"sessionId":""}`, `not registered: claude: session file 4242.json names pid 4242 session ""`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newEnv(t, 4242, NewFakeBackend())
+			if err := os.WriteFile(filepath.Join(e.sessionDir, "4242.json"), []byte(tc.body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			n, _ := e.mustOK(nil, "list_agents", map[string]any{})["notice"].(string)
+			if !strings.HasPrefix(n, tc.want) {
+				t.Fatalf("notice %q, want prefix %q", n, tc.want)
+			}
+			e.mustErr(nil, "send_message", sendArgs("bob", "hi"), CodeFailed, "")
+			if c := e.fb.Calls(); len(c) != 0 {
+				t.Fatalf("backend called for a rejected identity: %+v", c)
+			}
+			if ds, _ := e.reg.List(); len(ds) != 0 {
+				t.Fatalf("rejected identity registered %+v", ds)
+			}
+		})
+	}
+}
+
+// An already registered session whose file later names another pid is refused
+// on the next call: registration does not outlive the identity proof.
+func TestIdentifyRefusesRegisteredSessionWhoseFileGoesBad(t *testing.T) {
+	e := newEnv(t, 4242, NewFakeBackend())
+	writeClaudeSession(t, e.sessionDir, 4242, "claude-sess", "alpha", "/work/alpha")
+	e.mustOK(nil, "send_message", sendArgs("bob", "hi"))
+	if err := os.WriteFile(filepath.Join(e.sessionDir, "4242.json"), []byte(`{"pid":1,"sessionId":"claude-sess","name":"alpha"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	e.mustErr(nil, "send_message", sendArgs("bob", "again"), CodeFailed, "")
+	if c := e.fb.Calls(); len(c) != 1 {
+		t.Fatalf("backend calls %d after the file went bad, want 1", len(c))
+	}
+}

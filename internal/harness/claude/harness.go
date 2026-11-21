@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -196,19 +195,12 @@ func (h *Harness) Identify(_ context.Context, req harness.RequestContext) (harne
 	if req.ParentPID <= 1 {
 		return harness.Session{}, false, nil
 	}
-	b, err := os.ReadFile(filepath.Join(h.a.SessionsDir, strconv.Itoa(req.ParentPID)+".json"))
-	if errors.Is(err, os.ErrNotExist) {
+	s, err := h.a.readSession(req.ParentPID)
+	if errors.Is(err, ErrNoSession) {
 		return harness.Session{}, false, nil
 	}
 	if err != nil {
-		return harness.Session{}, false, fmt.Errorf("claude: session file %d.json: %w", req.ParentPID, err)
-	}
-	var s Session
-	if err := json.Unmarshal(b, &s); err != nil {
-		return harness.Session{}, false, fmt.Errorf("claude: session file %d.json: %w", req.ParentPID, err)
-	}
-	if s.SessionID == "" {
-		return harness.Session{}, false, nil
+		return harness.Session{}, false, err
 	}
 	return harness.Session{Harness: adapter.Claude, SessionRef: s.SessionID, Name: s.Name, Cwd: s.Cwd, Status: s.Status,
 		HarnessPID: req.ParentPID, Endpoint: s.MessagingSocketPath}, true, nil
