@@ -1,4 +1,4 @@
 {
   "codex": {"tested": "unverified", "checked": "2026-11-20"},
-  "claude-code": {"tested": "unverified", "checked": "2026-11-20"}
+  "claude-code": {"tested": "2.1.330", "checked": "2026-11-21"}
 }
