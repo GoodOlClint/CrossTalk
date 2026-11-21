@@ -14,18 +14,17 @@ Measured on 2026-11-21 with a scratch stdio MCP probe (spike 20), Claude Code 2.
 - Re-exec in place (`execve` of the same pid, stdin and stdout kept, the initialized state carried across): Claude kept calling the server, fetched `tools/list` again on `notifications/tools/list_changed` and offered the new tool to the model. Codex kept calling the server and got the new code, but it did not fetch `tools/list` again; a new thread started a fresh server with the full list.
 - Exit: Claude started the server again on the next call (new pid, new `initialize`) but did not fetch the tool list again. Codex answered every later call on that thread with `Transport closed`, and the thread had no CrossTalk until a new thread started.
 
-The Go SDK can restore a session without a new `initialize`: `Server.Connect` takes `ServerSessionOptions.State`, and a request is accepted once `State.InitializeParams` is set (go-sdk v1.8.0 `mcp/server.go:1418-1432`, `1942-1991`). Its `StdioTransport` reads through a `json.Decoder` (`mcp/transport.go:524`), which reads ahead; bytes read ahead are lost on `execve`. `IOTransport` takes any reader (`mcp/transport.go:160`).
+The Go SDK can restore a session without a new `initialize`: `Server.Connect` takes `ServerSessionOptions.State`, and a request is accepted once `State.InitializeParams` is set (go-sdk v1.8.0 `mcp/server.go:1418-1432`, `1942-1991`). The live session state is private (`mcp/server.go:1560-1575`). Its `StdioTransport` decodes in its own goroutine through a `json.Decoder` (`mcp/transport.go:524-545`), which reads ahead and may hold a decoded request no handler has seen; those bytes are lost on `execve`. The `Connection` interface is public (`mcp/transport.go:73`), so the shim can own its transport.
 
 Identity is per request (ADR 0006): the Claude parent pid does not change on exec, and Codex sends `_meta.threadId` on each call. Journals, claims, pins and pre-bind entries are on disk.
 
 ## Decision
 
-- `crosstalk mcp` re-execs itself in place when the file at its own launch path (`os.Args[0]`, the absolute path install registered) is no longer the file it runs. The file is identified by device and inode, as K11 does (`procFile`, `idOf`), and is checked on a 2 s tick (the Claude claim poll's period, ADR 0006).
-- It re-execs only when idle: no tool call in flight, no delivery or injection in progress. A busy shim checks again on the next tick.
-- Before `execve`, it runs the new file's `version` with a short timeout. A failure, or a version string that does not parse, means no exec: the shim keeps running the old code and logs the reason once per inode.
-- The MCP session state (`InitializeParams`, log level) goes to the new process in an inherited, unlinked file named by an environment variable; the new process connects with `ServerSessionOptions.State` and sends `notifications/tools/list_changed`.
-- Stdin is read through `IOTransport` with a reader that never reads past the end of the current line, so no request is lost on exec.
-- Every other resource (A2A listener, unix socket, journal locks, Codex app-server connections) closes on exec through close-on-exec and is opened again by the new process as at start; the new process re-registers its sessions through the existing eager-registration and per-request paths.
+- `crosstalk mcp` re-execs itself in place when the file at its trusted path is no longer the file it started from. The trusted path is `os.Args[0]` only when that is absolute and equals a command a harness registration names; otherwise refresh is not armed. The file's device and inode are recorded once per process image (passed in the handoff after a refresh), and a 2 s tick only `stat`s the path; no `lsof` on the tick.
+- Before exec it runs `<path> version --json` with a short timeout. The new file must report a parseable version and a `refresh_handoff` format this binary writes; a binary without it (every release before this change, so any downgrade across it) is not exec'd. The inode is checked again right before exec.
+- It execs only when quiescent: peer ingress closed (A2A listener and unix socket), the stdin reader stopped at a frame boundary, every request read from stdin answered with its response written, no inject or delivery running. This needs the shim's own `mcp.Transport`, which reads stdin byte by byte to `\n` and tracks request ids from `Read` to the response `Write`. Not quiescent within 10 s: reopen and try later.
+- The handoff is a versioned JSON document in an inherited, unlinked file named by `CROSSTALK_REFRESH_STATE_FD`: the MCP session state captured from the wire (initialize params, negotiated protocol version, initialized, log level), every bound agent (agent_id, harness, session_ref, name, pin) and the binary identity.
+- On resume the new process re-registers every bound agent with its new endpoints before reading stdin, because the old descriptor still passes `Registry.Live` (same pid and start time). It then connects with `ServerSessionOptions.State` and sends `notifications/tools/list_changed`. The entry point stays `mcpserver.Server.Run`, which keeps the retirement ticker and `Close`.
 - On by default (operator Q1). `CROSSTALK_NO_AUTO_REFRESH=1` in the server's environment turns it off; `crosstalk install --no-auto-refresh` writes that variable into both registrations. K11 keeps listing a shim that has not refreshed.
 - CrossTalk never restarts the managed Codex daemon or any other process (operator Q2). K11 still names the daemon restart as advice, now only for shims that cannot refresh (refresh turned off, or an old shim from before this change).
 
@@ -35,7 +34,7 @@ Identity is per request (ADR 0006): the Claude parent pid does not change on exe
 - **`codex app-server daemon restart` from install.** Interrupts running Codex turns; the operator ruled never (Q2).
 - **`config/mcpServer/reload` from install.** Measured in #133: it does not respawn a running shim.
 - **Opt-in.** The operator chose on by default (Q1); opt-in leaves the #133 state on every host that does not know about the flag.
-- **Hand the read-ahead buffer to the new process instead of an exact line reader.** It works but adds a second channel to the exec; the line reader costs one small read loop.
+- **Keep `StdioTransport` and hand its read-ahead to the new process.** The decoder goroutine may already hold a decoded request no handler has seen (Codex review); its buffer is private.
 
 ## Consequences
 
@@ -43,5 +42,5 @@ Identity is per request (ADR 0006): the Claude parent pid does not change on exe
 - During the exec gap (milliseconds to a second) the shim's A2A port and unix socket are closed. A peer send in the gap gets `unreachable` or a retry; dedupe in the journal makes a retry safe. The A2A port may change; the descriptor is rewritten as at start.
 - A new binary that passes `version` but fails later in start leaves that session without CrossTalk until it restarts. The `version` check narrows this; it does not close it.
 - The per-peer nudge count (ADR 0014) resets on refresh, as on a restart.
-- The `cmd/crosstalk` MCP start moves from `srv.Run(ctx, &mcp.StdioTransport{})` (`cmd/crosstalk/main.go:132`) to `Connect` over `IOTransport`.
-- A downgrade (the file replaced by an older version) refreshes the same way: the shim runs what is installed.
+- The `cmd/crosstalk` MCP start stops using `mcp.StdioTransport` (`cmd/crosstalk/main.go:132`), whose decoder goroutine reads ahead (go-sdk `mcp/transport.go:524-545`), and uses the shim's own transport.
+- A downgrade to a version that writes the same handoff format refreshes the same way; a downgrade to one that does not leaves the shim on its current code, listed by K11.
