@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"slices"
 	"strings"
 
 	"github.com/GoodOlClint/crosstalk/internal/harness"
@@ -245,10 +244,10 @@ func queueWakeRemoveStep(env harness.InstallEnv) harness.Step {
 				return err
 			}
 			refs := ourHookRefs(hp)
-			if err := removeHook(hp); err != nil {
+			if err := removeTrustRecords(env, hp, refs); err != nil {
 				return err
 			}
-			return removeTrustRecords(context.Background(), env, hp, refs)
+			return removeHook(hp)
 		},
 	}
 }
@@ -282,8 +281,9 @@ func (h *Harness) k10(ctx context.Context, env harness.InstallEnv) harness.Check
 }
 
 // removeTrustRecords deletes the hooks.state table Codex wrote when the user
-// trusted each removed hook; other hooks' records stay.
-func removeTrustRecords(ctx context.Context, env harness.InstallEnv, hooksFile string, refs []string) error {
+// trusted each removed hook; other hooks' records stay. A table ends at the
+// next line that opens another table, whatever its key holds.
+func removeTrustRecords(env harness.InstallEnv, hooksFile string, refs []string) error {
 	if len(refs) == 0 {
 		return nil
 	}
@@ -297,19 +297,22 @@ func removeTrustRecords(ctx context.Context, env harness.InstallEnv, hooksFile s
 	}
 	drop := map[string]bool{}
 	for _, r := range refs {
-		drop["hooks.state."+hooksFile+":session_start:"+r] = true
+		drop[`[hooks.state."`+hooksFile+`:session_start:`+r+`"]`] = true
 	}
-	lines := strings.Split(string(b), "\n")
-	ts := tables(lines)
-	changed := false
-	for i := len(ts) - 1; i >= 0; i-- {
-		if drop[ts[i].name] {
-			lines = slices.Delete(lines, ts[i].start, ts[i].end)
-			changed = true
+	var out []string
+	skip, changed := false, false
+	for _, l := range strings.Split(string(b), "\n") {
+		t := strings.TrimSpace(l)
+		if strings.HasPrefix(t, "[") {
+			skip = drop[t]
+			changed = changed || skip
+		}
+		if !skip {
+			out = append(out, l)
 		}
 	}
 	if !changed {
 		return nil
 	}
-	return harness.ReplaceFile(path, []byte(strings.Join(lines, "\n")))
+	return harness.ReplaceFile(path, []byte(strings.Join(out, "\n")))
 }
