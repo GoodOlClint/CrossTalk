@@ -71,51 +71,77 @@ func GatewayHolderPID(stateDir string) string {
 // bind:port presents the certificate with this host's fingerprint, so a
 // foreign listener on the address never reads as running.
 func GatewayStatus(stateDir string, c Config, fingerprint string) (string, error) {
-	held, err := GatewayLockHeld(stateDir)
-	if err != nil {
-		return "", err
-	}
-	if !held {
-		return StateNotRunning, nil
-	}
-	ours := false
-	for _, h := range DialBinds(c.Bind) {
-		if ours = listenerIsOurs(net.JoinHostPort(h, strconv.Itoa(c.Port)), fingerprint); ours {
-			break
-		}
-	}
-	if !ours {
-		if !BindOnHost(c.Bind) {
-			return StateWaitingAddr, nil
-		}
-		return StateNoPort, nil
-	}
-	return StateRunning, nil
+	st, _, err := GatewayStatusWhy(stateDir, c, fingerprint)
+	return st, err
 }
 
-// listenerIsOurs starts a TLS 1.3 handshake with no client certificate and
-// reports whether the server presented the certificate with fingerprint.
-func listenerIsOurs(addr, fingerprint string) bool {
+// ListenerProbe classes, ordered from least to most informative: when
+// several dial addresses fail, the highest class wins.
+type ListenerProbe int
+
+const (
+	ProbeRefused         ListenerProbe = iota // nothing accepted the connection
+	ProbeHandshakeFailed                      // connected, but no TLS 1.3 certificate came back
+	ProbeMismatch                             // a certificate came back with another fingerprint
+	ProbeOurs
+)
+
+// GatewayStatusWhy is GatewayStatus plus, for StateNoPort and
+// StateWaitingAddr, how the probe of the listener failed.
+func GatewayStatusWhy(stateDir string, c Config, fingerprint string) (string, ListenerProbe, error) {
+	held, err := GatewayLockHeld(stateDir)
+	if err != nil {
+		return "", ProbeRefused, err
+	}
+	if !held {
+		return StateNotRunning, ProbeRefused, nil
+	}
+	best := ProbeRefused
+	for _, h := range DialBinds(c.Bind) {
+		pr := probeListener(net.JoinHostPort(h, strconv.Itoa(c.Port)), fingerprint)
+		if pr == ProbeOurs {
+			return StateRunning, pr, nil
+		}
+		best = max(best, pr)
+	}
+	if !BindOnHost(c.Bind) {
+		return StateWaitingAddr, best, nil
+	}
+	return StateNoPort, best, nil
+}
+
+// probeListener starts a TLS 1.3 handshake with no client certificate and
+// classifies what answered: nothing, a peer that cut the handshake, a
+// certificate with another fingerprint, or the certificate with fingerprint.
+func probeListener(addr, fingerprint string) ListenerProbe {
 	deadline := time.Now().Add(probeTimeout)
 	ctx, cancel := context.WithDeadline(context.Background(), deadline)
 	defer cancel()
 	raw, err := (&net.Dialer{}).DialContext(ctx, "tcp", addr)
 	if err != nil {
-		return false
+		return ProbeRefused
 	}
 	defer raw.Close()
 	raw.SetDeadline(deadline)
-	ours := false
+	seen, ours := false, false
 	c := tls.Client(raw, &tls.Config{
 		MinVersion:         tls.VersionTLS13,
 		MaxVersion:         tls.VersionTLS13,
 		InsecureSkipVerify: true,
 		VerifyConnection: func(cs tls.ConnectionState) error {
-			ours = len(cs.PeerCertificates) > 0 && Fingerprint(cs.PeerCertificates[0]) == fingerprint
+			seen = len(cs.PeerCertificates) > 0
+			ours = seen && Fingerprint(cs.PeerCertificates[0]) == fingerprint
 			return nil
 		},
 	})
-	return c.HandshakeContext(ctx) == nil && ours
+	err = c.HandshakeContext(ctx)
+	switch {
+	case seen && !ours:
+		return ProbeMismatch
+	case err != nil || !seen:
+		return ProbeHandshakeFailed
+	}
+	return ProbeOurs
 }
 
 // ProbePeer completes a pinned TLS 1.3 handshake with p using this host's

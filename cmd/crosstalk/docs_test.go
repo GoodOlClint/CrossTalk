@@ -101,3 +101,16 @@ func TestSetupDocCoversRemoteFirewallApprovalRefusal(t *testing.T) {
 		}
 	}
 }
+
+func TestSetupDocCoversStaleShims(t *testing.T) {
+	doc := repoFile(t, "docs/setup.md")
+	for _, want := range []string{
+		"K11", "keep the old binary until", "codex app-server daemon restart",
+		"config/mcpServer/reload", "service running, handshake failed", "service running, certificate mismatch",
+		"launchctl kickstart -k gui/<uid>/dev.getcrosstalk.remote", "systemctl --user restart crosstalk-remote.service",
+	} {
+		if !strings.Contains(doc, want) {
+			t.Errorf("setup.md lacks %q", want)
+		}
+	}
+}

@@ -294,6 +294,67 @@ func unitStop(ctx context.Context) error {
 	return err
 }
 
+// gatewayRestartLine is the command that restarts the login unit's gateway.
+func gatewayRestartLine() string {
+	if remoteGOOS == "darwin" {
+		return "launchctl kickstart -k " + unitDomain() + "/" + unitLabel
+	}
+	return "systemctl --user restart " + unitService
+}
+
+var gatewayRunsBin = procRunsBin
+
+// gatewayRestartStep restarts the login unit's gateway when the process
+// holding gateway.lock still runs a binary an upgrade replaced. It runs after
+// the binary step, so the restart starts the installed file.
+func gatewayRestartStep(home, cfgDir, stateDir, bin string, stdout io.Writer) harness.Step {
+	return harness.Step{
+		Title:  "restart the gateway if it runs an older binary",
+		Change: "run " + gatewayRestartLine() + " when the running gateway is not the installed binary; a gateway already on it is left alone",
+		Apply: func(ctx context.Context) error {
+			held, herr := remote.GatewayLockHeld(stateDir)
+			if herr != nil {
+				return herr
+			}
+			pid, err := strconv.Atoi(remote.GatewayHolderPID(stateDir))
+			if !held || err != nil {
+				fmt.Fprintln(stdout, "    no gateway is running; nothing to restart")
+				return nil
+			}
+			_, cur, present, owned, uerr := unitOwnership(home, cfgDir)
+			if uerr != nil {
+				return uerr
+			}
+			if !present || !owned || !bytes.Equal(cur, unitContent(remoteGOOS, bin, home)) {
+				fmt.Fprintf(stdout, "    the login unit runs a binary other than %s; run crosstalk reinstall --remote or crosstalk remote enable instead of restarting it\n", bin)
+				return nil
+			}
+			runs, known := gatewayRunsBin(pid, bin)
+			if known && runs {
+				fmt.Fprintln(stdout, "    the gateway already runs the installed binary")
+				return nil
+			}
+			if !known {
+				fmt.Fprintln(stdout, "    could not tell which binary the gateway runs; restarting it")
+			}
+			if err := unitRestart(ctx); err != nil {
+				return fmt.Errorf("the gateway still runs the older binary and the restart failed: %w; run: %s", err, gatewayRestartLine())
+			}
+			fmt.Fprintln(stdout, "    restarted the gateway on the installed binary")
+			return nil
+		},
+	}
+}
+
+func unitRestart(ctx context.Context) error {
+	if remoteGOOS == "darwin" {
+		_, err := unitRun(ctx, "launchctl", "kickstart", "-k", unitDomain()+"/"+unitLabel)
+		return err
+	}
+	_, err := unitRun(ctx, "systemctl", "--user", "restart", unitService)
+	return err
+}
+
 func unitStart(ctx context.Context, path string, replace bool) error {
 	if remoteGOOS == "darwin" {
 		if replace {

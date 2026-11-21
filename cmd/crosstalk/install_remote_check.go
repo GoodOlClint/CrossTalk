@@ -52,7 +52,11 @@ func installRemoteChecks(home, bin string) []harness.CheckResult {
 			rs = append(rs, k8(false, true, "login unit %s starts at login only while Linger is off; %s", unit, lingerHint()))
 		}
 	}
-	gs, err := remote.GatewayStatus(state, cfg, host.Fingerprint)
+	gs, probe, err := remote.GatewayStatusWhy(state, cfg, host.Fingerprint)
+	shown := gs
+	if gs == remote.StateNoPort {
+		shown = noPortText(probe, uerr == nil)
+	}
 	if err != nil {
 		return append(rs, k8(false, false, "%v", err))
 	}
@@ -67,11 +71,29 @@ func installRemoteChecks(home, bin string) []harness.CheckResult {
 			rs = append(rs, k8(true, false, "remote configured, gateway answering on %s", cfg.ListenLabel()))
 		}
 	case uerr == nil && gs == remote.StateNotRunning:
-		rs = append(rs, k8(false, false, "gateway not answering on %s (%s) and the login unit %s exists", cfg.ListenLabel(), gs, unit))
+		rs = append(rs, k8(false, false, "gateway not answering on %s (%s) and the login unit %s exists", cfg.ListenLabel(), shown, unit))
 	case uerr == nil:
-		rs = append(rs, k8(false, true, "gateway process runs but is not answering on %s (%s)", cfg.ListenLabel(), gs))
+		rs = append(rs, k8(false, true, "gateway process runs but is not answering on %s (%s)", cfg.ListenLabel(), shown))
 	default:
-		rs = append(rs, k8(false, true, "gateway not answering on %s (%s); fine for foreground use", cfg.ListenLabel(), gs))
+		rs = append(rs, k8(false, true, "gateway not answering on %s (%s); fine for foreground use", cfg.ListenLabel(), shown))
 	}
 	return rs
+}
+
+// noPortText is the K8 wording for a gateway whose lock is held but whose
+// listener did not answer as this host's gateway. A refused dial keeps the
+// state string; a handshake or certificate failure says so and names a
+// gateway left running on a previous version as a likely cause.
+func noPortText(p remote.ListenerProbe, unit bool) string {
+	restart := "stop it and rerun crosstalk remote serve"
+	if unit {
+		restart = gatewayRestartLine()
+	}
+	switch p {
+	case remote.ProbeHandshakeFailed:
+		return "service running, handshake failed: the port accepts connections but no TLS 1.3 certificate came back; a gateway still running a previous CrossTalk version is a likely cause, restart it: " + restart
+	case remote.ProbeMismatch:
+		return "service running, certificate mismatch: the port presents a certificate other than this host's host.crt; another program on the port, or a gateway still running a previous CrossTalk version, is a likely cause; restart the gateway: " + restart
+	}
+	return remote.StateNoPort
 }
