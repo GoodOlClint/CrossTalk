@@ -643,3 +643,19 @@ func TestInitializeCarriesInstructions(t *testing.T) {
 		}
 	}
 }
+
+// A session file that exists but cannot be read is an identity error the
+// model sees; a missing one is not.
+func TestListAgentsNoticeNamesUnreadableSessionFile(t *testing.T) {
+	e := newEnv(t, 4242, NewFakeBackend())
+	if n, ok := e.mustOK(nil, "list_agents", map[string]any{})["notice"]; ok {
+		t.Fatalf("notice for a missing session file: %v", n)
+	}
+	if err := os.WriteFile(filepath.Join(e.sessionDir, "4242.json"), []byte("{nope"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	n, _ := e.mustOK(nil, "list_agents", map[string]any{})["notice"].(string)
+	if !strings.Contains(n, "session") || !strings.Contains(n, "4242") {
+		t.Fatalf("notice does not name the unreadable session file: %q", n)
+	}
+}
