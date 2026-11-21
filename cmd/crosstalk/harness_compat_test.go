@@ -752,11 +752,24 @@ func TestHarnessCompatPtyrun(t *testing.T) {
 		if err := cmd.Start(); err != nil {
 			t.Fatal(err)
 		}
-		time.Sleep(2 * time.Second)
+		// Poll the log instead of sleeping: a race-enabled CI run is slow, and a fixed sleep killed the program mid-output.
+		waitFor := func(substr string, limit time.Duration) bool {
+			for end := time.Now().Add(limit); time.Now().Before(end); time.Sleep(100 * time.Millisecond) {
+				if b, _ := os.ReadFile(logf); strings.Contains(string(b), substr) {
+					return true
+				}
+			}
+			return false
+		}
+		waitFor("enter confirm", 15*time.Second)
+		// A refusal writes its note as soon as the driver starts, so look for that first; only an answering driver needs the long wait.
+		if !waitFor("not a disposable", 1500*time.Millisecond) {
+			waitFor("ANSWER=2", 15*time.Second)
+		}
 		f, _ := os.OpenFile(fifo, os.O_RDWR, 0)
 		f.WriteString("typed\r")
 		f.Close()
-		time.Sleep(1 * time.Second)
+		waitFor("MORE=typed", 4*time.Second)
 		_ = cmd.Process.Signal(syscall.SIGTERM)
 		_ = cmd.Wait()
 		b, _ := os.ReadFile(logf)
