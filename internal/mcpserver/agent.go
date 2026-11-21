@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"sync"
 
@@ -35,7 +36,7 @@ type Agent struct {
 	pinned string
 	// pendingNotice holds notices produced when no tool result could carry
 	// them (RegisterSession); the next tool result takes and clears it.
-	pendingNotice string
+	pendingNotice []string
 	reg           *registry.Registration
 	j             *journal.Journal
 	replay        journal.Replay
@@ -130,11 +131,8 @@ func (a *Agent) holdNotice(n string) {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	switch {
-	case a.pendingNotice == "":
-		a.pendingNotice = n
-	case !strings.Contains(a.pendingNotice, n):
-		a.pendingNotice += "; " + n
+	if !slices.Contains(a.pendingNotice, n) {
+		a.pendingNotice = append(a.pendingNotice, n)
 	}
 }
 
@@ -143,12 +141,9 @@ func (a *Agent) takeNotice(n string) string {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	p := a.pendingNotice
-	a.pendingNotice = ""
-	switch {
-	case p == "":
-		return n
-	case n == "":
-		return p
+	a.pendingNotice = nil
+	if n != "" {
+		p = append(p, n)
 	}
-	return p + "; " + n
+	return strings.Join(p, "; ")
 }
