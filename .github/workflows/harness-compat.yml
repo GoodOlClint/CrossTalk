@@ -114,18 +114,63 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-      - run: go build -o "$RUNNER_TEMP/crosstalk" ./cmd/crosstalk
+      - run: |
+          mkdir -p "$RUNNER_TEMP/out"
+          go build -o "$RUNNER_TEMP/out/crosstalk" ./cmd/crosstalk
+          go build -o "$RUNNER_TEMP/out/threaddump" ./scripts/threaddump
       - run: go vet ./...
       - run: go test ./cmd/crosstalk -run TestHarnessCompat -count=1
       - uses: actions/upload-artifact@v7
         with:
           name: crosstalk-bin
-          path: ${{ runner.temp }}/crosstalk
+          path: ${{ runner.temp }}/out
           if-no-files-found: error
+
+  key-before:
+    needs: [detect, tier0]
+    if: always() && needs.detect.outputs.changed != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: harness-compat
+    env:
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+    outputs:
+      usage: ${{ steps.usage.outputs.usage }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - id: usage
+        run: |
+          set -eu
+          [ -n "$OPENROUTER_API_KEY" ] || { echo "usage=unavailable" >> "$GITHUB_OUTPUT"; exit 0; }
+          scripts/harness-compat-live.sh key-usage before "$RUNNER_TEMP" || true
+          echo "usage=$(cat "$RUNNER_TEMP/key-before.json" 2>/dev/null || echo unavailable)" >> "$GITHUB_OUTPUT"
+
+  key-after:
+    needs: [detect, harness, cross]
+    if: always() && needs.detect.outputs.changed != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    environment: harness-compat
+    env:
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+    outputs:
+      usage: ${{ steps.usage.outputs.usage }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - id: usage
+        run: |
+          set -eu
+          [ -n "$OPENROUTER_API_KEY" ] || { echo "usage=unavailable" >> "$GITHUB_OUTPUT"; exit 0; }
+          scripts/harness-compat-live.sh key-usage after "$RUNNER_TEMP" || true
+          echo "usage=$(cat "$RUNNER_TEMP/key-after.json" 2>/dev/null || echo unavailable)" >> "$GITHUB_OUTPUT"
 
   harness:
     name: harness-${{ matrix.leg }}
-    needs: [detect, tier0, build]
+    needs: [detect, tier0, build, key-before]
     if: always() && needs.detect.outputs.changed != '[]' && needs.build.result == 'success'
     permissions:
       contents: read
@@ -198,9 +243,9 @@ jobs:
           LEG: ${{ matrix.leg }}
         run: |
           set -eu
-          chmod +x "$RUNNER_TEMP/bin/crosstalk"
+          chmod +x "$RUNNER_TEMP/bin/crosstalk" "$RUNNER_TEMP/bin/threaddump"
           home="$(mktemp -d)"
-          CROSSTALK_BIN="$RUNNER_TEMP/bin/crosstalk" LIVE_LOGS="$RUNNER_TEMP/live-logs" scripts/harness-compat-live.sh leg "$LEG" "$home"
+          CROSSTALK_BIN="$RUNNER_TEMP/bin/crosstalk" THREADDUMP_BIN="$RUNNER_TEMP/bin/threaddump" LIVE_LOGS="$RUNNER_TEMP/live-logs" scripts/harness-compat-live.sh leg "$LEG" "$home"
       - name: Upload logs
         if: always() && steps.gate.outputs.ran == 'true'
         uses: actions/upload-artifact@v7
@@ -275,9 +320,9 @@ jobs:
         timeout-minutes: 20
         run: |
           set -eu
-          chmod +x "$RUNNER_TEMP/bin/crosstalk"
+          chmod +x "$RUNNER_TEMP/bin/crosstalk" "$RUNNER_TEMP/bin/threaddump"
           home="$(mktemp -d)"
-          CROSSTALK_BIN="$RUNNER_TEMP/bin/crosstalk" LIVE_LOGS="$RUNNER_TEMP/live-logs" scripts/harness-compat-live.sh leg cross "$home"
+          CROSSTALK_BIN="$RUNNER_TEMP/bin/crosstalk" THREADDUMP_BIN="$RUNNER_TEMP/bin/threaddump" LIVE_LOGS="$RUNNER_TEMP/live-logs" scripts/harness-compat-live.sh leg cross "$home"
       - name: Upload logs
         if: always() && steps.gate.outputs.ran == 'true'
         uses: actions/upload-artifact@v7
@@ -287,7 +332,7 @@ jobs:
           if-no-files-found: ignore
 
   report:
-    needs: [detect, harness, cross]
+    needs: [detect, harness, cross, key-before, key-after]
     if: always() && needs.detect.outputs.changed != '[]'
     permissions:
       contents: read
@@ -304,9 +349,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           LEGS: ${{ needs.detect.outputs.legs }}
+          USAGE_BEFORE: ${{ needs.key-before.outputs.usage }}
+          USAGE_AFTER: ${{ needs.key-after.outputs.usage }}
         run: |
           set -eu
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs" --paginate --jq '.jobs[]' > "$RUNNER_TEMP/jobs.json"
+          echo "OpenRouter key usage, which lags the spend: before the legs $USAGE_BEFORE; after cross $USAGE_AFTER. The next run's before value gives the true cost of this run." | tee -a "$GITHUB_STEP_SUMMARY"
           results="$(scripts/harness-compat.sh report "$RUNNER_TEMP/jobs.json" "$LEGS")"
           echo "results=$results" >> "$GITHUB_OUTPUT"
           printf '%s' "$results" | jq -r 'to_entries[] | if .key == "cross" then "cross: \(.value)" else "\(.key) \(.value.version): \(if .value.pass then "PASS" else "NOT PASSED" end) (\(.value.legs | to_entries | map("\(.key)=\(.value)") | join(", ")))" end' | tee -a "$GITHUB_STEP_SUMMARY"

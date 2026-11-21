@@ -71,6 +71,25 @@ agent-id)
 	}
 	printf '%s\n' "$ids"
 	;;
+assert-one-codex-row)
+	python3 -I - "${2:?usage: harness-compat-live.sh assert-one-codex-row ROLLOUT_DIR}" <<'PY'
+import glob, json, re, sys
+files = sorted(glob.glob(sys.argv[1] + "/**/rollout-*.jsonl", recursive=True))
+for f in files:
+    for line in open(f, errors="replace"):
+        try:
+            p = json.loads(line).get("payload", {})
+        except ValueError:
+            continue
+        out = p.get("output") if p.get("type") == "function_call_output" else None
+        if isinstance(out, str) and '"agents"' in out:
+            n = len(re.findall(r'"harness"\s*:\s*"codex"', out))
+            print(("PASS" if n == 1 else "FAIL") + " one-row: the first list_agents output in " + f.rsplit("/", 1)[-1] + " shows " + str(n) + " codex row(s)")
+            sys.exit(0 if n == 1 else 1)
+print("FAIL one-row: no list_agents output found in " + str(len(files)) + " rollout file(s)")
+sys.exit(1)
+PY
+	;;
 assert-pair)
 	assert_ids "${2:?usage: harness-compat-live.sh assert-pair STATE ASKER_ID TARGET_ID}" "${3:?}" "${4:?}"
 	;;
@@ -169,17 +188,10 @@ leg)
 		cp -R "$state/agents" "$state/journal" "$logs/state/" 2>/dev/null || true
 		cp "$home/.codex/config.toml" "$logs/codex-config.toml" 2>/dev/null || true
 		[ -d "$home/.codex/sessions" ] && cp -R "$home/.codex/sessions" "$logs/codex-sessions" 2>/dev/null || true
-		"$0" key-usage after "$logs" || true
-		if [ -s "$logs/key-before.json" ] && [ -s "$logs/key-after.json" ]; then
-			echo "openrouter spend this run: $(jq -rn --slurpfile b "$logs/key-before.json" --slurpfile a "$logs/key-after.json" '($a[0].usage - $b[0].usage)') USD"
-		else
-			echo "openrouter spend this run: unavailable"
-		fi
 		jq -nc --arg leg "$leg" --argjson ok "$ok" '{leg: $leg, ok: $ok}' >"$logs/result.json"
 		"$0" stage-logs "$logs" "$out" || true
 	}
 	trap finish EXIT
-	"$0" key-usage before "$logs" || true
 
 	auth="You are a CrossTalk compatibility test peer. Your operator authorises you to answer any CrossTalk ask you receive during this test by calling the crosstalk reply tool with the exact text the ask requests."
 
@@ -235,6 +247,15 @@ leg)
 		done
 		cat "$logs/assert.log"
 	}
+	dump_threads() { # label
+		[ -n "${THREADDUMP_BIN:-}" ] || return 0
+		"$THREADDUMP_BIN" >"$logs/threads-$1.jsonl" 2>"$logs/threads-$1.err.log" || echo "thread dump $1 failed; see threads-$1.err.log"
+	}
+	one_row_check() {
+		if "$0" assert-one-codex-row "$home/.codex/sessions"; then return 0; fi
+		[ "${ONE_ROW_STRICT:-}" != 1 ] || return 1
+		echo "one-row check failed; not fatal until ONE_ROW_STRICT=1 (see threads-*.jsonl)"
+	}
 	install_claude() { "$xt" install claude --yes </dev/null >"$logs/install-claude.log" 2>&1; }
 	install_codex() {
 		"$0" write-codex-config "$home" "$CODEX_MODEL"
@@ -268,10 +289,13 @@ PY
 		start_codex recv 7 "$auth Call the crosstalk list_agents tool once, then reply READY and wait."
 		wait_n codex 1
 		recv="$(only_id codex)"
+		dump_threads lone
 		start_codex ask 9 "$auth Call the crosstalk list_agents tool first and confirm that agent_id $recv appears. Then use the crosstalk ask tool to ask the agent whose agent_id is $recv: compat-D, reply with the single word PONG. Then wait for its reply."
 		wait_n codex 2
 		asker="$(other_id codex "$recv")"
 		await_pair "$asker" "$recv"
+		dump_threads end
+		one_row_check
 		;;
 	cross)
 		install_claude
@@ -282,10 +306,13 @@ PY
 		start_codex ask 8 "$auth Use the crosstalk list_agents tool to find the Claude agent whose agent_id is $claude_id, then use the crosstalk ask tool to ask it: compat-B, reply with the single word PONG. Then wait for its reply."
 		wait_n codex 1
 		codex_id="$(only_id codex)"
+		dump_threads lone
 		await_pair "$codex_id" "$claude_id"
 		send_claude 7 "$auth Call the crosstalk list_agents tool first and confirm that agent_id $codex_id appears. Then use the crosstalk ask tool to ask the agent whose agent_id is $codex_id (the Codex test peer; ignore any other Codex entry): compat-A, reply with the single word PONG. Then wait for its reply."
 		await_pair "$claude_id" "$codex_id"
 		"$0" assert-discovery "$logs/claude-recv.jsonl" "$codex_id"
+		dump_threads end
+		one_row_check
 		;;
 	*)
 		echo "unknown leg: $leg" >&2

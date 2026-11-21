@@ -78,31 +78,104 @@ func TestHarnessCompatWorkflowSafe(t *testing.T) {
 	if strings.Contains(w, "schedule:") {
 		t.Error("the workflow is dispatch-only until slice 5")
 	}
-	i := strings.Index(w, "\n  harness:")
-	if i < 0 {
-		t.Fatal("no harness job")
-	}
-	if pre := w[:i]; strings.Contains(pre, "secrets.") || strings.Contains(pre, "environment:") {
-		t.Error("only the harness and cross jobs may read secrets or enter an environment")
-	}
-	rep := strings.Index(w, "\n  report:")
-	if rep < i {
-		t.Fatal("report job missing or before harness")
-	}
-	if tail := w[rep:]; strings.Contains(tail, "secrets.") || strings.Contains(tail, "environment:") {
-		t.Error("report must not read secrets or enter an environment")
-	}
-	live := w[i:rep]
-	for _, want := range []string{"environment: harness-compat\n", "secrets.OPENROUTER_API_KEY", "ran=false", "must both be set when OPENROUTER_API_KEY is", "steps.gate.outputs.ran == 'true'", "fail-fast: false", "legs-passed", "cross:"} {
-		if !strings.Contains(live, want) {
-			t.Errorf("live jobs lack %q", want)
+	jobs := workflowJobs(w)
+	secretJobs := map[string]bool{"key-before": true, "key-after": true, "harness": true, "cross": true}
+	for name, body := range jobs {
+		has := strings.Contains(body, "secrets.") || strings.Contains(body, "environment:")
+		if has != secretJobs[name] {
+			t.Errorf("job %s: secrets or environment = %v, want %v", name, has, secretJobs[name])
+		}
+		if strings.Contains(body, "echo \"$OPENROUTER_API_KEY\"") || strings.Contains(body, "set -x") {
+			t.Errorf("job %s must not echo the key", name)
 		}
 	}
-	if strings.Count(live, "secrets.OPENROUTER_API_KEY") != 2 {
-		t.Error("exactly the harness and cross jobs read the key")
+	for _, name := range []string{"harness", "cross"} {
+		body := jobs[name]
+		for _, want := range []string{"environment: harness-compat\n", "secrets.OPENROUTER_API_KEY", "ran=false", "must both be set when OPENROUTER_API_KEY is", "steps.gate.outputs.ran == 'true'"} {
+			if !strings.Contains(body, want) {
+				t.Errorf("%s lacks %q", name, want)
+			}
+		}
 	}
-	if strings.Contains(live, "echo \"$OPENROUTER_API_KEY\"") || strings.Contains(live, "set -x") {
-		t.Error("live jobs must not echo the key")
+	if !strings.Contains(jobs["harness"], "fail-fast: false") || !strings.Contains(jobs["cross"], "legs-passed") {
+		t.Error("harness must not fail fast and cross must gate on legs-passed")
+	}
+}
+
+func TestHarnessCompatLegsGateOnTheirOwnTier0(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join(releaseRepoRoot(t), ".github", "workflows", "harness-compat.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := string(b)
+	jobs := workflowJobs(w)
+	if !strings.Contains(jobs["tier0"], "name: tier0-${{ matrix.harness }}") {
+		t.Error("tier0 jobs must be named tier0-<matrix harness>")
+	}
+	for _, line := range strings.Split(jobs["harness"], "\n") {
+		if strings.Contains(line, "TIER0:") && strings.TrimSpace(line) != "TIER0: tier0-${{ matrix.harness }}" {
+			t.Errorf("a leg must gate on its own harness's tier0 job, got %q", strings.TrimSpace(line))
+		}
+	}
+	if !strings.Contains(jobs["harness"], "TIER0: tier0-${{ matrix.harness }}") {
+		t.Error("harness lacks the per-harness tier0 gate")
+	}
+}
+
+func TestHarnessCompatVerdictIsNotRunnerWritten(t *testing.T) {
+	root := releaseRepoRoot(t)
+	wf, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "harness-compat.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep := workflowJobs(string(wf))["report"]; strings.Contains(rep, "download-artifact") || strings.Contains(rep, "result-") || !strings.Contains(rep, "actions/runs/$GITHUB_RUN_ID/jobs") {
+		t.Error("report must read the jobs API and no artifact")
+	}
+	sc, err := os.ReadFile(filepath.Join(root, "scripts", "harness-compat.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(sc), "result.json") {
+		t.Error("harness-compat.sh must not read a runner-written result file")
+	}
+}
+
+func TestHarnessCompatAssertOneCodexRow(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not on PATH")
+	}
+	rollout := func(agents ...string) string {
+		var rows []string
+		for _, h := range agents {
+			rows = append(rows, `{"harness":"`+h+`","crosstalk":true}`)
+		}
+		line, _ := json.Marshal(map[string]any{"payload": map[string]any{"type": "function_call_output", "output": `{"agents":[` + strings.Join(rows, ",") + `]}`}})
+		return string(line) + "\n"
+	}
+	cases := []struct {
+		name string
+		body string
+		ok   bool
+	}{
+		{"lone codex row", rollout("codex", "claude"), true},
+		{"helper thread shows as a second row", rollout("codex", "codex"), false},
+		{"no list_agents output", `{"payload":{"type":"message"}}` + "\n", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "2026", "11", "21")
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "rollout-2026-11-21T01-00-00-abc.jsonl"), []byte(c.body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			root := filepath.Dir(filepath.Dir(filepath.Dir(dir)))
+			out, err := exec.Command(filepath.Join(releaseRepoRoot(t), "scripts", "harness-compat-live.sh"), "assert-one-codex-row", root).CombinedOutput()
+			if (err == nil) != c.ok {
+				t.Fatalf("err = %v, want ok=%v\n%s", err, c.ok, out)
+			}
+		})
 	}
 }
 
