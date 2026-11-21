@@ -104,40 +104,6 @@ func TestInstallQueueWakeFlag_ClaudeOnly_ExpectUsageError(t *testing.T) {
 	}
 }
 
-func TestInstall_StaleLegacySwitchFile_ExpectRemovedWithNoticeAndNeverEnables(t *testing.T) {
-	home := installSandbox(t, "claude", "codex")
-	state := filepath.Join(home, ".local", "state", "crosstalk")
-	old := filepath.Join(state, codex.LegacySettingFile)
-	if code, out := installRunCmd(t, "install", "--yes", "--bin-dir", filepath.Join(home, "bin")); code != 0 {
-		t.Fatalf("first install: %d\n%s", code, out)
-	}
-	installWrite(t, old, "")
-	if codex.ClaimsEnabled(state) {
-		t.Fatal("the legacy file turned the setting on")
-	}
-	_, chk := installRunCmd(t, "install", "--check", "--bin-dir", filepath.Join(home, "bin"))
-	if !strings.Contains(chk, "K10 codex WARN") || !strings.Contains(chk, codex.LegacySettingFile) {
-		t.Errorf("--check does not report the stale file:\n%s", chk)
-	}
-	code, out := installRunCmd(t, "install", "--yes", "--bin-dir", filepath.Join(home, "bin"))
-	if code != 0 {
-		t.Fatalf("install: %d\n%s", code, out)
-	}
-	if _, err := os.Stat(old); !os.IsNotExist(err) {
-		t.Errorf("stale file still there: %v", err)
-	}
-	installWrite(t, old, "")
-	if code, out := installRunCmd(t, "install", "claude", "--yes", "--bin-dir", filepath.Join(home, "bin")); code != 0 {
-		t.Fatalf("install claude: %d\n%s", code, out)
-	}
-	if _, err := os.Stat(old); err != nil {
-		t.Errorf("a claude-only install touched the codex switch file: %v", err)
-	}
-	if !strings.Contains(out, "--codex-no-daemon-queue") || codex.ClaimsEnabled(state) {
-		t.Errorf("no notice naming the flag, or setting on:\n%s", out)
-	}
-}
-
 func TestInstallCheck_K10_OffByDefault(t *testing.T) {
 	home := installSandbox(t, "codex")
 	if code, out := installRunCmd(t, "install", "--yes", "--bin-dir", filepath.Join(home, "bin")); code != 0 {

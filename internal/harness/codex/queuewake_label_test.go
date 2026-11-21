@@ -45,10 +45,6 @@ func TestDiscover_DeliveryMode_ExpectLabelOnlyForProvenUnhostedClaimWithSettingO
 	if m, _ := labelOf(t, h); m != "" {
 		t.Errorf("setting off labelled %q", m)
 	}
-	os.WriteFile(filepath.Join(h.wakeRoute().stateDir, LegacySettingFile), nil, 0o600)
-	if m, _ := labelOf(t, h); m != "" {
-		t.Errorf("legacy file labelled %q", m)
-	}
 }
 
 func TestDiscover_NoRoute_ExpectNoLabel(t *testing.T) {

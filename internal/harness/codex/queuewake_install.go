@@ -191,30 +191,6 @@ func hasHook(path string) bool {
 	return false
 }
 
-func legacyPath(env harness.InstallEnv) string {
-	return filepath.Join(stateDirOf(env), LegacySettingFile)
-}
-
-func legacyStep(env harness.InstallEnv) (harness.Step, bool) {
-	p := legacyPath(env)
-	if _, err := os.Lstat(p); err != nil {
-		return harness.Step{}, false
-	}
-	return harness.Step{
-		Title:  "stale --no-daemon switch file",
-		Change: "delete " + p + "; the switch is now crosstalk install --" + QueueWakeOption + " and this file has no effect",
-		Apply: func(context.Context) error {
-			if err := os.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
-				return err
-			}
-			if env.Out != nil {
-				fmt.Fprintf(env.Out, "    removed %s: the switch is now crosstalk install --%s\n", p, QueueWakeOption)
-			}
-			return nil
-		},
-	}, true
-}
-
 func queueWakeStep(env harness.InstallEnv) harness.Step {
 	hp, sp := hooksPath(env.Home), filepath.Join(stateDirOf(env), SettingFile)
 	return harness.Step{
@@ -252,13 +228,8 @@ func queueWakeRemoveStep(env harness.InstallEnv) harness.Step {
 
 func (h *Harness) k10(ctx context.Context, env harness.InstallEnv) harness.CheckResult {
 	r := harness.CheckResult{ID: "K10", OK: true, WarnOnly: true}
-	var stale string
-	if _, err := os.Lstat(legacyPath(env)); err == nil {
-		stale = fmt.Sprintf("; stale %s found, it has no effect (crosstalk install for Codex removes it)", legacyPath(env))
-	}
 	if !ClaimsEnabled(stateDirOf(env)) {
-		r.Detail = "experimental --no-daemon queue wake is off (crosstalk install --" + QueueWakeOption + " turns it on)" + stale
-		r.OK = stale == ""
+		r.Detail = "experimental --no-daemon queue wake is off (crosstalk install --" + QueueWakeOption + " turns it on)"
 		return r
 	}
 	var bad []string
@@ -274,9 +245,9 @@ func (h *Harness) k10(ctx context.Context, env harness.InstallEnv) harness.Check
 		bad = append(bad, fmt.Sprintf("codex %q is outside the tested versions %v, so the gate keeps the route off", strings.TrimSpace(string(out)), QueueTestedMinors))
 	}
 	if len(bad) > 0 {
-		r.OK, r.Detail = false, "experimental --no-daemon queue wake is on but "+strings.Join(bad, "; ")+stale
+		r.OK, r.Detail = false, "experimental --no-daemon queue wake is on but "+strings.Join(bad, "; ")
 		return r
 	}
-	r.OK, r.Detail = stale == "", "experimental --no-daemon queue wake is on: hook installed, codex version passes the gate"+stale
+	r.Detail = "experimental --no-daemon queue wake is on: hook installed, codex version passes the gate"
 	return r
 }

@@ -27,10 +27,6 @@ import (
 // `crosstalk install --codex-no-daemon-queue` writes it.
 const SettingFile = "codex-queue-wake.on"
 
-// LegacySettingFile was the switch before the install flag; its presence
-// never turns anything on.
-const LegacySettingFile = "codex-no-daemon.on"
-
 const (
 	DefaultRecheckInterval = 10 * time.Second
 	claimReadLimit         = 64 << 10
