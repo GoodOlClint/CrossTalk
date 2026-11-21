@@ -133,3 +133,12 @@ func TestOpeners_RevokedFDThenLockFDInSameProcess_ExpectProcessStillCounted(t *t
 		t.Fatalf("openers %v err %v, want the process: an unreadable earlier fd must not hide a later fd on the lock", got, err)
 	}
 }
+
+func TestOpeners_ProcessFDListENOENT_ExpectError(t *testing.T) {
+	path := lockFile(t)
+	h := startHelper(t, "read", lockFile(t))
+	failListFDs(t, h.pid, unix.ENOENT)
+	if got, err := OpenersAmong(path, []int{h.pid}); !errors.Is(err, unix.ENOENT) {
+		t.Fatalf("openers %v err %v, want ENOENT: a process whose fds cannot be listed must fail closed", got, err)
+	}
+}
