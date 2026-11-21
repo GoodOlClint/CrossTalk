@@ -49,7 +49,7 @@ Delivery (operator ruling, 2026-11-05): `main` is protected by a ruleset (requir
 
 Standing work permission (operator, 2026-11-07): the coordinator chooses the next v0.2.0 work and launches workers without asking each time, to keep development moving; implementation may go to Codex workers as well as Claude workers. Anything outside the repo still needs the operator.
 
-Release tags (operator, 2026-11-21): the coordinator may cut a patch release tag when merged fixes warrant one, without asking each time, at a sane cadence: batch merged fixes, at most one tag a day. The tag push's permission prompt and the release environment's deployment approval in the Actions UI stay with the operator.
+Release tags (operator, 2026-11-21): the coordinator may cut a patch release tag when merged fixes warrant one, without asking each time, at a sane cadence: batch merged fixes, at most one tag a day. The tag push's permission prompt and the release environment's deployment approval in the Actions UI stay with the operator, so before pushing a tag the coordinator asks the operator whether they are ready to approve both, and pushes only after a yes.
 
 ## Agent sessions on this repo
 
