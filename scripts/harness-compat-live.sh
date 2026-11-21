@@ -110,18 +110,6 @@ c = tomllib.load(open(sys.argv[1], "rb"))
 assert c.get("model") == sys.argv[2] and c.get("model_provider") == "openrouter", "root model keys missing"
 assert "crosstalk" in c.get("mcp_servers", {}), "crosstalk not registered"
 PY
-model = "$CODEX_MODEL"
-model_provider = "openrouter"
-
-[model_providers.openrouter]
-name = "OpenRouter"
-base_url = "https://openrouter.ai/api/v1"
-env_key = "OPENROUTER_API_KEY"
-wire_api = "responses"
-
-[projects."$home/work"]
-trust_level = "trusted"
-EOF
 	codex app-server daemon start >"$logs/codex-daemon.log" 2>&1 || {
 		echo "codex app-server daemon start failed (open point: Codex daemon on Linux); see codex-daemon.log" >&2
 		exit 1
@@ -132,7 +120,7 @@ EOF
 	exec 7<>"$cin"
 	(
 		cd "$home/work"
-		ANTHROPIC_BASE_URL=https://openrouter.ai/api ANTHROPIC_AUTH_TOKEN="$OPENROUTER_API_KEY" ANTHROPIC_API_KEY= \
+		ANTHROPIC_BASE_URL=https://openrouter.ai/api ANTHROPIC_AUTH_TOKEN="$OPENROUTER_API_KEY" ANTHROPIC_API_KEY='' \
 			ANTHROPIC_MODEL="$CLAUDE_MODEL" ANTHROPIC_DEFAULT_SONNET_MODEL="$CLAUDE_MODEL" ANTHROPIC_DEFAULT_OPUS_MODEL="$CLAUDE_MODEL" ANTHROPIC_DEFAULT_HAIKU_MODEL="$CLAUDE_MODEL" \
 			exec claude -p --input-format stream-json --output-format stream-json --verbose --max-turns 12 <"$cin" >"$logs/claude.jsonl" 2>"$logs/claude.err.log"
 	) &

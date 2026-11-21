@@ -70,7 +70,7 @@ tier0-claude)
 	home="${2:?$usage}"
 	sock=/tmp/cc-socks
 	port="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')"
-	HOME="$home" ANTHROPIC_BASE_URL="http://127.0.0.1:$port" ANTHROPIC_AUTH_TOKEN=dummy ANTHROPIC_API_KEY= \
+	HOME="$home" ANTHROPIC_BASE_URL="http://127.0.0.1:$port" ANTHROPIC_AUTH_TOKEN=dummy ANTHROPIC_API_KEY='' \
 		claude -p hi >/dev/null 2>&1 &
 	pid=$!
 	trap 'kill "$pid" 2>/dev/null || true' EXIT

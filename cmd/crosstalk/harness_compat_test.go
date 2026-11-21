@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -254,5 +255,20 @@ func TestHarnessCompatPair(t *testing.T) {
 	}
 	if got, want := strings.TrimSpace(string(out)), `{"codex":"0.171.0","claude-code":"5.6.7"}`; got != want {
 		t.Fatalf("got %s, want %s", got, want)
+	}
+}
+
+func TestHarnessCompatScriptsShellcheck(t *testing.T) {
+	sc, err := exec.LookPath("shellcheck")
+	if err != nil {
+		if os.Getenv("CI") != "" && runtime.GOOS == "linux" {
+			t.Fatal("shellcheck is required on the Linux CI runner")
+		}
+		t.Skip("shellcheck not on PATH")
+	}
+	root := releaseRepoRoot(t)
+	out, err := exec.Command(sc, "-s", "sh", "-S", "warning", filepath.Join(root, "scripts", "harness-compat.sh"), filepath.Join(root, "scripts", "harness-compat-live.sh")).CombinedOutput()
+	if err != nil {
+		t.Fatalf("shellcheck:\n%s", out)
 	}
 }
