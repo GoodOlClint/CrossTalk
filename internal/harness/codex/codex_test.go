@@ -19,6 +19,7 @@ import (
 	"github.com/GoodOlClint/crosstalk/internal/harness/codex/appserver"
 	"github.com/GoodOlClint/crosstalk/internal/harness/codex/appserver/appservertest"
 	"github.com/GoodOlClint/crosstalk/internal/msg"
+	"github.com/GoodOlClint/crosstalk/internal/registry"
 )
 
 const thread = "01a1a33c-9dbe-74d0-9309-f9e6d8e10407"
@@ -704,5 +705,29 @@ func TestRenderVerifiedNonAgentFailsClosed(t *testing.T) {
 	}
 	if out := codex.Render(message("hi"), true, "", "", ""); strings.Contains(out, "teammate") {
 		t.Fatalf("an empty class rendered as a teammate: %s", out)
+	}
+}
+
+type dirFake []registry.Descriptor
+
+func (d dirFake) List() ([]registry.Descriptor, error) { return d, nil }
+
+func TestLoadedThreadsHidesSubAgentHelpers(t *testing.T) {
+	s := appservertest.New(t)
+	s.AddThread(&appservertest.Thread{ID: thread, Cwd: "/work", Loaded: true})
+	s.AddThread(&appservertest.Thread{ID: "helper-src", Cwd: "/work", Loaded: true, Source: `{"subAgent":"review"}`})
+	s.AddThread(&appservertest.Thread{ID: "helper-spawn", Cwd: "/work", Loaded: true, Source: `{"subAgent":{"thread_spawn":{"depth":1,"parent_thread_id":"x"}}}`})
+	s.AddThread(&appservertest.Thread{ID: "helper-parent", Cwd: "/work", Loaded: true, Source: `"appServer"`, ParentThreadID: thread})
+	s.AddThread(&appservertest.Thread{ID: "bound-helper", Cwd: "/work", Loaded: true, Source: `{"subAgent":"review"}`})
+	s.AddThread(&appservertest.Thread{ID: "cli", Cwd: "/work", Loaded: true, Source: `"cli"`})
+	dir := dirFake{{Harness: "codex", SessionRef: "bound-helper"}}
+	a := &codex.Adapter{ControlSocket: s.Endpoint(), Directory: dir}
+	var ids []string
+	for _, lt := range a.LoadedThreads(ctx(t)) {
+		ids = append(ids, lt.ID)
+	}
+	slices.Sort(ids)
+	if want := []string{thread, "bound-helper", "cli"}; !slices.Equal(ids, want) {
+		t.Fatalf("LoadedThreads ids = %v, want %v", ids, want)
 	}
 }
