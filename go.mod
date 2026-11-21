@@ -3,7 +3,7 @@ module github.com/GoodOlClint/crosstalk
 go 1.27.4
 
 require (
-	github.com/a2aproject/a2a-go/v2 v2.8.0
+	github.com/a2aproject/a2a-go/v2 v2.9.0
 	github.com/google/jsonschema-go v0.4.3
 	github.com/google/uuid v1.6.0
 	github.com/modelcontextprotocol/go-sdk v1.8.0
