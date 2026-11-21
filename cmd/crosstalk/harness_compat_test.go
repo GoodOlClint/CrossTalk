@@ -392,3 +392,39 @@ func TestHarnessCompatKeyUsageLookupFailure(t *testing.T) {
 		})
 	}
 }
+
+func TestHarnessCompatAssertDiscovery(t *testing.T) {
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not on PATH")
+	}
+	row := func(id string, ct bool) string {
+		agents := []map[string]any{{"agent_id": id, "harness": "codex", "crosstalk": ct}}
+		if !ct {
+			agents = append(agents, map[string]any{"agent_id": "bound-sibling", "harness": "codex", "crosstalk": true})
+		}
+		b, _ := json.Marshal(map[string]any{"agents": agents})
+		line, _ := json.Marshal(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": []map[string]any{{"type": "tool_result", "content": string(b)}}}})
+		return string(line) + "\n"
+	}
+	cases := []struct {
+		name, log string
+		ok        bool
+	}{
+		{"listed and bound", row("abc", true), true},
+		{"peer missing from the listing", row("other", true), false},
+		{"listed but unbound beside a bound sibling", row("abc", false), false},
+		{"no listing at all", "", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := filepath.Join(t.TempDir(), "claude.jsonl")
+			if err := os.WriteFile(f, []byte(c.log), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			out, err := exec.Command(filepath.Join(releaseRepoRoot(t), "scripts", "harness-compat-live.sh"), "assert-discovery", f, "abc").CombinedOutput()
+			if (err == nil) != c.ok {
+				t.Fatalf("err = %v, want ok=%v\n%s", err, c.ok, out)
+			}
+		})
+	}
+}
