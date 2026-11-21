@@ -159,17 +159,17 @@ func addHook(path, bin string) error {
 	return writeHooks(path, doc, existed)
 }
 
-func removeHook(path string) error {
+func planRemoveHook(path string) (func() error, error) {
 	doc, existed, err := readHooks(path)
 	if err != nil || !existed {
-		return err
+		return nil, err
 	}
 	before, _ := json.Marshal(doc)
 	stripOurs(doc)
 	if after, _ := json.Marshal(doc); string(before) == string(after) {
-		return nil
+		return nil, nil
 	}
-	return writeHooks(path, doc, existed)
+	return func() error { return writeHooks(path, doc, existed) }, nil
 }
 
 // ourHookRefs lists the "<group>:<handler>" position of each of this program's
@@ -234,20 +234,65 @@ func queueWakeStep(env harness.InstallEnv) harness.Step {
 	}
 }
 
+var restoreFile = harness.ReplaceFile
+
 func queueWakeRemoveStep(env harness.InstallEnv) harness.Step {
 	hp, sp := hooksPath(env.Home), filepath.Join(stateDirOf(env), SettingFile)
 	return harness.Step{
 		Title:  "Codex --no-daemon queue wake",
 		Change: "delete " + sp + " and remove CrossTalk's SessionStart hook from " + hp + " (backup next to it); other hooks stay. A wake row already written may still fire once.",
 		Apply: func(context.Context) error {
+			writeHook, err := planRemoveHook(hp)
+			if err != nil {
+				return err
+			}
+			writeTrust, err := planRemoveTrustRecords(env, hp, ourHookRefs(hp))
+			if err != nil {
+				return err
+			}
+			cp := configPath(env.Home)
+			type undo struct {
+				path string
+				orig []byte
+				had  bool
+			}
+			snap := func(path string) undo {
+				b, err := os.ReadFile(path)
+				return undo{path, b, err == nil}
+			}
+			var done []undo
+			rollback := func(cause error) error {
+				errs := []error{cause}
+				for _, u := range done {
+					var err error
+					if u.had {
+						err = restoreFile(u.path, u.orig)
+					} else {
+						err = os.Remove(u.path)
+					}
+					if err != nil {
+						errs = append(errs, fmt.Errorf("rollback of %s failed, restore it from its .crosstalk-backup: %w", u.path, err))
+					}
+				}
+				return errors.Join(errs...)
+			}
+			for _, w := range []struct {
+				path  string
+				write func() error
+			}{{cp, writeTrust}, {hp, writeHook}} {
+				if w.write == nil {
+					continue
+				}
+				u := snap(w.path)
+				if err := w.write(); err != nil {
+					return rollback(err)
+				}
+				done = append(done, u)
+			}
 			if err := os.Remove(sp); err != nil && !errors.Is(err, os.ErrNotExist) {
-				return err
+				return rollback(err)
 			}
-			refs := ourHookRefs(hp)
-			if err := removeTrustRecords(env, hp, refs); err != nil {
-				return err
-			}
-			return removeHook(hp)
+			return nil
 		},
 	}
 }
@@ -280,22 +325,22 @@ func (h *Harness) k10(ctx context.Context, env harness.InstallEnv) harness.Check
 	return r
 }
 
-// removeTrustRecords deletes the hooks.state table Codex wrote when the user
+// planRemoveTrustRecords returns a writer that deletes the hooks.state table Codex wrote when the user
 // trusted each removed hook: from its header to the next table header or the end
 // of the file. Blank and comment lines that end the record stay, since they
 // precede the next table. Lines inside a multi-line string or array are never
 // read as headers.
-func removeTrustRecords(env harness.InstallEnv, hooksFile string, refs []string) error {
+func planRemoveTrustRecords(env harness.InstallEnv, hooksFile string, refs []string) (func() error, error) {
 	if len(refs) == 0 {
-		return nil
+		return nil, nil
 	}
 	path := configPath(env.Home)
 	b, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil
+		return nil, nil
 	}
 	if err != nil {
-		return err
+		return nil, err
 	}
 	drop := map[string]bool{}
 	for _, r := range refs {
@@ -328,13 +373,13 @@ func removeTrustRecords(env harness.InstallEnv, hooksFile string, refs []string)
 		}
 	}
 	if skip && (inStr != "" || depth > 0) {
-		return fmt.Errorf("codex config %s: the trust record for the removed hook ends inside an unclosed array or string; fix or delete it by hand and retry", path)
+		return nil, fmt.Errorf("codex config %s: the trust record for the removed hook ends inside an unclosed array or string; fix or delete it by hand and retry", path)
 	}
 	out = append(out, pending...)
 	if !changed {
-		return nil
+		return nil, nil
 	}
-	return harness.ReplaceFile(path, []byte(strings.Join(out, "")))
+	return func() error { return harness.ReplaceFile(path, []byte(strings.Join(out, ""))) }, nil
 }
 
 // tomlStringState is the multi-line string state ("", `"""` or `”'`) after
