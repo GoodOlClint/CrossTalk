@@ -64,23 +64,32 @@ func timedOutServer(t *testing.T, stateDir string) *mcpserver.Server {
 	return srv
 }
 
-func TestShutdownKeepsTimedOutAgentLockedThroughShimClose(t *testing.T) {
+type probeWriter struct{ probe func() }
+
+func (w probeWriter) Write(p []byte) (int, error) { w.probe(); return len(p), nil }
+
+func TestFinishKeepsTimedOutAgentLockedUntilReported(t *testing.T) {
 	stateDir := t.TempDir()
 	id := identity.AgentID("codex", "T-1")
-	var acquireErr error
-	closeShim := func() error {
+	acquire := func() error {
 		for range 10 {
 			runtime.GC()
 			runtime.Gosched()
 			time.Sleep(10 * time.Millisecond)
 		}
-		_, acquireErr = registry.New(stateDir).Acquire(registry.Request{AgentID: id, HarnessName: "other", Harness: "codex", Cwd: "/w"})
-		return nil
+		_, err := registry.New(stateDir).Acquire(registry.Request{AgentID: id, HarnessName: "other", Harness: "codex", Cwd: "/w"})
+		return err
 	}
-	if err := shutdown(timedOutServer(t, stateDir), func() {}, closeShim); err != nil {
-		t.Fatal(err)
+	var duringClose, duringReport error
+	closeShim := func() error { duringClose = acquire(); return nil }
+	stderr := probeWriter{func() { duringReport = acquire() }}
+	if rc := finish(timedOutServer(t, stateDir), mcpserver.ErrCloseTimeout, func() {}, closeShim, stderr); rc != 1 {
+		t.Fatalf("rc = %d, want 1", rc)
 	}
-	if !errors.Is(acquireErr, registry.ErrAgentHeld) {
-		t.Fatalf("Acquire during shim close = %v, want ErrAgentHeld", acquireErr)
+	if !errors.Is(duringClose, registry.ErrAgentHeld) {
+		t.Fatalf("Acquire during shim close = %v, want ErrAgentHeld", duringClose)
+	}
+	if !errors.Is(duringReport, registry.ErrAgentHeld) {
+		t.Fatalf("Acquire while reporting = %v, want ErrAgentHeld", duringReport)
 	}
 }
