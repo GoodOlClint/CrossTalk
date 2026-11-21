@@ -17,6 +17,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/GoodOlClint/crosstalk/internal/adapter"
 	"github.com/GoodOlClint/crosstalk/internal/identity"
 	"github.com/GoodOlClint/crosstalk/internal/journal"
 	"github.com/GoodOlClint/crosstalk/internal/registry"
@@ -475,6 +476,27 @@ func TestCloseKeepsOwnershipWhenAgentCloseTimesOut(t *testing.T) {
 	}
 	if d := e.descriptor(id); d.AgentID != id {
 		t.Fatalf("descriptor %+v", d)
+	}
+	runtime.GC()
+	runtime.GC()
+	_, err := registry.New(e.stateDir).Acquire(registry.Request{AgentID: id, HarnessName: "other", Harness: "codex", Cwd: "/w"})
+	if !errors.Is(err, registry.ErrAgentHeld) {
+		t.Fatalf("Acquire err = %v, want ErrAgentHeld while a handler may still run", err)
+	}
+}
+
+type failingBinder struct{ timedOutCloser }
+
+func (failingBinder) BindHarness(context.Context, *Agent) (adapter.Binding, error) {
+	return adapter.Binding{}, errors.New("bind failed")
+}
+
+func TestFailedRegistrationKeepsOwnershipWhenAgentCloseTimesOut(t *testing.T) {
+	e := newEnv(t, 999999, NewFakeBackend())
+	e.srv.backend = failingBinder{timedOutCloser{e.fb}}
+	id := codexID("T-1")
+	if isErr, _ := e.call(thread("T-1"), "send_message", sendArgs("x", "1")); !isErr {
+		t.Fatal("registration should have failed")
 	}
 	runtime.GC()
 	runtime.GC()

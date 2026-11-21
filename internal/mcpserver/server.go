@@ -298,6 +298,9 @@ func (s *Server) register(ctx context.Context, a *Agent, c caller) (notice strin
 		if err != nil {
 			if ac, ok := s.backend.(AgentCloser); ok {
 				if errors.Is(ac.CloseAgent(a), ErrCloseTimeout) {
+					s.mu.Lock()
+					s.timedOut = append(s.timedOut, a)
+					s.mu.Unlock()
 					return
 				}
 			}
