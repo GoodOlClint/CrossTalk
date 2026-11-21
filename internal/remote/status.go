@@ -78,7 +78,7 @@ func GatewayStatus(stateDir string, c Config, fingerprint string) (string, error
 	if !held {
 		return StateNotRunning, nil
 	}
-	if !listenerIsOurs(net.JoinHostPort(c.Bind, strconv.Itoa(c.Port)), fingerprint) {
+	if !listenerIsOurs(net.JoinHostPort(DialBind(c.Bind), strconv.Itoa(c.Port)), fingerprint) {
 		if !BindOnHost(c.Bind) {
 			return StateWaitingAddr, nil
 		}

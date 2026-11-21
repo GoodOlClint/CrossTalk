@@ -24,6 +24,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -342,13 +343,69 @@ func DefaultAlias() string {
 	return h
 }
 
+// BindAll is the --bind value that selects all-addresses mode; the config
+// stores AllBind.
+const BindAll = "all"
+
+// AllBind is the stored bind of all-addresses mode (dual-stack wildcard).
+const AllBind = "::"
+
+// IsWildcard reports whether bind is an unspecified address: all-addresses mode.
+func IsWildcard(bind string) bool {
+	a, err := netip.ParseAddr(bind)
+	return err == nil && a.Zone() == "" && a.Unmap().IsUnspecified()
+}
+
 // AdvertiseAddr is the address peers are told to dial: Advertise, or Bind when
-// none is set.
+// none is set. A wildcard bind is never one: with no Advertise it is empty.
 func (c Config) AdvertiseAddr() string {
 	if c.Advertise != "" {
 		return c.Advertise
 	}
+	if IsWildcard(c.Bind) {
+		return ""
+	}
 	return c.Bind
+}
+
+// ListenLabel names what the gateway listens on, for messages.
+func (c Config) ListenLabel() string {
+	if IsWildcard(c.Bind) {
+		return fmt.Sprintf("all addresses, port %d", c.Port)
+	}
+	return net.JoinHostPort(c.Bind, strconv.Itoa(c.Port))
+}
+
+// DialBind is an address on this host that reaches a listener bound to bind:
+// the bind itself, or loopback for a wildcard.
+func DialBind(bind string) string {
+	a, err := netip.ParseAddr(bind)
+	if err != nil || !a.Unmap().IsUnspecified() {
+		return bind
+	}
+	if a.Is4() || a.Is4In6() {
+		return "127.0.0.1"
+	}
+	return "::1"
+}
+
+var tailnetV4 = netip.MustParsePrefix("100.64.0.0/10")
+var tailnetV6 = netip.MustParsePrefix("fd7a:115c:a1e0::/48")
+
+// TailnetAddr returns a Tailscale address of this host, for a suggestion only.
+func TailnetAddr() (string, bool) {
+	addrs, err := InterfaceAddrs()
+	if err != nil {
+		return "", false
+	}
+	for _, ia := range addrs {
+		if p, err := netip.ParsePrefix(ia.String()); err == nil {
+			if a := p.Addr().Unmap(); tailnetV4.Contains(a) || tailnetV6.Contains(a) {
+				return a.String(), true
+			}
+		}
+	}
+	return "", false
 }
 
 var dnsLabelRE = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$`)
@@ -468,7 +525,7 @@ func hostHasAddr(a netip.Addr, list func() ([]net.Addr, error)) (bool, error) {
 // reports a missing address it did not establish.
 func BindOnHost(bind string) bool {
 	a, err := netip.ParseAddr(bind)
-	if err != nil {
+	if err != nil || a.Unmap().IsUnspecified() {
 		return true
 	}
 	has, err := hostHasAddr(a, InterfaceAddrs)
@@ -482,7 +539,11 @@ func validateConfig(c Config) error {
 	if err := ValidAlias(c.Alias); err != nil {
 		return err
 	}
-	if _, err := checkBindClass(c.Bind); err != nil {
+	if IsWildcard(c.Bind) {
+		if c.Advertise == "" {
+			return errors.New("bind: all-addresses mode needs advertise, the address peers dial")
+		}
+	} else if _, err := checkBindClass(c.Bind); err != nil {
 		return fmt.Errorf("bind: %w", err)
 	}
 	if c.Advertise != "" {

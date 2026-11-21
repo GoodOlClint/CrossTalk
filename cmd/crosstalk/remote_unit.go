@@ -409,11 +409,11 @@ func unitWaitAnswering(ctx context.Context, dir string, stdout io.Writer) {
 	deadline := time.Now().Add(remoteStartWait)
 	for {
 		if st, err := remote.GatewayStatus(state, cfg, host.Fingerprint); err == nil && st == remote.StateRunning {
-			fmt.Fprintf(stdout, "    gateway answering on %s:%d\n", cfg.Bind, cfg.Port)
+			fmt.Fprintf(stdout, "    gateway answering on %s\n", cfg.ListenLabel())
 			return
 		}
 		if !time.Now().Before(deadline) {
-			fmt.Fprintf(stdout, "    gateway not answering on %s:%d yet; check: crosstalk remote status\n", cfg.Bind, cfg.Port)
+			fmt.Fprintf(stdout, "    gateway not answering on %s yet; check: crosstalk remote status\n", cfg.ListenLabel())
 			return
 		}
 		select {
