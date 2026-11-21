@@ -192,6 +192,9 @@ func TestPairWrongSecret(t *testing.T) {
 
 func TestPairExpired(t *testing.T) {
 	p := startPairGateway(t, nil)
+	if _, err := StartPairing(p.stateDir, p.clk.Now(), time.Hour, ""); err != nil {
+		t.Fatal(err)
+	}
 	x, c := p.open()
 	pending, peers := p.files()
 	p.clk.Advance(10 * time.Minute)
