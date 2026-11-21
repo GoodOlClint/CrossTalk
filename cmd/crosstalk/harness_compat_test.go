@@ -1346,3 +1346,151 @@ func TestHarnessCompatLegNeedsOnlyItsOwnHarnessModel(t *testing.T) {
 		}
 	}
 }
+
+func TestHarnessCompatInterruptedCase(t *testing.T) {
+	root := releaseRepoRoot(t)
+	script := filepath.Join(root, "scripts", "harness-compat-live.sh")
+
+	t.Run("turns counts task_started, task_complete and turn_aborted per session rollout", func(t *testing.T) {
+		if _, err := exec.LookPath("python3"); err != nil {
+			t.Skip("python3 not on PATH")
+		}
+		ev := func(kind string) string {
+			b, _ := json.Marshal(map[string]any{"payload": map[string]any{"type": kind}})
+			return string(b) + "\n"
+		}
+		dir := filepath.Join(t.TempDir(), "2026", "11", "21")
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		files := map[string]string{
+			"th1":   ev("task_started") + ev("task_complete") + ev("task_started") + ev("turn_aborted") + "not json\n",
+			"other": ev("task_started") + ev("task_started"),
+		}
+		for ref, body := range files {
+			if err := os.WriteFile(filepath.Join(dir, "rollout-2026-11-21T01-00-00-"+ref+".jsonl"), []byte(body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		out, err := exec.Command(script, "turns", filepath.Dir(filepath.Dir(filepath.Dir(dir))), "th1").Output()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.TrimSpace(string(out)); got != "2 1 1" {
+			t.Errorf("turns = %q, want %q (started, completed, aborted)", got, "2 1 1")
+		}
+	})
+
+	t.Run("triggers lists each started turn as queue or user, in order", func(t *testing.T) {
+		if _, err := exec.LookPath("python3"); err != nil {
+			t.Skip("python3 not on PATH")
+		}
+		started := func(trigger string) string {
+			p := map[string]any{"type": "task_started"}
+			if trigger != "" {
+				p["turn_attribution"] = map[string]any{"turn_trigger": trigger}
+			}
+			b, _ := json.Marshal(map[string]any{"payload": p})
+			return string(b) + "\n"
+		}
+		for name, c := range map[string]struct{ body, want string }{
+			"operator then wake": {started("") + started("queue"), "user queue"},
+			"wake then operator": {started("queue") + started(""), "queue user"},
+		} {
+			dir := filepath.Join(t.TempDir(), "2026", "11", "21")
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "rollout-2026-11-21T01-00-00-th1.jsonl"), []byte(c.body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			out, err := exec.Command(script, "triggers", filepath.Dir(filepath.Dir(filepath.Dir(dir))), "th1").Output()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := strings.Join(strings.Fields(string(out)), " "); got != c.want {
+				t.Errorf("%s: triggers = %q, want %q", name, got, c.want)
+			}
+		}
+	})
+
+	t.Run("the pause check matches the wake's own row by client_id, not any row", func(t *testing.T) {
+		if _, err := exec.LookPath("sqlite3"); err != nil {
+			t.Skip("sqlite3 not on PATH")
+		}
+		b, err := os.ReadFile(script)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m := regexp.MustCompile(`"(select count\(\*\) from queued_items where json_extract[^"]*)"`).FindStringSubmatch(string(b))
+		if m == nil {
+			t.Fatal("script has no row-identity query")
+		}
+		q := strings.NewReplacer("$wake_id", "wake-1", `\$`, "$").Replace(m[1])
+		db := filepath.Join(t.TempDir(), "q.sqlite")
+		setup := `create table queued_items (id text, thread_id text, payload_json text); insert into queued_items values ('a','th1','{"UserInput":{"client_id":"other"}}');`
+		if out, err := exec.Command("sqlite3", db, setup).CombinedOutput(); err != nil {
+			t.Fatalf("%v: %s", err, out)
+		}
+		count := func() string {
+			out, err := exec.Command("sqlite3", "-readonly", db, q).CombinedOutput()
+			if err != nil {
+				t.Fatalf("%v: %s", err, out)
+			}
+			return strings.TrimSpace(string(out))
+		}
+		if got := count(); got != "0" {
+			t.Errorf("an unrelated row counted: %s", got)
+		}
+		if out, err := exec.Command("sqlite3", db, `insert into queued_items values ('b','th1','{"UserInput":{"client_id":"wake-1"}}')`).CombinedOutput(); err != nil {
+			t.Fatalf("%v: %s", err, out)
+		}
+		if got := count(); got != "1" {
+			t.Errorf("the wake row did not count: %s", got)
+		}
+	})
+
+	t.Run("wake-state reads the generation record", func(t *testing.T) {
+		d := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(d, "codex-wakes"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(d, "codex-wakes", "th1.json"), []byte(`{"state":"queued"}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		for ref, want := range map[string]string{"th1": "queued", "none": "missing"} {
+			out, _ := exec.Command(script, "wake-state", d, ref).Output()
+			if got := strings.TrimSpace(string(out)); got != want {
+				t.Errorf("wake-state %s = %q, want %q", ref, got, want)
+			}
+		}
+	})
+
+	t.Run("the macOS leg runs the interrupted case after the wake check and fails on any violation", func(t *testing.T) {
+		b, err := os.ReadFile(script)
+		if err != nil {
+			t.Fatal(err)
+		}
+		src := string(b)
+		wake := strings.Index(src, `"$0" assert-wake "$state" "$tab_ref"`)
+		call := strings.Index(src, `interrupted_case "$tab_ref" "$codex_id"`)
+		if wake < 0 || call < wake {
+			t.Error("the macOS leg must call interrupted_case after assert-wake")
+		}
+		for _, want := range []string{
+			`printf '\033' >&8`,
+			`PASS interrupted: a long turn was running and a wake row was queued behind it`,
+			`PASS interrupted: after Esc the turn aborted, and for 45 s no turn started, the wake generation stayed queued and the queue row stayed`,
+			`PASS interrupted: the next prompt ran, then the wake dispatched (generation collected)`,
+			`fail "a turn started while the thread was interrupted`,
+			`from queued_items`,
+			`"$0" triggers "$home/.codex/sessions" "$iref"`,
+			`"user queue"`,
+			`the tab's earlier turn never finished`,
+		} {
+			if !strings.Contains(src, want) {
+				t.Errorf("script lacks %q", want)
+			}
+		}
+	})
+}
