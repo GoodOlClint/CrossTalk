@@ -696,7 +696,7 @@ func TestHarnessCompatPtyrun(t *testing.T) {
 	if err := os.WriteFile(prog, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	run := func(home string, extraEnv ...string) string {
+	run := func(home, cwd string, extraEnv ...string) string {
 		dir := t.TempDir()
 		fifo := filepath.Join(dir, "in")
 		if err := exec.Command("mkfifo", fifo).Run(); err != nil {
@@ -704,29 +704,62 @@ func TestHarnessCompatPtyrun(t *testing.T) {
 		}
 		logf := filepath.Join(dir, "log")
 		cmd := exec.Command(filepath.Join(root, "scripts", "ptyrun.py"), logf, fifo, prog)
-		cmd.Env = append(append(os.Environ(), "HOME="+home), extraEnv...)
+		var env []string
+		for _, kv := range os.Environ() {
+			if !strings.HasPrefix(kv, "CODEX_HOME=") && !strings.HasPrefix(kv, "RUNNER_TEMP=") && !strings.HasPrefix(kv, "HOME=") {
+				env = append(env, kv)
+			}
+		}
+		cmd.Env = append(append(env, "HOME="+home), extraEnv...)
+		cmd.Dir = cwd
 		if err := cmd.Start(); err != nil {
 			t.Fatal(err)
 		}
-		time.Sleep(3 * time.Second)
+		time.Sleep(2 * time.Second)
 		f, _ := os.OpenFile(fifo, os.O_RDWR, 0)
 		f.WriteString("typed\r")
 		f.Close()
-		time.Sleep(2 * time.Second)
+		time.Sleep(1 * time.Second)
 		_ = cmd.Process.Signal(syscall.SIGTERM)
 		_ = cmd.Wait()
 		b, _ := os.ReadFile(logf)
 		return string(b)
 	}
-	if out := run(t.TempDir()); !strings.Contains(out, "ANSWER=2") || !strings.Contains(out, "MORE=typed") {
+	good := t.TempDir()
+	if out := run(good, good, "CODEX_HOME="+filepath.Join(good, ".codex")); !strings.Contains(out, "ANSWER=2") || !strings.Contains(out, "MORE=typed") {
 		t.Errorf("in a disposable home the dialog is answered with 2 and fifo input is forwarded:\n%s", out)
 	}
-	if out := run(t.TempDir(), "CODEX_HOME=/Users/someone/.codex"); strings.Contains(out, "ANSWER=2") || !strings.Contains(out, "not a disposable") {
-		t.Errorf("a CODEX_HOME outside the scratch home must not be answered for:\n%s", out)
+	refused := func(name, home, cwd string, extraEnv ...string) {
+		t.Helper()
+		if out := run(home, cwd, extraEnv...); strings.Contains(out, "ANSWER=2") || !strings.Contains(out, "not a disposable") {
+			t.Errorf("%s: nothing may be answered:\n%s", name, out)
+		}
 	}
-	if out := run("/Users/someone"); strings.Contains(out, "ANSWER=2") || !strings.Contains(out, "not a disposable") {
-		t.Errorf("outside a disposable home nothing is answered:\n%s", out)
+	// Each case below is refused by exactly one rule: the cwd and the other variables are set so every other rule would pass.
+	h := t.TempDir()
+	refused("CODEX_HOME outside the scratch home", h, h, "CODEX_HOME=/Users/someone/.codex")
+	h = t.TempDir()
+	if err := os.Mkdir(filepath.Join(h, ".codex"), 0o755); err != nil {
+		t.Fatal(err)
 	}
+	refused("CODEX_HOME unset (cwd is inside the home, so an empty path would resolve inside it)", h, filepath.Join(h, ".codex"))
+	scratchCwd := t.TempDir()
+	refused("HOME empty (cwd is a scratch dir, so an empty path would resolve to it)", "", scratchCwd, "CODEX_HOME="+filepath.Join(scratchCwd, ".codex"))
+	refused("a real home outside the temp dir", "/Users/someone", t.TempDir(), "CODEX_HOME=/Users/someone/.codex")
+	refused("RUNNER_TEMP does not make a real home disposable", "/Users/someone", t.TempDir(), "RUNNER_TEMP=/Users", "CODEX_HOME=/Users/someone/.codex")
+	h = t.TempDir()
+	if err := os.Mkdir(filepath.Join(h, "profile"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(t.TempDir(), filepath.Join(h, ".codex")); err != nil {
+		t.Fatal(err)
+	}
+	refused("$HOME/.codex is a symlink out of the scratch home while CODEX_HOME is inside", h, h, "CODEX_HOME="+filepath.Join(h, "profile"))
+	link := filepath.Join(t.TempDir(), "homelink")
+	if err := os.Symlink("/Users", link); err != nil {
+		t.Fatal(err)
+	}
+	refused("HOME is a symlink to a real home", link, t.TempDir(), "CODEX_HOME="+filepath.Join(link, ".codex"))
 }
 
 func TestHarnessCompatAssertMailboxAndDeliveryMode(t *testing.T) {

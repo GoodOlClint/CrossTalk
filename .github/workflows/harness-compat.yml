@@ -17,7 +17,7 @@ on:
         description: treat this as the recorded version (a test aid)
         default: ""
       queue_codex_version:
-        description: Codex version for the macOS queue-wake leg (the queue gate allows 0.167.x only); empty skips the leg
+        description: Codex version for the macOS queue-wake leg (the queue gate allows 0.167.x only); empty tests the candidate version itself
         default: "0.167.0"
 
 permissions:
