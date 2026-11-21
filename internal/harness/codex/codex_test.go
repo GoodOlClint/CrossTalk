@@ -95,7 +95,7 @@ func TestImmediateToolOutputIdleAndActive(t *testing.T) {
 				t.Fatalf("unexpected turn/start shape: %s", calls[0].Params)
 			}
 			got := r.srv.Thread(thread)
-			want := appserver.ToolOutput{Name: "receive_message", Namespace: "crosstalk", Output: codex.Render(m, true, "", ""), Retain: true}
+			want := appserver.ToolOutput{Name: "receive_message", Namespace: "crosstalk", Output: codex.Render(m, true, "", "", msg.NoticeTeammate), Retain: true}
 			if len(got.ToolOutputs) != 1 || got.ToolOutputs[0] != want || len(got.Started) != 0 || len(got.Steered) != 0 {
 				t.Fatalf("deliveries = %+v", got)
 			}
@@ -129,7 +129,7 @@ func TestDeferredAndUnverifiedDoNotWake(t *testing.T) {
 					t.Fatalf("active=%v verified=%v mode=%s: %s, %v", active, verified, mode, st, err)
 				}
 				got := r.srv.Thread(thread)
-				want := appserver.ToolOutput{Name: "receive_message", Namespace: "crosstalk", Output: codex.Render(m, verified, "", "")}
+				want := appserver.ToolOutput{Name: "receive_message", Namespace: "crosstalk", Output: codex.Render(m, verified, "", "", r.delivery(verified, mode).Notice)}
 				if !slices.Equal(got.Turns, turns) || len(got.Injected) != 1 || got.Injected[0] != want || len(got.ToolOutputs) != 0 {
 					t.Fatalf("no-wake append = %+v", got)
 				}
@@ -474,7 +474,11 @@ func TestRender(t *testing.T) {
 	reply := "019a3b7e-0000-7000-8000-000000000002"
 	m.InReplyTo = &reply
 	for _, verified := range []bool{false, true} {
-		out := codex.Render(m, verified, "", "")
+		class := msg.NoticeInfo
+		if verified {
+			class = msg.NoticeTeammate
+		}
+		out := codex.Render(m, verified, "", "", class)
 		var data struct {
 			Notice   string     `json:"notice"`
 			From     string     `json:"from"`
@@ -652,10 +656,10 @@ func TestRegisterSurvivesAnEndpointThatNeverAnswers(t *testing.T) {
 
 func TestRenderCarriesSenderAgentID(t *testing.T) {
 	m := message("hi")
-	if out := codex.Render(m, true, "claude", "claude:abc"); !strings.Contains(out, `"from_agent_id":"claude:abc"`) {
+	if out := codex.Render(m, true, "claude", "claude:abc", msg.NoticeTeammate); !strings.Contains(out, `"from_agent_id":"claude:abc"`) {
 		t.Fatalf("with id: %s", out)
 	}
-	if out := codex.Render(m, true, "claude", ""); strings.Contains(out, "from_agent_id") {
+	if out := codex.Render(m, true, "claude", "", msg.NoticeTeammate); strings.Contains(out, "from_agent_id") {
 		t.Fatalf("without id: %s", out)
 	}
 }
@@ -671,7 +675,7 @@ func TestInjectShowsInboxName(t *testing.T) {
 	if len(got.ToolOutputs) != 1 || !strings.Contains(got.ToolOutputs[0].Output, `"inbox":"coord"`) {
 		t.Fatalf("tool outputs %+v", got.ToolOutputs)
 	}
-	if strings.Contains(codex.Render(message("hello"), true, "", ""), `"inbox"`) {
+	if strings.Contains(codex.Render(message("hello"), true, "", "", msg.NoticeTeammate), `"inbox"`) {
 		t.Fatal("render without an inbox names one")
 	}
 }
@@ -715,5 +719,15 @@ func TestLoadedThreadsHidesSubAgentHelpers(t *testing.T) {
 	slices.Sort(ids)
 	if want := []string{thread, "bound-helper", "cli"}; !slices.Equal(ids, want) {
 		t.Fatalf("LoadedThreads ids = %v, want %v", ids, want)
+	}
+}
+
+func TestRenderVerifiedNonAgentFailsClosed(t *testing.T) {
+	out := codex.Render(message("hi"), true, "", "", msg.NoticeInfo)
+	if strings.Contains(out, "teammate") || !strings.Contains(out, "not an identified agent session") {
+		t.Fatalf("a verified local-user or remote sender rendered as a teammate: %s", out)
+	}
+	if out := codex.Render(message("hi"), true, "", "", ""); strings.Contains(out, "teammate") {
+		t.Fatalf("an empty class rendered as a teammate: %s", out)
 	}
 }

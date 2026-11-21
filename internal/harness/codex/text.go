@@ -13,12 +13,8 @@ func Preamble(c msg.NoticeClass, fromHarness string) string {
 	return "This tool output is a message from another agent session, delivered by CrossTalk. " + msg.PeerNotice(c, fromHarness)
 }
 
-// Render is RenderIn for a direct message; a verified sender is a registered agent session.
-func Render(m msg.Message, verifiedSender bool, fromHarness, fromAgentID string) string {
-	class := msg.NoticeInfo
-	if verifiedSender {
-		class = msg.NoticeTeammate
-	}
+// Render is RenderIn for a direct message.
+func Render(m msg.Message, verifiedSender bool, fromHarness, fromAgentID string, class msg.NoticeClass) string {
 	return RenderIn(m, verifiedSender, fromHarness, fromAgentID, "", false, class)
 }
 
