@@ -38,7 +38,7 @@ func TestSetupDocCoversGapsRemote(t *testing.T) {
 		"### Choose an address", "### When a host changes networks",
 		"--bind all needs --advertise, the address or name peers dial", "crosstalk remote config --bind all --advertise",
 		"service running, waiting for address", "peers still dial the old address: pair again with",
-		"fingerprint pin is the only trust", "Avahi", "MagicDNS", "100.64.0.0/10", "never waits for an address",
+		"fingerprint pin is the only trust", "### Restart after changing the bind", "--bind 100.64.1.2 --advertise host.example.ts.net", "Avahi", "MagicDNS", "100.64.0.0/10", "never waits for an address",
 	} {
 		if !strings.Contains(doc, want) {
 			t.Errorf("setup.md lacks %q", want)
