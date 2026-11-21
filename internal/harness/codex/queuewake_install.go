@@ -281,9 +281,10 @@ func (h *Harness) k10(ctx context.Context, env harness.InstallEnv) harness.Check
 }
 
 // removeTrustRecords deletes the hooks.state table Codex wrote when the user
-// trusted each removed hook: its header line and its own key lines only, so
-// comments, blank lines and every other table stay. Lines inside a multi-line
-// string are never read as headers.
+// trusted each removed hook: from its header to the next table header or the end
+// of the file. Blank and comment lines that end the record stay, since they
+// precede the next table. Lines inside a multi-line string or array are never
+// read as headers.
 func removeTrustRecords(env harness.InstallEnv, hooksFile string, refs []string) error {
 	if len(refs) == 0 {
 		return nil
@@ -300,51 +301,69 @@ func removeTrustRecords(env harness.InstallEnv, hooksFile string, refs []string)
 	for _, r := range refs {
 		drop[`[hooks.state."`+hooksFile+`:session_start:`+r+`"]`] = true
 	}
-	var out []string
-	inStr, skip, changed := "", false, false
-	for _, l := range strings.Split(string(b), "\n") {
+	var out, pending []string
+	inStr, skip, changed, depth := "", false, false, 0
+	for _, l := range strings.SplitAfter(string(b), "\n") {
 		t := strings.TrimSpace(l)
-		inside := inStr != ""
-		switch {
-		case !inside && drop[t]:
-			skip, changed = true, true
+		open := inStr != "" || depth > 0
+		if !open && strings.HasPrefix(t, "[") {
+			out = append(out, pending...)
+			pending, skip = nil, drop[t]
+			changed = changed || skip
+			if !skip {
+				out = append(out, l)
+			}
 			continue
-		case skip && (inside || keyRe.MatchString(l)):
-		default:
-			skip = false
 		}
-		inStr = tomlStringState(l, inStr)
-		if !skip {
+		var d int
+		inStr, d = tomlStringState(l, inStr)
+		depth += d
+		switch {
+		case !skip:
 			out = append(out, l)
+		case !open && (t == "" || strings.HasPrefix(t, "#")):
+			pending = append(pending, l)
+		default:
+			pending = nil
 		}
 	}
+	if skip && (inStr != "" || depth > 0) {
+		return fmt.Errorf("codex config %s: the trust record for the removed hook ends inside an unclosed array or string; fix or delete it by hand and retry", path)
+	}
+	out = append(out, pending...)
 	if !changed {
 		return nil
 	}
-	return harness.ReplaceFile(path, []byte(strings.Join(out, "\n")))
+	return harness.ReplaceFile(path, []byte(strings.Join(out, "")))
 }
 
 // tomlStringState is the multi-line string state ("", `"""` or `”'`) after
-// line, given the state before it. Backslashes escape in basic strings; a
-// quote inside a single-line string or after # opens nothing.
-func tomlStringState(line, in string) string {
+// line, given the state before it, and the net change in [ ] nesting depth on
+// the line. Backslashes escape in basic strings; a quote or bracket inside a
+// single-line string, a multi-line string or after # opens or closes nothing.
+func tomlStringState(line, in string) (string, int) {
+	depth := 0
 	for i := 0; i < len(line); i++ {
 		c := line[i]
 		switch in {
 		case `"""`:
 			if c == '\\' {
 				i++
-			} else if strings.HasPrefix(line[i:], `"""`) {
-				in, i = "", i+2
+			} else if n := quoteRun(line[i:], '"'); n >= 3 {
+				in, i = "", i+n-1
 			}
 		case `'''`:
-			if strings.HasPrefix(line[i:], `'''`) {
-				in, i = "", i+2
+			if n := quoteRun(line[i:], '\''); n >= 3 {
+				in, i = "", i+n-1
 			}
 		default:
 			switch {
 			case c == '#':
-				return ""
+				return "", depth
+			case c == '[':
+				depth++
+			case c == ']':
+				depth--
 			case strings.HasPrefix(line[i:], `"""`):
 				in, i = `"""`, i+2
 			case strings.HasPrefix(line[i:], `'''`):
@@ -361,5 +380,15 @@ func tomlStringState(line, in string) string {
 			}
 		}
 	}
-	return in
+	return in, depth
+}
+
+// quoteRun is the length, capped at 5, of the run of q at the start of s: a
+// multi-line string ends at the last three quotes of a run of 3 to 5.
+func quoteRun(s string, q byte) int {
+	n := 0
+	for n < len(s) && n < 5 && s[n] == q {
+		n++
+	}
+	return n
 }
