@@ -106,6 +106,47 @@ agent-id)
 	}
 	printf '%s\n' "$ids"
 	;;
+assert-own-delivery-mode)
+	python3 -I - "${2:?usage: harness-compat-live.sh assert-own-delivery-mode ROLLOUT_DIR SESSION_REF AGENT_ID}" "${3:?}" "${4:?}" <<'PY'
+import glob, json, sys
+root, ref, agent = sys.argv[1], sys.argv[2], sys.argv[3]
+files = [f for f in glob.glob(root + "/**/rollout-*.jsonl", recursive=True) if f.endswith("-" + ref + ".jsonl")]
+
+def agents_of(v):
+    if isinstance(v, dict):
+        if isinstance(v.get("agents"), list):
+            return v["agents"]
+        for x in v.values():
+            r = agents_of(x)
+            if r is not None:
+                return r
+    elif isinstance(v, list):
+        for x in v:
+            r = agents_of(x)
+            if r is not None:
+                return r
+    elif isinstance(v, str):
+        try:
+            return agents_of(json.loads(v))
+        except ValueError:
+            return None
+    return None
+
+for f in files:
+    for line in open(f, errors="replace"):
+        try:
+            item = json.loads(line).get("payload", {}).get("item") or {}
+        except ValueError:
+            continue
+        if item.get("type") == "McpToolCall" and item.get("server") == "crosstalk" and item.get("tool") == "list_agents" and item.get("status") == "completed":
+            for a in agents_of(item.get("result")) or []:
+                if isinstance(a, dict) and a.get("agent_id") == agent and str(a.get("delivery_mode", "")).startswith("queue-wake"):
+                    print("PASS delivery mode: the tab's own list_agents shows " + agent + " as queue-wake")
+                    sys.exit(0)
+print("FAIL delivery mode: no list_agents result in the tab's rollout shows " + agent + " as queue-wake")
+sys.exit(1)
+PY
+	;;
 assert-delivery-mode)
 	jsonl="${2:?usage: harness-compat-live.sh assert-delivery-mode CLAUDE_JSONL CODEX_ID}"
 	id="${3:?}"
@@ -301,7 +342,7 @@ leg)
 	finish() {
 		for p in $pids; do kill "$p" 2>/dev/null || true; done
 		mkdir -p "$logs/state"
-		cp -R "$state/agents" "$state/journal" "$logs/state/" 2>/dev/null || true
+		cp -R "$state/agents" "$state/journal" "$state/codex-wakes" "$state/codex-claims" "$logs/state/" 2>/dev/null || true
 		cp "$home/.codex/config.toml" "$logs/codex-config.toml" 2>/dev/null || true
 		[ -d "$home/.codex/sessions" ] && cp -R "$home/.codex/sessions" "$logs/codex-sessions" 2>/dev/null || true
 		jq -nc --arg leg "$leg" --argjson ok "$ok" '{leg: $leg, ok: $ok}' >"$logs/result.json"
@@ -468,7 +509,7 @@ PY
 			sleep 5
 		done
 		cat "$logs/assert-mailbox.log"
-		"$0" assert-delivery-mode "$logs/claude-send.jsonl" "$codex_id"
+		"$0" assert-own-delivery-mode "$home/.codex/sessions" "$(session_of "$codex_id")" "$codex_id"
 		"$0" assert-wake "$state" "$(session_of "$codex_id")"
 		;;
 	cross)
