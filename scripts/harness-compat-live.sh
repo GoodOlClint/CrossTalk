@@ -100,25 +100,19 @@ def agents_of(v):
             return None
     return None
 
-calls, outputs = set(), {}
 for line in open(files[0], errors="replace"):
     try:
-        p = json.loads(line).get("payload", {})
+        item = json.loads(line).get("payload", {}).get("item") or {}
     except ValueError:
         continue
-    if p.get("type") == "function_call" and p.get("name") == "list_agents":
-        calls.add(p.get("call_id"))
-    elif p.get("type") == "function_call_output" and p.get("call_id"):
-        outputs.setdefault(p["call_id"], p.get("output"))
-for line in open(files[0], errors="replace"):
-    try:
-        p = json.loads(line).get("payload", {})
-    except ValueError:
-        continue
-    if p.get("type") == "function_call" and p.get("name") == "list_agents" and p.get("call_id") in outputs:
-        agents = agents_of(outputs[p["call_id"]])
+    if item.get("type") == "McpToolCall" and item.get("server") == "crosstalk" and item.get("tool") == "list_agents":
+        if item.get("status") != "completed":
+            print("FAIL one-row: the first list_agents call ended " + str(item.get("status")))
+            sys.exit(1)
+        agents = agents_of(item.get("result"))
         if agents is None:
-            continue
+            print("FAIL one-row: the first list_agents output could not be read")
+            sys.exit(1)
         n = sum(1 for a in agents if isinstance(a, dict) and a.get("harness") == "codex")
         print(("PASS" if n == 1 else "FAIL") + " one-row: the receiver's first list_agents shows " + str(n) + " codex row(s)")
         sys.exit(0 if n == 1 else 1)

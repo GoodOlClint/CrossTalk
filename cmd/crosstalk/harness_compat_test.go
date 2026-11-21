@@ -144,28 +144,42 @@ func TestHarnessCompatAssertOneCodexRow(t *testing.T) {
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 not on PATH")
 	}
-	line := func(payload map[string]any) string {
-		b, _ := json.Marshal(map[string]any{"payload": payload})
+	// Codex records an MCP call as an item_completed McpToolCall under payload.item, with the tool result in
+	// structuredContent and, as text, in content (observed in a live rollout, Codex 0.171.0).
+	call := func(tool, status string, result any) string {
+		b, _ := json.Marshal(map[string]any{"payload": map[string]any{"type": "item_completed", "item": map[string]any{"type": "McpToolCall", "server": "crosstalk", "tool": tool, "status": status, "result": result}}})
 		return string(b) + "\n"
 	}
-	listing := func(callID string, harnesses ...string) string {
-		var rows []string
+	listing := func(harnesses ...string) string {
+		var rows []map[string]any
 		for _, h := range harnesses {
-			rows = append(rows, `{"harness":"`+h+`","crosstalk":true}`)
+			rows = append(rows, map[string]any{"harness": h, "crosstalk": true})
 		}
-		return line(map[string]any{"type": "function_call", "name": "list_agents", "call_id": callID}) +
-			line(map[string]any{"type": "function_call_output", "call_id": callID, "output": `{"agents":[` + strings.Join(rows, ",") + `]}`})
+		text, _ := json.Marshal(map[string]any{"agents": rows})
+		return call("list_agents", "completed", map[string]any{"content": []map[string]any{{"type": "text", "text": string(text)}}, "structuredContent": map[string]any{"agents": rows}})
+	}
+	textOnly := func(harnesses ...string) string {
+		var rows []map[string]any
+		for _, h := range harnesses {
+			rows = append(rows, map[string]any{"harness": h})
+		}
+		text, _ := json.Marshal(map[string]any{"agents": rows})
+		return call("list_agents", "completed", map[string]any{"content": []map[string]any{{"type": "text", "text": string(text)}}})
 	}
 	cases := []struct {
 		name  string
 		files map[string]string
 		want  int
 	}{
-		{"lone codex row", map[string]string{"recv": listing("c1", "codex", "claude")}, 0},
-		{"helper thread shows as a second row", map[string]string{"recv": listing("c1", "codex", "codex")}, 1},
-		{"another thread's one-row listing does not count", map[string]string{"recv": listing("c1", "codex", "codex"), "other": listing("c2", "codex")}, 1},
-		{"receiver has no rollout yet", map[string]string{"other": listing("c2", "codex")}, 2},
-		{"agents text from some other tool is not a list_agents result", map[string]string{"recv": line(map[string]any{"type": "function_call_output", "call_id": "x", "output": `{"agents":[{"harness":"codex"}]}`})}, 2},
+		{"lone codex row", map[string]string{"recv": listing("codex", "claude")}, 0},
+		{"result carried only as content text", map[string]string{"recv": textOnly("codex")}, 0},
+		{"ephemeral helper thread shows as a second row", map[string]string{"recv": listing("codex", "codex")}, 1},
+		{"another thread's one-row listing does not count", map[string]string{"recv": listing("codex", "codex"), "other": listing("codex")}, 1},
+		{"first list_agents output is unreadable", map[string]string{"recv": call("list_agents", "completed", map[string]any{"content": []map[string]any{{"type": "text", "text": "not json"}}})}, 1},
+		{"receiver has no rollout yet", map[string]string{"other": listing("codex")}, 2},
+		{"another tool's result is not a list_agents result", map[string]string{"recv": call("receive_message", "completed", map[string]any{"structuredContent": map[string]any{"agents": []map[string]any{{"harness": "codex"}}}})}, 2},
+		{"first list_agents call failed", map[string]string{"recv": call("list_agents", "failed", nil)}, 1},
+		{"a failed first call is not masked by a good retry", map[string]string{"recv": call("list_agents", "failed", nil) + listing("codex")}, 1},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
