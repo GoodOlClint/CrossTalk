@@ -286,7 +286,7 @@ func TestListAgentsTimeoutBound(t *testing.T) {
 			if d < budget {
 				t.Fatalf("list_agents returned after %v, before the %v budget, with %d stalled peers", d, budget, n)
 			}
-			if d > 20*budget {
+			if d > 3*budget {
 				t.Fatalf("list_agents took %v with %d stalled peers, budget %v: the budget did not bound it", d, n, budget)
 			}
 			var first, last time.Time
