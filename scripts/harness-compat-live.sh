@@ -37,6 +37,44 @@ wait_agent() {
 }
 
 case "${1:-}" in
+write-codex-config)
+	home="${2:?usage: harness-compat-live.sh write-codex-config HOME MODEL}"
+	model="${3:?usage: harness-compat-live.sh write-codex-config HOME MODEL}"
+	mkdir -p "$home/.codex"
+	cat >"$home/.codex/config.toml" <<EOF
+model = "$model"
+model_provider = "openrouter"
+
+[model_providers.openrouter]
+name = "OpenRouter"
+base_url = "https://openrouter.ai/api/v1"
+env_key = "OPENROUTER_API_KEY"
+wire_api = "responses"
+
+[projects."$home/work"]
+trust_level = "trusted"
+EOF
+	;;
+stage-logs)
+	python3 -I - "${2:?usage: harness-compat-live.sh stage-logs RAW DEST}" "${3:?}" <<'PY'
+import os, shutil, sys
+raw, dest = sys.argv[1], sys.argv[2]
+key = os.environ.get("OPENROUTER_API_KEY", "")
+try:
+    shutil.rmtree(dest, ignore_errors=True)
+    for root, _, files in os.walk(raw):
+        out = os.path.join(dest, os.path.relpath(root, raw))
+        os.makedirs(out, exist_ok=True)
+        for f in files:
+            b = open(os.path.join(root, f), "rb").read()
+            if key:
+                b = b.replace(key.encode(), b"***")
+            open(os.path.join(out, f), "wb").write(b)
+except Exception as e:
+    shutil.rmtree(dest, ignore_errors=True)
+    sys.exit("stage-logs failed: %s" % e)
+PY
+	;;
 assert-roundtrip)
 	state="${2:?usage: harness-compat-live.sh assert-roundtrip STATE}"
 	rc=0
@@ -49,7 +87,8 @@ live-linux)
 	: "${OPENROUTER_API_KEY:?}" "${CLAUDE_MODEL:?}" "${CODEX_MODEL:?}"
 	export HOME="$home"
 	state="$home/.local/state/crosstalk"
-	logs="${LIVE_LOGS:-$home/live-logs}"
+	logs="$home/raw"
+	out="${LIVE_LOGS:?}"
 	mkdir -p "$logs" "$home/work"
 	xt="${CROSSTALK_BIN:?}"
 	pids=
@@ -58,15 +97,19 @@ live-linux)
 		mkdir -p "$logs/state"
 		cp -R "$state/agents" "$state/journal" "$logs/state/" 2>/dev/null || true
 		cp "$home/.codex/config.toml" "$logs/codex-config.toml" 2>/dev/null || true
-		for f in "$logs"/*.log "$logs"/*.jsonl; do
-			[ -f "$f" ] && sed -i "s/$OPENROUTER_API_KEY/***/g" "$f"
-		done
+		"$0" stage-logs "$logs" "$out" || true
 	}
 	trap finish EXIT
 
+	"$0" write-codex-config "$home" "$CODEX_MODEL"
 	"$xt" install claude --yes </dev/null >"$logs/install-claude.log" 2>&1
 	"$xt" install codex --yes </dev/null >"$logs/install-codex.log" 2>&1
-	cat >>"$home/.codex/config.toml" <<EOF
+	python3 -I - "$home/.codex/config.toml" "$CODEX_MODEL" <<'PY'
+import sys, tomllib
+c = tomllib.load(open(sys.argv[1], "rb"))
+assert c.get("model") == sys.argv[2] and c.get("model_provider") == "openrouter", "root model keys missing"
+assert "crosstalk" in c.get("mcp_servers", {}), "crosstalk not registered"
+PY
 model = "$CODEX_MODEL"
 model_provider = "openrouter"
 

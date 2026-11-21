@@ -30,6 +30,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       changed: ${{ steps.detect.outputs.changed }}
+      pair: ${{ steps.detect.outputs.pair }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -45,6 +46,7 @@ jobs:
           changed="$(scripts/harness-compat.sh detect .github/harness-compat.json "$HARNESS" "$VERSION" "$FORCE" "$RECORDED")"
           echo "changed=$changed" >> "$GITHUB_OUTPUT"
           echo "changed: $changed"
+          echo "pair=$(scripts/harness-compat.sh pair "$changed")" >> "$GITHUB_OUTPUT"
 
   tier0:
     needs: detect
@@ -111,11 +113,14 @@ jobs:
     steps:
       - id: gate
         run: |
-          if [ -n "$OPENROUTER_API_KEY" ] && [ -n "$CLAUDE_MODEL" ] && [ -n "$CODEX_MODEL" ]; then
-            echo "ran=true" >> "$GITHUB_OUTPUT"
-          else
+          if [ -z "$OPENROUTER_API_KEY" ]; then
             echo "ran=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::live-linux skipped: OPENROUTER_API_KEY or a model variable is not set"
+            echo "::notice::live-linux skipped: OPENROUTER_API_KEY is not set"
+          elif [ -z "$CLAUDE_MODEL" ] || [ -z "$CODEX_MODEL" ]; then
+            echo "::error::HARNESS_COMPAT_CLAUDE_MODEL and HARNESS_COMPAT_CODEX_MODEL must both be set when OPENROUTER_API_KEY is"
+            exit 1
+          else
+            echo "ran=true" >> "$GITHUB_OUTPUT"
           fi
       - if: steps.gate.outputs.ran == 'true'
         uses: actions/checkout@v7
@@ -129,11 +134,11 @@ jobs:
       - name: Install both harnesses
         if: steps.gate.outputs.ran == 'true'
         env:
-          CHANGED: ${{ needs.detect.outputs.changed }}
+          PAIR: ${{ needs.detect.outputs.pair }}
         run: |
           set -eu
-          codex="$(printf '%s' "$CHANGED" | jq -r '[.[] | select(.harness == "codex") | .version][0] // "latest"')"
-          claude="$(printf '%s' "$CHANGED" | jq -r '[.[] | select(.harness == "claude-code") | .version][0] // "latest"')"
+          codex="$(printf '%s' "$PAIR" | jq -r '.codex')"
+          claude="$(printf '%s' "$PAIR" | jq -r '.["claude-code"]')"
           npm install -g "@openai/codex@$codex" "@anthropic-ai/claude-code@$claude"
           codex --version
           claude --version

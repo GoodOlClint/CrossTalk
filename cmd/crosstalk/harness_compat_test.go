@@ -85,7 +85,7 @@ func TestHarnessCompatWorkflowSafe(t *testing.T) {
 		t.Error("only live-linux may read secrets or enter an environment")
 	}
 	live := w[i:]
-	for _, want := range []string{"environment: harness-compat\n", "secrets.OPENROUTER_API_KEY", "ran=false", "steps.gate.outputs.ran == 'true'"} {
+	for _, want := range []string{"environment: harness-compat\n", "secrets.OPENROUTER_API_KEY", "ran=false", "must both be set when OPENROUTER_API_KEY is", "steps.gate.outputs.ran == 'true'"} {
 		if !strings.Contains(live, want) {
 			t.Errorf("live-linux lacks %q", want)
 		}
@@ -181,5 +181,78 @@ func TestHarnessCompatTier0CodexFailsClosed(t *testing.T) {
 				t.Fatalf("err = %v, want ok=%v\n%s", err, c.ok, out)
 			}
 		})
+	}
+}
+
+func TestHarnessCompatWriteCodexConfigKeepsRootKeys(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not on PATH")
+	}
+	home := t.TempDir()
+	root := releaseRepoRoot(t)
+	if out, err := exec.Command(filepath.Join(root, "scripts", "harness-compat-live.sh"), "write-codex-config", home, "vendor/model").CombinedOutput(); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	cfg := filepath.Join(home, ".codex", "config.toml")
+	f, err := os.OpenFile(cfg, os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString("\n[mcp_servers.crosstalk]\ncommand = \"/x/crosstalk\"\nargs = [\"mcp\"]\n"); err != nil {
+		t.Fatal(err)
+	}
+	f.Close()
+	py := "import sys,tomllib\nc=tomllib.load(open(sys.argv[1],'rb'))\nassert c['model']=='vendor/model' and c['model_provider']=='openrouter' and 'crosstalk' in c['mcp_servers'] and c['model_providers']['openrouter']['wire_api']=='responses'\n"
+	if out, err := exec.Command("python3", "-I", "-c", py, cfg).CombinedOutput(); err != nil {
+		t.Fatalf("root keys lost: %v\n%s", err, out)
+	}
+}
+
+func TestHarnessCompatStageLogsScrubsNestedKey(t *testing.T) {
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not on PATH")
+	}
+	raw, dest := t.TempDir(), filepath.Join(t.TempDir(), "out")
+	const key = "sk-or-v1-dummykey"
+	if err := os.MkdirAll(filepath.Join(raw, "state", "journal"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"state/journal/a.jsonl", "top.log"} {
+		if err := os.WriteFile(filepath.Join(raw, f), []byte(`{"text":"leak `+key+`"}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cmd := exec.Command(filepath.Join(releaseRepoRoot(t), "scripts", "harness-compat-live.sh"), "stage-logs", raw, dest)
+	cmd.Env = append(os.Environ(), "OPENROUTER_API_KEY="+key)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	for _, f := range []string{"state/journal/a.jsonl", "top.log"} {
+		b, err := os.ReadFile(filepath.Join(dest, f))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(b), key) || !strings.Contains(string(b), "***") {
+			t.Errorf("%s not scrubbed: %s", f, b)
+		}
+	}
+}
+
+func TestHarnessCompatPair(t *testing.T) {
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not on PATH")
+	}
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "npm"), []byte("#!/bin/sh\necho 5.6.7\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(filepath.Join(releaseRepoRoot(t), "scripts", "harness-compat.sh"), "pair", `[{"harness":"codex","version":"0.171.0"}]`)
+	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if got, want := strings.TrimSpace(string(out)), `{"codex":"0.171.0","claude-code":"5.6.7"}`; got != want {
+		t.Fatalf("got %s, want %s", got, want)
 	}
 }

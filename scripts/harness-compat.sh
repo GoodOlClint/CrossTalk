@@ -50,6 +50,21 @@ detect)
 	done
 	printf '%s\n' "$out"
 	;;
+pair)
+	usage="usage: harness-compat.sh pair CHANGED_JSON"
+	changed="${2:?$usage}"
+	out="{}"
+	for h in codex claude-code; do
+		v="$(printf '%s' "$changed" | jq -r --arg h "$h" '[.[] | select(.harness == $h) | .version][0] // empty')"
+		[ -n "$v" ] || v="$(npm view "$(pkg "$h")" version)"
+		semver "$v" || {
+			echo "not a version for $h: $v" >&2
+			exit 1
+		}
+		out="$(printf '%s' "$out" | jq -c --arg h "$h" --arg v "$v" '. + {($h): $v}')"
+	done
+	printf '%s\n' "$out"
+	;;
 tier0-claude)
 	usage="usage: harness-compat.sh tier0-claude HOME"
 	home="${2:?$usage}"
@@ -106,7 +121,7 @@ tier0-codex)
 	echo "$q"
 	;;
 *)
-	echo "usage: harness-compat.sh detect|tier0-claude|tier0-codex ..." >&2
+	echo "usage: harness-compat.sh detect|pair|tier0-claude|tier0-codex ..." >&2
 	exit 2
 	;;
 esac
