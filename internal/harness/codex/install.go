@@ -372,9 +372,6 @@ func configStep(env harness.InstallEnv) harness.Step {
 // plugin add rewrites config.toml.
 func (h *Harness) InstallSteps(env harness.InstallEnv) []harness.Step {
 	steps := []harness.Step{pluginStep(env), configStep(env)}
-	if l, ok := legacyStep(env); ok {
-		steps = append(steps, l)
-	}
 	if env.Experimental[QueueWakeOption] {
 		steps = append(steps, queueWakeStep(env))
 	}
