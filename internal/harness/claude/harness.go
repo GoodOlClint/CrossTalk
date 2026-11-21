@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -99,13 +100,24 @@ func NewHarness(opt HarnessOptions) (*Harness, error) {
 // first appears (it may not exist yet at shim start), after /clear or
 // /resume, on a harness rename, and while a fallback or retired registration
 // leaves it so. A failure is retried every poll and logged once per session,
-// name and error.
+// name and error. A session file that exists but cannot be read or parsed is
+// logged once per distinct error, reset by a good read; a missing file is
+// silent.
 func (h *Harness) ServeClaims(ctx context.Context, r harness.SessionRegistrar) error {
 	tick := time.NewTicker(h.interval)
 	defer tick.Stop()
-	var failed string
+	var failed, readFailed string
 	for {
-		if s, err := h.a.readSession(h.ppid); err == nil && !h.held(s) {
+		s, err := h.a.readSession(h.ppid)
+		if err != nil && !errors.Is(err, ErrNoSession) {
+			if e := err.Error(); e != readFailed && ctx.Err() == nil {
+				readFailed = e
+				slog.Warn("claude: reading session file", "ppid", h.ppid, "err", err)
+			}
+		} else if err == nil {
+			readFailed = ""
+		}
+		if err == nil && !h.held(s) {
 			if err := r.RegisterSession(ctx, harness.RequestContext{ParentPID: h.ppid}, s.Cwd); err != nil {
 				if f := s.SessionID + "\x00" + s.Name + "\x00" + err.Error(); f != failed && ctx.Err() == nil {
 					failed = f
@@ -188,11 +200,11 @@ func (h *Harness) Identify(_ context.Context, req harness.RequestContext) (harne
 		return harness.Session{}, false, nil
 	}
 	if err != nil {
-		return harness.Session{}, false, err
+		return harness.Session{}, false, fmt.Errorf("claude: session file %d.json: %w", req.ParentPID, err)
 	}
 	var s Session
 	if err := json.Unmarshal(b, &s); err != nil {
-		return harness.Session{}, false, err
+		return harness.Session{}, false, fmt.Errorf("claude: session file %d.json: %w", req.ParentPID, err)
 	}
 	if s.SessionID == "" {
 		return harness.Session{}, false, nil

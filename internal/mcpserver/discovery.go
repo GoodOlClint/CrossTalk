@@ -78,7 +78,9 @@ type RemoteLister interface {
 // so it appears in its own listing, and a binding failure becomes a notice.
 func (s *Server) listAgentsTool(ctx context.Context, req *mcp.CallToolRequest, _ listIn) (*mcp.CallToolResult, any, error) {
 	var notice, self string
-	if c, err := s.resolve(ctx, req); err == nil && c.bound() {
+	if c, err := s.resolve(ctx, req); err != nil {
+		notice = "not registered: " + describe(err)
+	} else if c.bound() {
 		if a, e := s.agent(ctx, c, true); e != nil {
 			notice = "not registered: " + describe(e)
 		} else {

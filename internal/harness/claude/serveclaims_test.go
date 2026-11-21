@@ -3,6 +3,7 @@ package claude
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -233,4 +234,112 @@ func TestServeClaimsPinnedFallbackRetries(t *testing.T) {
 	pinName(t, stateDir, "sess-a", "alice")
 	dir := serveClaimsPinned(t, stateDir, "sess-a", "bob", "bob-1234")
 	eventually(t, "retries under a fallback", func() bool { return dir.count("sess-a") >= 3 })
+}
+
+type logBuf struct {
+	mu sync.Mutex
+	n  []string
+}
+
+func (l *logBuf) Enabled(context.Context, slog.Level) bool { return true }
+func (l *logBuf) Handle(_ context.Context, r slog.Record) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.n = append(l.n, r.Message)
+	return nil
+}
+func (l *logBuf) WithAttrs([]slog.Attr) slog.Handler { return l }
+func (l *logBuf) WithGroup(string) slog.Handler      { return l }
+func (l *logBuf) count(msg string) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	c := 0
+	for _, m := range l.n {
+		if m == msg {
+			c++
+		}
+	}
+	return c
+}
+
+const readWarn = "claude: reading session file"
+
+// runPoll runs ServeClaims over sessions for ~40 polls and returns the log.
+func runPoll(t *testing.T, sessions string) *logBuf {
+	t.Helper()
+	lb := &logBuf{}
+	old := slog.Default()
+	slog.SetDefault(slog.New(lb))
+	t.Cleanup(func() { slog.SetDefault(old) })
+	dir := &fakeDir{regName: "bob", calls: map[string]int{}}
+	h, err := NewHarness(HarnessOptions{SessionsDir: sessions, PPID: 4100, PollInterval: time.Millisecond, Directory: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Millisecond)
+	defer cancel()
+	h.ServeClaims(ctx, &fakeReg{dir: dir, sessions: sessions})
+	return lb
+}
+
+// No session file yet is the normal start: nothing is logged.
+func TestServeClaimsMissingSessionFileIsSilent(t *testing.T) {
+	if n := runPoll(t, t.TempDir()).count(readWarn); n != 0 {
+		t.Fatalf("%d warnings for a missing session file, want 0", n)
+	}
+}
+
+// An unreadable, malformed or mismatched session file is logged once, not on
+// every poll.
+func TestServeClaimsBadSessionFileLoggedOnce(t *testing.T) {
+	write := func(t *testing.T, dir, body string) {
+		if err := os.WriteFile(filepath.Join(dir, "4100.json"), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cases := map[string]func(t *testing.T, dir string){
+		"not json":  func(t *testing.T, dir string) { write(t, dir, "{nope") },
+		"wrong pid": func(t *testing.T, dir string) { write(t, dir, `{"pid":1,"sessionId":"s"}`) },
+		"empty id":  func(t *testing.T, dir string) { write(t, dir, `{"pid":4100,"sessionId":""}`) },
+		"unreadable": func(t *testing.T, dir string) {
+			write(t, dir, `{"pid":4100,"sessionId":"s"}`)
+			if err := os.Chmod(filepath.Join(dir, "4100.json"), 0); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := os.ReadFile(filepath.Join(dir, "4100.json")); err == nil {
+				t.Skip("file mode 000 is readable (root)")
+			}
+		},
+	}
+	for name, setup := range cases {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			setup(t, dir)
+			if n := runPoll(t, dir).count(readWarn); n != 1 {
+				t.Fatalf("%d warnings over many polls, want 1", n)
+			}
+		})
+	}
+}
+
+// A good read resets the guard: the same error after recovery is logged again.
+func TestServeClaimsReadWarningResetsAfterGoodRead(t *testing.T) {
+	sessions := t.TempDir()
+	path := filepath.Join(sessions, "4100.json")
+	os.WriteFile(path, []byte("{nope"), 0o600)
+	lb := &logBuf{}
+	old := slog.Default()
+	slog.SetDefault(slog.New(lb))
+	t.Cleanup(func() { slog.SetDefault(old) })
+	dir := &fakeDir{regName: "bob", calls: map[string]int{}}
+	h, _ := NewHarness(HarnessOptions{SessionsDir: sessions, PPID: 4100, PollInterval: time.Millisecond, Directory: dir})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); h.ServeClaims(ctx, &fakeReg{dir: dir, sessions: sessions}) }()
+	defer func() { cancel(); <-done }()
+	eventually(t, "first warning", func() bool { return lb.count(readWarn) == 1 })
+	writeClaimSession(t, sessions, 4100, "sess-a", "bob")
+	eventually(t, "good read registers", func() bool { return dir.count("sess-a") == 1 })
+	os.WriteFile(path, []byte("{nope"), 0o600)
+	eventually(t, "second warning after recovery", func() bool { return lb.count(readWarn) == 2 })
 }
