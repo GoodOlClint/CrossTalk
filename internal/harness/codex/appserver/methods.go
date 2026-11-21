@@ -108,7 +108,7 @@ type Thread struct {
 
 // IsSubAgent reports a thread Codex started for itself: a subAgent source
 // (review, compact, memory_consolidation, thread_spawn, ...) or a parent
-// thread. Ephemeral alone does not count here; discovery hides an ephemeral
+// thread. Ephemeral alone does not count here; discovery hides an idle ephemeral
 // thread separately, unless a CrossTalk descriptor binds it.
 func (t Thread) IsSubAgent() bool {
 	if t.ParentThreadID != nil && *t.ParentThreadID != "" {

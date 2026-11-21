@@ -730,6 +730,7 @@ func TestLoadedThreadsHidesEphemeralUnboundHelpers(t *testing.T) {
 	s.AddThread(&appservertest.Thread{ID: thread, Cwd: "/work", Loaded: true, Source: `"vscode"`})
 	s.AddThread(&appservertest.Thread{ID: "helper-ephemeral", Cwd: "/work", Loaded: true, Source: `"vscode"`, Ephemeral: true})
 	s.AddThread(&appservertest.Thread{ID: "bound-ephemeral", Cwd: "/work", Loaded: true, Source: `"vscode"`, Ephemeral: true})
+	s.AddThread(&appservertest.Thread{ID: "active-ephemeral", Cwd: "/work", Loaded: true, Source: `"vscode"`, Ephemeral: true, Turns: []appserver.Turn{{ID: "t1", Status: appserver.TurnInProgress}}})
 	s.AddThread(&appservertest.Thread{ID: "plain", Cwd: "/work", Loaded: true, Source: `"cli"`})
 	dir := dirFake{{Harness: "codex", SessionRef: "bound-ephemeral"}}
 	a := &codex.Adapter{ControlSocket: s.Endpoint(), Directory: dir}
@@ -738,7 +739,7 @@ func TestLoadedThreadsHidesEphemeralUnboundHelpers(t *testing.T) {
 		ids = append(ids, lt.ID)
 	}
 	slices.Sort(ids)
-	if want := []string{thread, "bound-ephemeral", "plain"}; !slices.Equal(ids, want) {
+	if want := []string{thread, "active-ephemeral", "bound-ephemeral", "plain"}; !slices.Equal(ids, want) {
 		t.Fatalf("LoadedThreads ids = %v, want %v", ids, want)
 	}
 }
