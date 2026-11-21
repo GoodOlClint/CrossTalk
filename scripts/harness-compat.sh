@@ -69,19 +69,31 @@ legs)
 	usage="usage: harness-compat.sh legs CHANGED_JSON"
 	printf '%s' "${2:?$usage}" | jq -c '[.[] | (if .harness == "claude-code" then {leg: "claude", harness: .harness, version: .version} elif .harness == "codex" then {leg: "codex-linux", harness: .harness, version: .version} else empty end)]'
 	;;
+step-status)
+	usage="usage: harness-compat.sh step-status JOBS_FILE JOB STEP"
+	jq -rs --arg j "${3:?$usage}" --arg s "${4:?$usage}" '
+		map(select(.name == $j)) | if length == 0 then "fail" else
+		.[0] as $job | ($job.steps // [] | map(select(.name == $s)) | .[0].conclusion // "skipped") as $c |
+		if $job.conclusion == "success" and $c == "success" then "pass"
+		elif $c == "skipped" and $job.conclusion != "failure" then "skipped"
+		else "fail" end end' "${2:?$usage}"
+	;;
+legs-passed)
+	usage="usage: harness-compat.sh legs-passed JOBS_FILE LEGS_JSON"
+	for leg in $(printf '%s' "${3:?$usage}" | jq -r '.[].leg'); do
+		[ "$("$0" step-status "${2:?$usage}" "harness-$leg" "Run the leg")" = pass ] || exit 1
+	done
+	;;
 report)
-	usage="usage: harness-compat.sh report DIR LEGS_JSON CROSS_RESULT"
-	dir="${2:?$usage}"
+	usage="usage: harness-compat.sh report JOBS_FILE LEGS_JSON"
+	jobs="${2:?$usage}"
 	legs="${3:?$usage}"
-	cross="${4:?$usage}"
 	res="{}"
 	for leg in $(printf '%s' "$legs" | jq -r '.[].leg'); do
-		st=fail
-		f="$dir/result-$leg/result.json"
-		if [ -f "$f" ] && [ "$(jq -r '.ok' "$f")" = true ]; then st=pass; fi
+		st="$("$0" step-status "$jobs" "harness-$leg" "Run the leg")"
 		res="$(printf '%s' "$res" | jq -c --arg l "$leg" --arg s "$st" '. + {($l): $s}')"
 	done
-	case "$cross" in success) cross=pass ;; skipped) cross=skipped ;; *) cross=fail ;; esac
+	cross="$("$0" step-status "$jobs" cross "Ask each way between Claude and Codex")"
 	printf '%s' "$legs" | jq -c --argjson res "$res" --arg cross "$cross" '
 		(group_by(.harness) | map({key: .[0].harness, value: {version: .[0].version, legs: (map({key: .leg, value: $res[.leg]}) | from_entries), pass: (all(.[]; $res[.leg] == "pass"))}}) | from_entries) + {cross: $cross}'
 	;;
@@ -140,7 +152,7 @@ tier0-codex)
 	echo "$q"
 	;;
 *)
-	echo "usage: harness-compat.sh detect|pair|legs|report|tier0-claude|tier0-codex ..." >&2
+	echo "usage: harness-compat.sh detect|pair|legs|step-status|legs-passed|report|tier0-claude|tier0-codex ..." >&2
 	exit 2
 	;;
 esac
