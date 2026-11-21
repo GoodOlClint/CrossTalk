@@ -330,7 +330,7 @@ leg)
 		eval "exec $2<>\"\$fifo\""
 		(
 			cd "$home/work"
-			exec python3 "${PTYRUN:?}" "$logs/codex-$1.log" "$fifo" codex --no-daemon --dangerously-bypass-approvals-and-sandbox "$3"
+			exec python3 "${PTYRUN:?}" "$logs/codex-$1.log" "$fifo" codex --no-daemon --dangerously-bypass-hook-trust --dangerously-bypass-approvals-and-sandbox "$3"
 		) &
 		pids="$pids $!"
 	}
@@ -435,6 +435,14 @@ PY
 		dump_threads end
 		;;
 	codex-macos)
+		real="$(cd "$home" && pwd -P)"
+		case "$real" in
+		"$(cd /tmp && pwd -P)"/*) ;;
+		*)
+			echo "codex-macos runs Codex with hook trust bypassed, so its home must be a scratch directory under /tmp, not $real" >&2
+			exit 1
+			;;
+		esac
 		install_claude
 		install_codex queue
 		start_claude send 7 "$auth Call the crosstalk list_agents tool once, then reply READY."
