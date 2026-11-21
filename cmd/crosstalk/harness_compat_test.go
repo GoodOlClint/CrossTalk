@@ -1040,6 +1040,55 @@ func TestHarnessCompatMacosLegHelpers(t *testing.T) {
 		}
 	})
 
+	t.Run("check-staged needs the wake and claim records of the tested thread", func(t *testing.T) {
+		mk := func(wake, claim string) string {
+			d := t.TempDir()
+			for _, dir := range []string{"codex-wakes", "codex-claims"} {
+				if err := os.MkdirAll(filepath.Join(d, dir), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if wake != "" {
+				if err := os.WriteFile(filepath.Join(d, "codex-wakes", wake+".json"), []byte("{}"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if claim != "" {
+				if err := os.WriteFile(filepath.Join(d, "codex-claims", "123-456-"+claim+".json"), []byte("{}"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			return d
+		}
+		for name, c := range map[string]struct {
+			dir string
+			ok  bool
+		}{
+			"both records for the thread": {mk("th1", "th1"), true},
+			"no wake record":              {mk("", "th1"), false},
+			"no claim record":             {mk("th1", ""), false},
+			"records of another thread":   {mk("other", "other"), false},
+		} {
+			err := exec.Command(script, "check-staged", c.dir, "th1").Run()
+			if (err == nil) != c.ok {
+				t.Errorf("%s: err = %v, want ok=%v", name, err, c.ok)
+			}
+		}
+	})
+
+	t.Run("a successful macOS leg fails if its staged artifact lacks the records, and asks the tab for a fresh listing when needed", func(t *testing.T) {
+		b, err := os.ReadFile(script)
+		if err != nil {
+			t.Fatal(err)
+		}
+		src := string(b)
+		for _, want := range []string{`check-staged "$logs/state" "$tab_ref"`, `[ "$staged" -eq 0 ] || exit 1`, `Call the crosstalk list_agents tool once more." >&8`} {
+			if !strings.Contains(src, want) {
+				t.Errorf("script lacks %q", want)
+			}
+		}
+	})
+
 	t.Run("the macOS leg asserts the mode from the tab's own view and stages the wake and claim records", func(t *testing.T) {
 		b, err := os.ReadFile(script)
 		if err != nil {

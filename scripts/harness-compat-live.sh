@@ -106,6 +106,18 @@ agent-id)
 	}
 	printf '%s\n' "$ids"
 	;;
+check-staged)
+	d="${2:?usage: harness-compat-live.sh check-staged STAGED_STATE_DIR SESSION_REF}"
+	ref="${3:?}"
+	[ -f "$d/codex-wakes/$ref.json" ] || {
+		echo "staged artifact lacks the wake generation record for $ref" >&2
+		exit 1
+	}
+	ls "$d"/codex-claims/*-"$ref".json >/dev/null 2>&1 || {
+		echo "staged artifact lacks the claim record for $ref" >&2
+		exit 1
+	}
+	;;
 assert-own-delivery-mode)
 	python3 -I - "${2:?usage: harness-compat-live.sh assert-own-delivery-mode ROLLOUT_DIR SESSION_REF AGENT_ID}" "${3:?}" "${4:?}" <<'PY'
 import glob, json, sys
@@ -339,14 +351,21 @@ leg)
 	export CODEX_HOME
 	pids=
 	ok=false
+	tab_ref=
 	finish() {
 		for p in $pids; do kill "$p" 2>/dev/null || true; done
 		mkdir -p "$logs/state"
 		cp -R "$state/agents" "$state/journal" "$state/codex-wakes" "$state/codex-claims" "$logs/state/" 2>/dev/null || true
 		cp "$home/.codex/config.toml" "$logs/codex-config.toml" 2>/dev/null || true
 		[ -d "$home/.codex/sessions" ] && cp -R "$home/.codex/sessions" "$logs/codex-sessions" 2>/dev/null || true
+		staged=0
+		if [ "$ok" = true ] && [ "$leg" = codex-macos ]; then
+			"$0" check-staged "$logs/state" "$tab_ref" || staged=1
+		fi
+		[ "$staged" -eq 0 ] || ok=false
 		jq -nc --arg leg "$leg" --argjson ok "$ok" '{leg: $leg, ok: $ok}' >"$logs/result.json"
 		"$0" stage-logs "$logs" "$out" || true
+		[ "$staged" -eq 0 ] || exit 1
 	}
 	trap finish EXIT
 
@@ -497,7 +516,8 @@ PY
 		start_codex_nd tab 8 "$auth Call the crosstalk list_agents tool once, then finish your turn with one short sentence."
 		wait_n codex 1
 		codex_id="$(only_id codex)"
-		await_ready "$(session_of "$codex_id")"
+		tab_ref="$(session_of "$codex_id")"
+		await_ready "$tab_ref"
 		send_claude 7 "$auth Call the crosstalk list_agents tool and confirm that agent_id $codex_id appears. Then use the crosstalk send_message tool to send an inform to the agent whose agent_id is $codex_id with the text: compat-W1, please fetch your mail. Then say SENT."
 		w=0
 		until "$0" assert-mailbox "$state" "$claude_id" "$codex_id" >"$logs/assert-mailbox.log" 2>&1; do
@@ -509,8 +529,21 @@ PY
 			sleep 5
 		done
 		cat "$logs/assert-mailbox.log"
-		"$0" assert-own-delivery-mode "$home/.codex/sessions" "$(session_of "$codex_id")" "$codex_id"
-		"$0" assert-wake "$state" "$(session_of "$codex_id")"
+		if ! "$0" assert-own-delivery-mode "$home/.codex/sessions" "$tab_ref" "$codex_id" >"$logs/assert-mode.log" 2>&1; then
+			# The tab's startup listing can precede the claim being accepted; ask for a fresh one by typing into the tab.
+			printf '%s\r' "Call the crosstalk list_agents tool once more." >&8
+			w=0
+			until "$0" assert-own-delivery-mode "$home/.codex/sessions" "$tab_ref" "$codex_id" >"$logs/assert-mode.log" 2>&1; do
+				w=$((w + 1))
+				[ "$w" -lt 24 ] || {
+					cat "$logs/assert-mode.log" >&2
+					exit 1
+				}
+				sleep 5
+			done
+		fi
+		cat "$logs/assert-mode.log"
+		"$0" assert-wake "$state" "$tab_ref"
 		;;
 	cross)
 		install_claude
