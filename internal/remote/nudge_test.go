@@ -132,11 +132,8 @@ func TestNudgeUnreachablePeerGetsNothingAndDoesNotDelayLocal(t *testing.T) {
 		case "ok":
 			return []AgentRow{{AgentID: "aaaaaaaaaaaaaaaa", CrossTalk: true, Messageable: true}}, nil
 		}
-		select {
-		case <-ctx.Done():
-		case <-release:
-		}
-		return nil, ctx.Err()
+		<-release
+		return nil, errors.New("released")
 	}
 	localAt := make(chan time.Time, 1)
 	base := d.SendLocal
@@ -145,7 +142,7 @@ func TestNudgeUnreachablePeerGetsNothingAndDoesNotDelayLocal(t *testing.T) {
 		return base(x, text)
 	}
 	start := time.Now()
-	SendAddressNudge(context.Background(), d, "lab", nudgeOld, nudgeNext)
+	res := SendAddressNudge(context.Background(), d, "lab", nudgeOld, nudgeNext)
 	took := time.Since(start)
 	close(release)
 	if got := <-localAt; got.Sub(start) > 100*time.Millisecond {
@@ -153,6 +150,9 @@ func TestNudgeUnreachablePeerGetsNothingAndDoesNotDelayLocal(t *testing.T) {
 	}
 	if took > 2*time.Second {
 		t.Errorf("call took %v with a 300ms budget", took)
+	}
+	if res.Sent != 2 || res.Missed != 2 {
+		t.Errorf("result %+v, want 2 sent (local, ok peer) and 2 missed (down peer, hung peer)", res)
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -292,5 +292,37 @@ func TestNudgeCountsAFailedSendAsMissed(t *testing.T) {
 	}
 	if res := SendAddressNudge(context.Background(), d, "lab", nudgeOld, nudgeNext); res.Sent != 1 || res.Missed != 1 {
 		t.Errorf("result %+v, want 1 sent and 1 missed", res)
+	}
+}
+
+func TestNudgeCountsSendsInFlightAtTheDeadlineAsMissed(t *testing.T) {
+	var r nudgeRec
+	d := r.deps([]Peer{{Alias: "desk"}}, map[string][]AgentRow{"desk": {
+		{AgentID: "aaaaaaaaaaaaaaaa", CrossTalk: true, Messageable: true},
+		{AgentID: "bbbbbbbbbbbbbbbb", CrossTalk: true, Messageable: true},
+	}})
+	d.Locals = []registry.Descriptor{
+		{AgentID: "1111111111111111", Name: "one", UDSPath: "/s/1"},
+		{AgentID: "2222222222222222", Name: "two", UDSPath: "/s/2"},
+	}
+	d.Timeout = 200 * time.Millisecond
+	release := make(chan struct{})
+	defer close(release)
+	localBase, remoteBase := d.SendLocal, d.SendRemote
+	d.SendLocal = func(x registry.Descriptor, text string) error {
+		if x.Name == "two" {
+			<-release
+		}
+		return localBase(x, text)
+	}
+	d.SendRemote = func(ctx context.Context, from registry.Descriptor, h Host, p Peer, id string, m msg.Message) error {
+		if id == "bbbbbbbbbbbbbbbb" {
+			<-ctx.Done()
+			return ctx.Err()
+		}
+		return remoteBase(ctx, from, h, p, id, m)
+	}
+	if res := SendAddressNudge(context.Background(), d, "lab", nudgeOld, nudgeNext); res.Sent != 2 || res.Missed != 2 {
+		t.Errorf("result %+v, want 2 sent and 2 missed (one local and one remote still in flight)", res)
 	}
 }

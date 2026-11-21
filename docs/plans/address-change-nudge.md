@@ -20,6 +20,9 @@ Pre-registration: the tests and the guard each one pins, committed before the co
 | `TestNudgeBoundsRowsPerPeer` | same | at most 20 rows per peer are messaged |
 | `TestNudgeLimitsConcurrencyPerPeerAndCountsMisses` | same | at most 4 sends in flight to one peer; sessions over the cap and unlisted peers count as missed (Codex finding 1) |
 | `TestNudgeCountsAFailedSendAsMissed` | same | a failed send is counted missed, not sent |
+| `TestNudgeCountsSendsInFlightAtTheDeadlineAsMissed` | same | a send still in flight at the deadline counts missed, so the not-told count is not low |
+| `TestLocalNudgeCountsOnlyAcceptedOrQueuedAsDelivered` | `cmd/crosstalk/remote_nudge_test.go` | a local socket that answers `rejected` (or any state but accepted or queued) counts missed, not sent |
+| `TestNudgeSenderCannotClaimOrReleaseRemotely` | `internal/wire/remote_nudge_test.go` | a claim and a release from the nudge sender are refused by the receiving host with nothing injected (the forwarder and `a2a` both refuse; the test fails only when both layers are removed) |
 | `TestNudgeRestartGuidanceOnlyWhenListenerMoves` | same | restart guidance appears for a port or bind move and not for an advertise-only change (Codex finding 2) |
 | `TestNudgeReachesEveryEligibleSessionThroughProductionLimits` | `internal/wire/remote_nudge_test.go` | 12 eligible sessions on a host with the production per-peer limit of 8 all receive it (Codex finding 1) |
 | `TestRemoteConfigNudgesOncePerChangingWrite` | `cmd/crosstalk/remote_nudge_test.go` | one nudge per `remote config` write that changes the address, none for an unchanged rewrite, none on first configure, none when the write is refused or declined |

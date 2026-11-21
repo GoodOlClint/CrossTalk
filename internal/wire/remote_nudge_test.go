@@ -2,11 +2,14 @@ package wire
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/GoodOlClint/crosstalk/internal/a2a"
 	"github.com/GoodOlClint/crosstalk/internal/msg"
 	"github.com/GoodOlClint/crosstalk/internal/receiver"
 	"github.com/GoodOlClint/crosstalk/internal/registry"
@@ -157,5 +160,28 @@ func TestNudgeReachesEveryEligibleSessionThroughProductionLimits(t *testing.T) {
 	for i, b := range bobs {
 		b := b
 		waitFor(t, fmt.Sprintf("bob%d injected", i), func() bool { return len(b.codex.Writes()) == 1 })
+	}
+}
+
+func TestNudgeSenderCannotClaimOrReleaseRemotely(t *testing.T) {
+	h1, _, _, bob := twoHosts(t)
+	peer := peerOf(t, h1)
+	from := nudgeFrom(h1)
+	hdr := http.Header{}
+	hdr.Set(remote.RemoteAgentIDHeader, from.AgentID)
+	hdr.Set(remote.RemoteNameHeader, base64.RawURLEncoding.EncodeToString([]byte(from.Name)))
+	hdr.Set(remote.RemoteHarnessHeader, from.Harness)
+	hdr.Set(remote.RemoteRoleHeader, from.Role)
+	c := &a2a.Client{Name: from.Name, HTTP: remote.NewClient(h1.host, peer).HTTPClient(), Headers: hdr}
+	url := "https://" + peer.Address + "/v1/a2a/" + bob.id()
+	before := len(bob.codex.Writes())
+	for _, claimed := range []bool{true, false} {
+		err := c.Claim(context.Background(), url, "", claimed)
+		if err == nil || !strings.Contains(err.Error(), "remote_kind") {
+			t.Errorf("claimed=%v: %v, want a remote_kind refusal", claimed, err)
+		}
+	}
+	if n := len(bob.codex.Writes()); n != before {
+		t.Errorf("host 2 injected %d new writes for claim and release", n-before)
 	}
 }

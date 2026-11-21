@@ -461,6 +461,23 @@ func (f cfgFlags) write(dir string, rePair []string, stdout io.Writer) error {
 
 var addressNudge = sendAddressNudge
 
+type udsSendFunc func(path, text string, timeout time.Duration) (udsingress.Ack, error)
+
+// localNudgeSender counts a send as delivered only when the session accepted
+// or queued it, as `crosstalk send` does.
+func localNudgeSender(send udsSendFunc) func(registry.Descriptor, string) error {
+	return func(d registry.Descriptor, text string) error {
+		ack, err := send(d.UDSPath, text, 5*time.Second)
+		if err != nil {
+			return err
+		}
+		if ack.State != "accepted" && ack.State != "queued" {
+			return fmt.Errorf("session answered %q %s", ack.State, ack.Reason)
+		}
+		return nil
+	}
+}
+
 func sendAddressNudge(dir string, old, next remote.Config) remote.NudgeResult {
 	host, err := remote.LoadHost(dir)
 	if err != nil {
@@ -473,13 +490,10 @@ func sendAddressNudge(dir string, old, next remote.Config) remote.NudgeResult {
 	}
 	w := new(wire.Wire)
 	return remote.SendAddressNudge(context.Background(), remote.NudgeDeps{
-		Locals: locals,
-		SendLocal: func(d registry.Descriptor, text string) error {
-			_, err := udsingress.Send(d.UDSPath, text, 5*time.Second)
-			return err
-		},
-		Host:  host,
-		Peers: peers,
+		Locals:    locals,
+		SendLocal: localNudgeSender(udsingress.Send),
+		Host:      host,
+		Peers:     peers,
 		Rows: func(ctx context.Context, h remote.Host, p remote.Peer) ([]remote.AgentRow, error) {
 			return remote.NewClient(h, p).Agents(ctx)
 		},

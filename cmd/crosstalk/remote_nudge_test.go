@@ -1,10 +1,14 @@
 package main
 
 import (
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/GoodOlClint/crosstalk/internal/registry"
 	"github.com/GoodOlClint/crosstalk/internal/remote"
+	"github.com/GoodOlClint/crosstalk/internal/udsingress"
 )
 
 func TestRemoteConfigNudgesOncePerChangingWrite(t *testing.T) {
@@ -51,5 +55,27 @@ func TestRemoteConfigNudgesOncePerChangingWrite(t *testing.T) {
 	}
 	if run("--advertise", "host.example") != 0 || len(got) != 2 {
 		t.Fatalf("same advertise again: %d nudges, want 2", len(got))
+	}
+}
+
+func TestLocalNudgeCountsOnlyAcceptedOrQueuedAsDelivered(t *testing.T) {
+	send := func(state string, err error) func(registry.Descriptor, string) error {
+		return localNudgeSender(func(string, string, time.Duration) (udsingress.Ack, error) {
+			return udsingress.Ack{State: state, Reason: "refused"}, err
+		})
+	}
+	d := registry.Descriptor{UDSPath: "/s/1"}
+	for _, ok := range []string{"accepted", "queued"} {
+		if err := send(ok, nil)(d, "x"); err != nil {
+			t.Errorf("%s: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"rejected", "unreachable", "unknown", ""} {
+		if err := send(bad, nil)(d, "x"); err == nil {
+			t.Errorf("state %q counted as delivered", bad)
+		}
+	}
+	if err := send("accepted", errors.New("dial")); err == nil {
+		t.Error("a transport error counted as delivered")
 	}
 }

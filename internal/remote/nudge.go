@@ -6,7 +6,6 @@ import (
 	"net"
 	"strconv"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/GoodOlClint/crosstalk/internal/identity"
@@ -84,16 +83,34 @@ type NudgeDeps struct {
 }
 
 // NudgeResult counts sessions: Sent were accepted by a send, Missed were
-// attempted or skipped and not delivered (a peer that could not be listed
-// counts one).
+// not delivered: a failed send, a send still in flight at the deadline, a
+// session over the per-peer cap, and one per peer whose listing failed or
+// was still pending at the deadline.
 type NudgeResult struct{ Sent, Missed int }
+
+type nudgeTally struct {
+	mu                          sync.Mutex
+	sent, planned, missed, wait int
+}
+
+func (t *nudgeTally) add(f func(*nudgeTally)) {
+	t.mu.Lock()
+	f(t)
+	t.mu.Unlock()
+}
+
+func (t *nudgeTally) result() NudgeResult {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return NudgeResult{Sent: t.sent, Missed: t.missed + t.wait + t.planned - t.sent}
+}
 
 // SendAddressNudge delivers the address-change nudge to this host's sessions
 // and to the sessions of every paired host, all concurrently under one
 // deadline. A peer that cannot be reached gets nothing and never delays the
 // local sends. It returns when every send finished or the deadline passed.
 func SendAddressNudge(ctx context.Context, d NudgeDeps, aliasOfThisHost string, old, next Config) NudgeResult {
-	var sent, missed atomic.Int64
+	t := &nudgeTally{wait: len(d.Peers)}
 	if d.Timeout <= 0 {
 		d.Timeout = NudgeBudget
 	}
@@ -109,14 +126,13 @@ func SendAddressNudge(ctx context.Context, d NudgeDeps, aliasOfThisHost string, 
 		if l.UDSPath == "" {
 			continue
 		}
+		t.add(func(t *nudgeTally) { t.planned++ })
 		wg.Add(1)
 		go func(l registry.Descriptor) {
 			defer wg.Done()
-			if d.SendLocal(l, text) != nil {
-				missed.Add(1)
-				return
+			if d.SendLocal(l, text) == nil {
+				t.add(func(t *nudgeTally) { t.sent++ })
 			}
-			sent.Add(1)
 		}(l)
 	}
 	taken := map[string]bool{}
@@ -130,38 +146,45 @@ func SendAddressNudge(ctx context.Context, d NudgeDeps, aliasOfThisHost string, 
 		go func(p Peer) {
 			defer wg.Done()
 			rows, err := d.Rows(ctx, d.Host, p)
+			var eligible []AgentRow
+			for _, r := range rows {
+				if r.CrossTalk && r.Messageable {
+					eligible = append(eligible, r)
+				}
+			}
+			over := max(len(eligible)-nudgeMaxRows, 0)
+			if over > 0 {
+				eligible = eligible[:nudgeMaxRows]
+			}
+			t.add(func(t *nudgeTally) {
+				t.wait--
+				if err != nil {
+					t.missed++
+					return
+				}
+				t.planned += len(eligible)
+				t.missed += over
+			})
 			if err != nil {
-				missed.Add(1)
 				return
 			}
 			var inner sync.WaitGroup
 			slots := make(chan struct{}, nudgePeerConc)
-			n := 0
-			for _, r := range rows {
-				if !r.CrossTalk || !r.Messageable {
-					continue
-				}
-				if n++; n > nudgeMaxRows {
-					missed.Add(1)
-					continue
-				}
+			for _, r := range eligible {
 				slots <- struct{}{}
 				inner.Add(1)
 				go func(r AgentRow) {
 					defer inner.Done()
 					defer func() { <-slots }()
 					id := msg.NewUUIDv7()
-					err := d.SendRemote(ctx, from, d.Host, p, r.AgentID, msg.Message{
+					if d.SendRemote(ctx, from, d.Host, p, r.AgentID, msg.Message{
 						MessageID: id, ContextID: id, From: from.Name, To: r.AgentID + "@" + p.Alias,
 						Kind: msg.Inform, Delivery: msg.Immediate,
 						HopChain: []string{msg.Hop(from.AgentID)}, SentAt: d.Now(),
 						Parts: []msg.Part{{Type: "text", Text: ptext}},
-					})
-					if err != nil {
-						missed.Add(1)
-						return
+					}) == nil {
+						t.add(func(t *nudgeTally) { t.sent++ })
 					}
-					sent.Add(1)
 				}(r)
 			}
 			inner.Wait()
@@ -173,5 +196,5 @@ func SendAddressNudge(ctx context.Context, d NudgeDeps, aliasOfThisHost string, 
 	case <-done:
 	case <-ctx.Done():
 	}
-	return NudgeResult{Sent: int(sent.Load()), Missed: int(missed.Load())}
+	return t.result()
 }
