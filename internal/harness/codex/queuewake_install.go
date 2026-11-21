@@ -281,8 +281,9 @@ func (h *Harness) k10(ctx context.Context, env harness.InstallEnv) harness.Check
 }
 
 // removeTrustRecords deletes the hooks.state table Codex wrote when the user
-// trusted each removed hook; other hooks' records stay. A table ends at the
-// next line that opens another table, whatever its key holds.
+// trusted each removed hook: its header line and its own key lines only, so
+// comments, blank lines and every other table stay. Lines inside a multi-line
+// string are never read as headers.
 func removeTrustRecords(env harness.InstallEnv, hooksFile string, refs []string) error {
 	if len(refs) == 0 {
 		return nil
@@ -300,12 +301,27 @@ func removeTrustRecords(env harness.InstallEnv, hooksFile string, refs []string)
 		drop[`[hooks.state."`+hooksFile+`:session_start:`+r+`"]`] = true
 	}
 	var out []string
-	skip, changed := false, false
+	inStr, skip, changed := "", false, false
 	for _, l := range strings.Split(string(b), "\n") {
 		t := strings.TrimSpace(l)
-		if strings.HasPrefix(t, "[") {
-			skip = drop[t]
-			changed = changed || skip
+		inside := inStr != ""
+		switch {
+		case !inside && drop[t]:
+			skip, changed = true, true
+			continue
+		case skip && (inside || keyRe.MatchString(l)):
+		default:
+			skip = false
+		}
+		for _, d := range []string{`"""`, `'''`} {
+			if strings.Count(l, d)%2 == 1 {
+				switch inStr {
+				case "":
+					inStr = d
+				case d:
+					inStr = ""
+				}
+			}
 		}
 		if !skip {
 			out = append(out, l)
