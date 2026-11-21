@@ -250,7 +250,7 @@ func TestRemotePairCLI(t *testing.T) {
 	if code, _, errb := remoteRun(t, false, "pair"); code != 2 || !strings.Contains(errb, "not configured") {
 		t.Fatalf("pair with no config: %d %q, want 2", code, errb)
 	}
-	if code, _, _ := remoteRun(t, false, "config", "--bind", "127.0.0.1", "--alias", "alpha", "--yes"); code != 0 {
+	if code, _, _ := remoteRun(t, false, "config", "--bind", "127.0.0.1", "--advertise", "alpha.tail1234.ts.net", "--alias", "alpha", "--yes"); code != 0 {
 		t.Fatal("config failed")
 	}
 	if code, _, errb := remoteRun(t, false, "pair"); code != 1 || !strings.Contains(errb, "no gateway running") {
@@ -295,9 +295,10 @@ func TestRemotePairCLI(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if tok.Fingerprint != host.Fingerprint || tok.Address != "127.0.0.1" || tok.Port != 7745 {
-		t.Fatalf("token %+v", tok)
+	if tok.Fingerprint != host.Fingerprint || tok.Address != "alpha.tail1234.ts.net" || tok.Port != 7745 {
+		t.Fatalf("token %+v, want the advertise address", tok)
 	}
+	tok.Address = "127.0.0.1"
 	tok.Port = gw.Addr().(*net.TCPAddr).Port
 
 	bdir := filepath.Join(t.TempDir(), "crosstalk")

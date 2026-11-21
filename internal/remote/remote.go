@@ -368,16 +368,24 @@ func ValidHost(s string) (string, error) {
 	if h == "" || s == "." || len(h) > 253 {
 		return "", fmt.Errorf("%q is not an IP address or a DNS name", s)
 	}
-	for _, l := range strings.Split(h, ".") {
+	labels := strings.Split(h, ".")
+	for _, l := range labels {
 		if !dnsLabelRE.MatchString(l) {
 			return "", fmt.Errorf("%q is not an IP address or a DNS name", s)
 		}
+	}
+	if top := labels[len(labels)-1]; strings.Trim(top, "0123456789") == "" {
+		return "", fmt.Errorf("%q is not an IP address or a DNS name (the last label is all digits)", s)
 	}
 	return strings.ToLower(s), nil
 }
 
 // LookupHost resolves a peer's DNS name at connect time; tests replace it.
 var LookupHost = net.DefaultResolver.LookupHost
+
+var dialOne = func(ctx context.Context, network, addr string) (net.Conn, error) {
+	return (&net.Dialer{}).DialContext(ctx, network, addr)
+}
 
 // DialPeer dials addr (host:port). A DNS name is resolved on every call, so a
 // peer whose name keeps its fingerprint but changes address needs no re-pair.
@@ -386,9 +394,8 @@ func DialPeer(ctx context.Context, network, addr string) (net.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	d := &net.Dialer{}
 	if _, err := netip.ParseAddr(host); err == nil {
-		return d.DialContext(ctx, network, addr)
+		return dialOne(ctx, network, addr)
 	}
 	ips, err := LookupHost(ctx, host)
 	if err != nil {
@@ -400,7 +407,7 @@ func DialPeer(ctx context.Context, network, addr string) (net.Conn, error) {
 		if dl, ok := ctx.Deadline(); ok {
 			actx, cancel = context.WithTimeout(ctx, time.Until(dl)/time.Duration(len(ips)-i))
 		}
-		c, err := d.DialContext(actx, network, net.JoinHostPort(ip, port))
+		c, err := dialOne(actx, network, net.JoinHostPort(ip, port))
 		cancel()
 		if err == nil {
 			return c, nil

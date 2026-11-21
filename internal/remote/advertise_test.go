@@ -47,7 +47,7 @@ func TestValidHost(t *testing.T) {
 	}
 	for _, bad := range []string{
 		"", " ", "*", "*.example.com", "a b", "a b.example.com", "https://box", "box/x", "box?x", "box:7745",
-		"0.0.0.0", "::", "224.0.0.1", "fe80::1%en0", "-box", "box-", "a..b", ".box", strings.Repeat("a", 64), "bo_x",
+		"0.0.0.0", "::", "224.0.0.1", "256.1.1.1", "123", "box.123", "fe80::1%en0", "-box", "box-", "a..b", ".box", strings.Repeat("a", 64), "bo_x",
 	} {
 		if _, err := ValidHost(bad); err == nil {
 			t.Errorf("accepted %q", bad)
@@ -186,18 +186,23 @@ func TestValidHostKeepsFinalDot(t *testing.T) {
 }
 
 func TestDialPeerSkipsStalledAddress(t *testing.T) {
-	ln, err := net.Listen("tcp4", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ln.Close()
-	_, port, _ := net.SplitHostPort(ln.Addr().String())
-	old := LookupHost
+	oldL, oldD := LookupHost, dialOne
 	LookupHost = func(context.Context, string) ([]string, error) { return []string{"192.0.2.1", "127.0.0.1"}, nil }
-	t.Cleanup(func() { LookupHost = old })
+	dialOne = func(ctx context.Context, _, addr string) (net.Conn, error) {
+		if strings.HasPrefix(addr, "192.0.2.1:") {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		c, _ := net.Pipe()
+		return c, nil
+	}
+	t.Cleanup(func() { LookupHost, dialOne = oldL, oldD })
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
-	c, err := DialPeer(ctx, "tcp", net.JoinHostPort("peer.local", port))
+	c, err := DialPeer(ctx, "tcp", "peer.local:7745")
 	if err != nil {
 		t.Fatalf("a stalled first address hid the reachable second: %v", err)
 	}
