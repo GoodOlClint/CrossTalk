@@ -3,7 +3,7 @@
 
 usage: ptyrun.py LOG FIFO CMD [ARG...]
 Answers the cursor-position query, and answers the Codex hooks-review dialog with "2" + Enter ("Trust all and continue") once,
-only when $HOME is a disposable directory under a temp dir (never the user's real home).
+only when $HOME is a disposable directory under a temp dir and $CODEX_HOME, if set, is inside it (never the user's real profile).
 """
 import fcntl, os, pty, select, signal, struct, sys, tempfile, termios, time
 
@@ -13,7 +13,10 @@ TRIGGERS = [(b"Hooks need review", b"2\r")]
 def disposable_home():
     home = os.path.realpath(os.environ.get("HOME", ""))
     roots = {os.path.realpath(r) for r in (tempfile.gettempdir(), "/tmp", os.environ.get("RUNNER_TEMP", "/nonexistent"))}
-    return any(home.startswith(r + os.sep) for r in roots)
+    if not any(home.startswith(r + os.sep) for r in roots):
+        return False
+    codex_home = os.environ.get("CODEX_HOME")
+    return codex_home is None or os.path.realpath(codex_home).startswith(home + os.sep)
 
 
 def main():

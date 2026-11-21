@@ -67,7 +67,7 @@ pair)
 	;;
 legs)
 	usage="usage: harness-compat.sh legs CHANGED_JSON [QUEUE_CODEX_VERSION]"
-	printf '%s' "${2:?$usage}" | jq -c --arg q "${3-}" '[.[] | (if .harness == "claude-code" then {leg: "claude", harness: .harness, version: .version, runner: "ubuntu-latest"} elif .harness == "codex" then ({leg: "codex-linux", harness: .harness, version: .version, runner: "ubuntu-latest"}, (if $q != "" then {leg: "codex-macos", harness: .harness, version: $q, runner: "macos-latest"} else empty end)) else empty end)]'
+	printf '%s' "${2:?$usage}" | jq -c --arg q "${3-}" '[.[] | (if .harness == "claude-code" then {leg: "claude", harness: .harness, version: .version, runner: "ubuntu-latest"} elif .harness == "codex" then ({leg: "codex-linux", harness: .harness, version: .version, runner: "ubuntu-latest"}, {leg: "codex-macos", harness: .harness, version: (if $q != "" then $q else .version end), runner: "macos-latest"}) else empty end)]'
 	;;
 step-status)
 	usage="usage: harness-compat.sh step-status JOBS_FILE JOB STEP"
@@ -95,7 +95,7 @@ report)
 	done
 	cross="$("$0" step-status "$jobs" cross "Ask each way between Claude and Codex")"
 	printf '%s' "$legs" | jq -c --argjson res "$res" --arg cross "$cross" '
-		(group_by(.harness) | map({key: .[0].harness, value: {version: .[0].version, legs: (map({key: .leg, value: $res[.leg]}) | from_entries), pass: (all(.[]; $res[.leg] == "pass"))}}) | from_entries) + {cross: $cross}'
+		(group_by(.harness) | map({key: .[0].harness, value: (.[0].version as $v | {version: $v, legs: (map({key: .leg, value: $res[.leg]}) | from_entries), leg_versions: (map({key: .leg, value: .version}) | from_entries), pass: (all(.[]; $res[.leg] == "pass" and .version == $v))})}) | from_entries) + {cross: $cross}'
 	;;
 tier0-claude)
 	usage="usage: harness-compat.sh tier0-claude HOME"

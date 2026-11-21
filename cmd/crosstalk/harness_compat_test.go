@@ -557,16 +557,18 @@ func TestHarnessCompatLegsAndReport(t *testing.T) {
 		return strings.TrimSpace(string(out))
 	}
 	legs := run("legs", `[{"harness":"codex","version":"0.171.0"},{"harness":"claude-code","version":"2.1.330"}]`)
-	if want := `[{"leg":"codex-linux","harness":"codex","version":"0.171.0","runner":"ubuntu-latest"},{"leg":"claude","harness":"claude-code","version":"2.1.330","runner":"ubuntu-latest"}]`; legs != want {
+	if want := `[{"leg":"codex-linux","harness":"codex","version":"0.171.0","runner":"ubuntu-latest"},{"leg":"codex-macos","harness":"codex","version":"0.171.0","runner":"macos-latest"},{"leg":"claude","harness":"claude-code","version":"2.1.330","runner":"ubuntu-latest"}]`; legs != want {
 		t.Fatalf("legs = %s, want %s", legs, want)
 	}
-	withMac := run("legs", `[{"harness":"codex","version":"0.171.0"}]`, "0.167.0")
-	if want := `[{"leg":"codex-linux","harness":"codex","version":"0.171.0","runner":"ubuntu-latest"},{"leg":"codex-macos","harness":"codex","version":"0.167.0","runner":"macos-latest"}]`; withMac != want {
-		t.Fatalf("legs with the queue version = %s, want %s", withMac, want)
+	rehearsal := run("legs", `[{"harness":"codex","version":"0.171.0"}]`, "0.167.0")
+	if want := `[{"leg":"codex-linux","harness":"codex","version":"0.171.0","runner":"ubuntu-latest"},{"leg":"codex-macos","harness":"codex","version":"0.167.0","runner":"macos-latest"}]`; rehearsal != want {
+		t.Fatalf("legs with a pinned queue version = %s, want %s", rehearsal, want)
 	}
 	if onlyClaude := run("legs", `[{"harness":"claude-code","version":"2.1.330"}]`, "0.167.0"); strings.Contains(onlyClaude, "codex-macos") {
 		t.Fatalf("a Claude-only change must not run the Codex macOS leg: %s", onlyClaude)
 	}
+	// The report cases below use two legs so each fixture stays small.
+	legs = `[{"leg":"codex-linux","harness":"codex","version":"0.171.0"},{"leg":"claude","harness":"claude-code","version":"2.1.330"}]`
 	job := func(name, conclusion string, steps map[string]string) map[string]any {
 		var st []map[string]any
 		for n, c := range steps {
@@ -597,16 +599,16 @@ func TestHarnessCompatLegsAndReport(t *testing.T) {
 	}{
 		{"claude passes, codex fails, cross skipped",
 			[]map[string]any{job("harness-claude", "success", ran), job("harness-codex-linux", "failure", map[string]string{"Run the leg": "failure"}), job("cross", "success", crossSkipped)},
-			`{"claude-code":{"version":"2.1.330","legs":{"claude":"pass"},"pass":true},"codex":{"version":"0.171.0","legs":{"codex-linux":"fail"},"pass":false},"cross":"skipped"}`},
+			`{"claude-code":{"version":"2.1.330","legs":{"claude":"pass"},"leg_versions":{"claude":"2.1.330"},"pass":true},"codex":{"version":"0.171.0","legs":{"codex-linux":"fail"},"leg_versions":{"codex-linux":"0.171.0"},"pass":false},"cross":"skipped"}`},
 		{"missing key skips every step and is not a pass",
 			[]map[string]any{job("harness-claude", "success", skipped), job("harness-codex-linux", "success", skipped), job("cross", "success", crossSkipped)},
-			`{"claude-code":{"version":"2.1.330","legs":{"claude":"skipped"},"pass":false},"codex":{"version":"0.171.0","legs":{"codex-linux":"skipped"},"pass":false},"cross":"skipped"}`},
+			`{"claude-code":{"version":"2.1.330","legs":{"claude":"skipped"},"leg_versions":{"claude":"2.1.330"},"pass":false},"codex":{"version":"0.171.0","legs":{"codex-linux":"skipped"},"leg_versions":{"codex-linux":"0.171.0"},"pass":false},"cross":"skipped"}`},
 		{"success job whose test step did not succeed is not a pass",
 			[]map[string]any{job("harness-claude", "success", map[string]string{"Run the leg": "failure"}), job("harness-codex-linux", "success", ran), job("cross", "success", crossRan)},
-			`{"claude-code":{"version":"2.1.330","legs":{"claude":"fail"},"pass":false},"codex":{"version":"0.171.0","legs":{"codex-linux":"pass"},"pass":true},"cross":"pass"}`},
+			`{"claude-code":{"version":"2.1.330","legs":{"claude":"fail"},"leg_versions":{"claude":"2.1.330"},"pass":false},"codex":{"version":"0.171.0","legs":{"codex-linux":"pass"},"leg_versions":{"codex-linux":"0.171.0"},"pass":true},"cross":"pass"}`},
 		{"a leg with no job reads as fail",
 			[]map[string]any{job("harness-codex-linux", "success", ran)},
-			`{"claude-code":{"version":"2.1.330","legs":{"claude":"fail"},"pass":false},"codex":{"version":"0.171.0","legs":{"codex-linux":"pass"},"pass":true},"cross":"fail"}`},
+			`{"claude-code":{"version":"2.1.330","legs":{"claude":"fail"},"leg_versions":{"claude":"2.1.330"},"pass":false},"codex":{"version":"0.171.0","legs":{"codex-linux":"pass"},"leg_versions":{"codex-linux":"0.171.0"},"pass":true},"cross":"fail"}`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -614,6 +616,16 @@ func TestHarnessCompatLegsAndReport(t *testing.T) {
 				t.Fatalf("report = %s\nwant     %s", got, c.want)
 			}
 		})
+	}
+	// A queue leg that ran another Codex version does not make the candidate pass.
+	pinned := `[{"leg":"codex-linux","harness":"codex","version":"0.171.0"},{"leg":"codex-macos","harness":"codex","version":"0.167.0"}]`
+	allRan := write(job("harness-codex-linux", "success", ran), job("harness-codex-macos", "success", ran), job("cross", "success", crossRan))
+	if got := run("report", allRan, pinned); !strings.Contains(got, `"pass":false`) || !strings.Contains(got, `"codex-macos":"0.167.0"`) {
+		t.Fatalf("a queue leg on another version must not pass the candidate: %s", got)
+	}
+	same := `[{"leg":"codex-linux","harness":"codex","version":"0.171.0"},{"leg":"codex-macos","harness":"codex","version":"0.171.0"}]`
+	if got := run("report", allRan, same); !strings.Contains(got, `"pass":true`) {
+		t.Fatalf("both Codex legs on the candidate version pass it: %s", got)
 	}
 	both := write(job("harness-claude", "success", ran), job("harness-codex-linux", "success", ran))
 	if out, err := exec.Command(script, "legs-passed", both, legs).CombinedOutput(); err != nil {
@@ -684,7 +696,7 @@ func TestHarnessCompatPtyrun(t *testing.T) {
 	if err := os.WriteFile(prog, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	run := func(home string) string {
+	run := func(home string, extraEnv ...string) string {
 		dir := t.TempDir()
 		fifo := filepath.Join(dir, "in")
 		if err := exec.Command("mkfifo", fifo).Run(); err != nil {
@@ -692,7 +704,7 @@ func TestHarnessCompatPtyrun(t *testing.T) {
 		}
 		logf := filepath.Join(dir, "log")
 		cmd := exec.Command(filepath.Join(root, "scripts", "ptyrun.py"), logf, fifo, prog)
-		cmd.Env = append(os.Environ(), "HOME="+home)
+		cmd.Env = append(append(os.Environ(), "HOME="+home), extraEnv...)
 		if err := cmd.Start(); err != nil {
 			t.Fatal(err)
 		}
@@ -708,6 +720,9 @@ func TestHarnessCompatPtyrun(t *testing.T) {
 	}
 	if out := run(t.TempDir()); !strings.Contains(out, "ANSWER=2") || !strings.Contains(out, "MORE=typed") {
 		t.Errorf("in a disposable home the dialog is answered with 2 and fifo input is forwarded:\n%s", out)
+	}
+	if out := run(t.TempDir(), "CODEX_HOME=/Users/someone/.codex"); strings.Contains(out, "ANSWER=2") || !strings.Contains(out, "not a disposable") {
+		t.Errorf("a CODEX_HOME outside the scratch home must not be answered for:\n%s", out)
 	}
 	if out := run("/Users/someone"); strings.Contains(out, "ANSWER=2") || !strings.Contains(out, "not a disposable") {
 		t.Errorf("outside a disposable home nothing is answered:\n%s", out)
@@ -805,4 +820,99 @@ func TestHarnessCompatLegsCallTheOneRowCheckAndItIsFatal(t *testing.T) {
 	if !strings.Contains(fn, `return "$rc"`) || !strings.Contains(fn, "return 1") || strings.Contains(fn, "|| true") {
 		t.Error("one_row_check must return the checker's failure")
 	}
+}
+
+func TestHarnessCompatMacosLegHelpers(t *testing.T) {
+	root := releaseRepoRoot(t)
+	script := filepath.Join(root, "scripts", "harness-compat-live.sh")
+
+	t.Run("ptyrun path is absolute whatever the caller's cwd", func(t *testing.T) {
+		cmd := exec.Command("sh", script, "ptyrun-path")
+		cmd.Dir = filepath.Join(root, "cmd")
+		out, err := cmd.Output()
+		got := strings.TrimSpace(string(out))
+		if err != nil || !filepath.IsAbs(got) || got != filepath.Join(root, "scripts", "ptyrun.py") {
+			t.Fatalf("ptyrun-path = %q, %v", got, err)
+		}
+		cmd = exec.Command("sh", "../scripts/harness-compat-live.sh", "ptyrun-path")
+		cmd.Dir = filepath.Join(root, "cmd")
+		out, err = cmd.Output()
+		if got := strings.TrimSpace(string(out)); err != nil || got != filepath.Join(root, "scripts", "ptyrun.py") {
+			t.Fatalf("with a relative script path, ptyrun-path = %q, %v", got, err)
+		}
+	})
+
+	t.Run("assert-wake wants a collected generation", func(t *testing.T) {
+		if _, err := exec.LookPath("jq"); err != nil {
+			t.Skip("jq not on PATH")
+		}
+		for state, ok := range map[string]bool{"collected": true, "queued": false, "admitted": false, "failed": false, "": false} {
+			dir := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(dir, "codex-wakes"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if state != "" {
+				if err := os.WriteFile(filepath.Join(dir, "codex-wakes", "th1.json"), []byte(`{"thread":"th1","gen":1,"state":"`+state+`"}`), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			err := exec.Command(script, "assert-wake", dir, "th1").Run()
+			if (err == nil) != ok {
+				t.Errorf("state %q: err = %v, want ok=%v", state, err, ok)
+			}
+		}
+	})
+
+	t.Run("rollout-ready needs a non-commentary READY answer in that session's rollout", func(t *testing.T) {
+		if _, err := exec.LookPath("python3"); err != nil {
+			t.Skip("python3 not on PATH")
+		}
+		msg := func(kind, phase, text string) string {
+			b, _ := json.Marshal(map[string]any{"payload": map[string]any{"type": "item_completed", "item": map[string]any{"type": kind, "phase": phase, "content": []map[string]any{{"type": "Text", "text": text}}}}})
+			return string(b) + "\n"
+		}
+		cases := map[string]struct {
+			body string
+			ok   bool
+		}{
+			"final READY":                   {msg("AgentMessage", "final_answer", "READY"), true},
+			"READY only in the user prompt": {msg("UserMessage", "", "reply READY"), false},
+			"commentary mentioning READY":   {msg("AgentMessage", "commentary", "I will reply READY"), false},
+			"no answer yet":                 {msg("AgentMessage", "commentary", "working"), false},
+		}
+		for name, c := range cases {
+			dir := filepath.Join(t.TempDir(), "2026", "11", "21")
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "rollout-2026-11-21T01-00-00-th1.jsonl"), []byte(c.body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			err := exec.Command(script, "rollout-ready", filepath.Dir(filepath.Dir(filepath.Dir(dir))), "th1").Run()
+			if (err == nil) != c.ok {
+				t.Errorf("%s: err = %v, want ok=%v", name, err, c.ok)
+			}
+		}
+	})
+
+	t.Run("workflow ships a binary per runner OS and gives the macOS leg a short home", func(t *testing.T) {
+		b, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "harness-compat.yml"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		w := string(b)
+		jobs := workflowJobs(w)
+		if !strings.Contains(jobs["build"], "crosstalk-bin-${{ matrix.os }}") || !strings.Contains(jobs["build"], "macos-latest") {
+			t.Error("build must publish a binary per runner OS, including macOS")
+		}
+		if !strings.Contains(jobs["harness"], "crosstalk-bin-${{ matrix.runner }}") {
+			t.Error("a leg must download the binary built for its own runner")
+		}
+		if strings.Contains(w, "name: crosstalk-bin\n") {
+			t.Error("no OS-less crosstalk-bin artifact may remain")
+		}
+		if strings.Count(w, "mktemp -d /tmp/ct.XXXXXX") < 2 {
+			t.Error("legs must use a short scratch home so a unix socket path fits on macOS")
+		}
+	})
 }
