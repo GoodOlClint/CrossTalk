@@ -241,7 +241,9 @@ func (h *Harness) k10(ctx context.Context, env harness.InstallEnv) harness.Check
 	}
 	if out, err := env.Run(ctx, "codex", "--version"); err != nil {
 		bad = append(bad, "codex --version failed: "+err.Error())
-	} else if m := versionRe.FindStringSubmatch(strings.TrimSpace(string(out))); m == nil || !queueVersionAtLeastFloor(m[1]) {
+	} else if m := versionRe.FindStringSubmatch(strings.TrimSpace(string(out))); m == nil {
+		bad = append(bad, fmt.Sprintf("codex --version output %q does not parse, so the gate keeps the route off", strings.TrimSpace(string(out))))
+	} else if !queueVersionAtLeastFloor(m[1]) {
 		bad = append(bad, fmt.Sprintf("codex %q is below the version floor %s, so the gate keeps the route off", strings.TrimSpace(string(out)), QueueMinVersion))
 	}
 	if len(bad) > 0 {
