@@ -241,8 +241,8 @@ func (h *Harness) k10(ctx context.Context, env harness.InstallEnv) harness.Check
 	}
 	if out, err := env.Run(ctx, "codex", "--version"); err != nil {
 		bad = append(bad, "codex --version failed: "+err.Error())
-	} else if m := versionRe.FindStringSubmatch(strings.TrimSpace(string(out))); m == nil || !queueVersionTested(m[1]) {
-		bad = append(bad, fmt.Sprintf("codex %q is outside the tested versions %v, so the gate keeps the route off", strings.TrimSpace(string(out)), QueueTestedMinors))
+	} else if m := versionRe.FindStringSubmatch(strings.TrimSpace(string(out))); m == nil || !queueVersionAtLeastFloor(m[1]) {
+		bad = append(bad, fmt.Sprintf("codex %q is below the version floor %s, so the gate keeps the route off", strings.TrimSpace(string(out)), QueueMinVersion))
 	}
 	if len(bad) > 0 {
 		r.OK, r.Detail = false, "experimental --no-daemon queue wake is on but "+strings.Join(bad, "; ")

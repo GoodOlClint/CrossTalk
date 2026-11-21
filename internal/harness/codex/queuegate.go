@@ -13,7 +13,7 @@ import (
 	"os/exec"
 	"regexp"
 	"slices"
-	"strings"
+	"strconv"
 	"sync"
 	"time"
 
@@ -32,9 +32,10 @@ var (
 	ErrQueueAmbiguous = errors.New("codex queue: commit outcome unknown")
 )
 
-// QueueTestedMinors are the Codex major.minor pairs whose queue the step 0
-// probes measured; any other version fails the gate.
-var QueueTestedMinors = []string{"0.167", "0.171"}
+// QueueMinVersion is the first Codex version whose queue the step 0 probes
+// measured; an older version fails the gate. Newer versions pass it: the
+// schema digest and migrations are the check, and CI watches behaviour.
+const QueueMinVersion = "0.167.0"
 
 const DefaultQueueBusyTimeout = 2 * time.Second
 
@@ -176,15 +177,30 @@ func (g *QueueGate) checkVersion(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("%w: codex version: %w", ErrQueueGate, err)
 	}
-	if !queueVersionTested(v) {
-		return fmt.Errorf("%w: codex %s is not in %v", ErrQueueGate, v, QueueTestedMinors)
+	if !queueVersionAtLeastFloor(v) {
+		return fmt.Errorf("%w: codex %q is not a version at or above %s", ErrQueueGate, v, QueueMinVersion)
 	}
 	return nil
 }
 
-func queueVersionTested(v string) bool {
-	parts := strings.SplitN(v, ".", 3)
-	return len(parts) == 3 && slices.Contains(QueueTestedMinors, parts[0]+"."+parts[1])
+var queueVersionRe = regexp.MustCompile(`^(\d+)\.(\d+)\.(\d+)$`)
+
+func queueVersionAtLeastFloor(v string) bool {
+	a, b := queueVersionRe.FindStringSubmatch(v), queueVersionRe.FindStringSubmatch(QueueMinVersion)
+	if a == nil || b == nil {
+		return false
+	}
+	for i := 1; i <= 3; i++ {
+		x, errx := strconv.Atoi(a[i])
+		y, erry := strconv.Atoi(b[i])
+		if errx != nil || erry != nil {
+			return false
+		}
+		if x != y {
+			return x > y
+		}
+	}
+	return true
 }
 
 func queueErr(err error) error {

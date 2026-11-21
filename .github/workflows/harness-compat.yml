@@ -17,8 +17,8 @@ on:
         description: treat this as the recorded version (a test aid)
         default: ""
       queue_codex_version:
-        description: Codex version for the macOS queue-wake leg (the queue gate allows 0.167.x only); empty tests the candidate version itself
-        default: "0.167.0"
+        description: override the Codex version for the macOS queue-wake leg (a rehearsal aid); empty tests the candidate version itself
+        default: ""
 
 permissions:
   contents: read
@@ -236,6 +236,14 @@ jobs:
           results="$(scripts/harness-compat.sh report "$RUNNER_TEMP/jobs.json" "$LEGS")"
           echo "results=$results" >> "$GITHUB_OUTPUT"
           printf '%s' "$results" | jq -r 'to_entries[] | "\(.key) \(.value.version): \(if .value.pass then "PASS" else "NOT PASSED" end) (\(.value.legs | to_entries | map("\(.key)=\(.value)") | join(", ")))"' | tee -a "$GITHUB_STEP_SUMMARY"
-          [ -n "$OPENROUTER_API_KEY" ] || { echo "OpenRouter key usage: unavailable, no key" | tee -a "$GITHUB_STEP_SUMMARY"; exit 0; }
-          scripts/harness-compat-live.sh key-usage now "$RUNNER_TEMP" | tee -a "$GITHUB_STEP_SUMMARY"
-          echo "OpenRouter usage lags the spend: this run's cost is the next run's read minus this one." | tee -a "$GITHUB_STEP_SUMMARY"
+          if [ -n "$OPENROUTER_API_KEY" ]; then
+            scripts/harness-compat-live.sh key-usage now "$RUNNER_TEMP" | tee -a "$GITHUB_STEP_SUMMARY"
+            echo "OpenRouter usage lags the spend: this run's cost is the next run's read minus this one." | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "OpenRouter key usage: unavailable, no key" | tee -a "$GITHUB_STEP_SUMMARY"
+          fi
+      - name: Fail the report job when a harness did not pass
+        env:
+          RESULTS: ${{ steps.report.outputs.results }}
+        run: |
+          printf '%s' "$RESULTS" | jq -e 'all(.[]; .pass)' >/dev/null || { echo "::error::a harness did not pass"; exit 1; }

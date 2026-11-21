@@ -193,8 +193,19 @@ func TestQueueGate_Table_ExpectFailClosedWithNoRow(t *testing.T) {
 				t.Fatal(err)
 			}
 		}, wantErr: ErrQueueGate},
-		{name: "untested version", gate: func(g *QueueGate) {
-			g.Version = func(context.Context, ownerproof.Proc) (string, error) { return "0.168.0", nil }
+		{name: "above the floor with the pinned schema", gate: func(g *QueueGate) {
+			g.Version = func(context.Context, ownerproof.Proc) (string, error) { return "0.171.0", nil }
+		}, rows: 1},
+		{name: "below the floor", gate: func(g *QueueGate) {
+			g.Version = func(context.Context, ownerproof.Proc) (string, error) { return "0.166.9", nil }
+		}, wantErr: ErrQueueGate},
+		{name: "malformed version", gate: func(g *QueueGate) {
+			g.Version = func(context.Context, ownerproof.Proc) (string, error) { return "0.171", nil }
+		}, wantErr: ErrQueueGate},
+		{name: "changed schema above the floor", setup: func(t *testing.T, p string) {
+			execFixture(t, p, "CREATE INDEX extra_idx ON queued_items(thread_id)")
+		}, gate: func(g *QueueGate) {
+			g.Version = func(context.Context, ownerproof.Proc) (string, error) { return "0.171.0", nil }
 		}, wantErr: ErrQueueGate},
 		{name: "unreadable version", gate: func(g *QueueGate) {
 			g.Version = func(context.Context, ownerproof.Proc) (string, error) { return "", ErrExecutableReplaced }
@@ -411,9 +422,12 @@ func TestQueueGate_VersionCache_ExpectOneReadPerParentPidAndStart(t *testing.T) 
 	}
 }
 
-func TestQueueVersionTested(t *testing.T) {
-	for v, want := range map[string]bool{"0.167.0": true, "0.167.12": true, "0.171.0": true, "0.171.3": true, "0.166.0": false, "0.168.0": false, "0.170.0": false, "0.172.0": false, "1.167.0": false, "0.167": false, "": false} {
-		if got := queueVersionTested(v); got != want {
+func TestQueueVersionFloor(t *testing.T) {
+	for v, want := range map[string]bool{
+		"0.167.0": true, "0.167.12": true, "0.168.0": true, "0.171.0": true, "0.172.0": true, "0.200.1": true, "1.0.0": true,
+		"0.166.9": false, "0.9.0": false, "0.99.0": false, "": false, "0.167": false, "abc": false, "0.167.0-beta": false, "0.171.x": false, "v0.171.0": false,
+	} {
+		if got := queueVersionAtLeastFloor(v); got != want {
 			t.Errorf("%q: %v, want %v", v, got, want)
 		}
 	}
