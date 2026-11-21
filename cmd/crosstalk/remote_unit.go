@@ -335,7 +335,7 @@ func lingerHint() string { return "run: loginctl enable-linger " + unitUser() }
 
 // unitInstallApply writes and starts the unit for bin. Nothing is written
 // when the file on disk is not one CrossTalk wrote.
-func unitInstallApply(ctx context.Context, home, dir, bin string, stdout io.Writer) error {
+func unitInstallApply(ctx context.Context, home, dir, bin string, restart bool, stdout io.Writer) error {
 	if err := checkUnitBin(ctx, bin); err != nil {
 		return err
 	}
@@ -348,14 +348,14 @@ func unitInstallApply(ctx context.Context, home, dir, bin string, stdout io.Writ
 	}
 	want := unitContent(remoteGOOS, bin, home)
 	if present && bytes.Equal(cur, want) {
-		if gatewayAnswering(dir) {
+		if !restart && gatewayAnswering(dir) {
 			fmt.Fprintf(stdout, "    %s is already installed and identical; nothing written\n", path)
 			return nil
 		}
 		if err := unitStart(ctx, path, true); err != nil {
 			return fmt.Errorf("the gateway is not answering on the configured address and restarting the unit failed: %w", err)
 		}
-		fmt.Fprintf(stdout, "    %s is identical; restarted it because the gateway was not answering on the configured address\n", path)
+		fmt.Fprintf(stdout, "    %s is identical; restarted it because the gateway was not answering on the configured address or the bind changed\n", path)
 		unitWaitAnswering(ctx, dir, stdout)
 		return nil
 	}
@@ -409,11 +409,11 @@ func unitWaitAnswering(ctx context.Context, dir string, stdout io.Writer) {
 	deadline := time.Now().Add(remoteStartWait)
 	for {
 		if st, err := remote.GatewayStatus(state, cfg, host.Fingerprint); err == nil && st == remote.StateRunning {
-			fmt.Fprintf(stdout, "    gateway answering on %s:%d\n", cfg.Bind, cfg.Port)
+			fmt.Fprintf(stdout, "    gateway answering on %s\n", cfg.ListenLabel())
 			return
 		}
 		if !time.Now().Before(deadline) {
-			fmt.Fprintf(stdout, "    gateway not answering on %s:%d yet; check: crosstalk remote status\n", cfg.Bind, cfg.Port)
+			fmt.Fprintf(stdout, "    gateway not answering on %s yet; check: crosstalk remote status\n", cfg.ListenLabel())
 			return
 		}
 		select {
@@ -483,8 +483,10 @@ func remoteEnableSteps(home, dir, bin string, f cfgFlags, stdout io.Writer) ([]h
 		return nil, fmt.Errorf("%s exists and CrossTalk did not write it (its hash is not the one in remote.json); nothing was changed. Move it away or edit it yourself", path)
 	}
 	var steps []harness.Step
+	restart := false
 	if len(f.set) > 0 {
 		next, _ := f.apply(old, configured)
+		restart = configured && (next.Bind != old.Bind || next.Port != old.Port)
 		rePair, err := rePairAliases(dir, old, next, configured)
 		if err != nil {
 			return nil, err
@@ -499,7 +501,7 @@ func remoteEnableSteps(home, dir, bin string, f cfgFlags, stdout io.Writer) ([]h
 	steps = append(steps, harness.Step{
 		Title:  "login unit",
 		Change: fmt.Sprintf("write %s (mode 0644) and start it\n%s", path, bytes.TrimRight(unitContent(remoteGOOS, bin, home), "\n")),
-		Apply:  func(ctx context.Context) error { return unitInstallApply(ctx, home, dir, bin, stdout) },
+		Apply:  func(ctx context.Context) error { return unitInstallApply(ctx, home, dir, bin, restart, stdout) },
 	})
 	return steps, nil
 }

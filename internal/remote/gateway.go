@@ -307,7 +307,7 @@ func (g *Gateway) dropConns() {
 // ip_nonlocal_bind) is not taken as the address returning.
 func (g *Gateway) waitAddrBack(ctx context.Context) bool {
 	bind, err := netip.ParseAddr(g.cfg.Bind)
-	if err != nil {
+	if err != nil || bind.IsUnspecified() {
 		return true
 	}
 	for {

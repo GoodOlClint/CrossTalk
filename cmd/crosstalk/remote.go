@@ -374,11 +374,15 @@ func (f cfgFlags) apply(cur remote.Config, have bool) (remote.Config, error) {
 		next = remote.Config{Alias: remote.DefaultAlias(), Port: remote.DefaultPort}
 	}
 	if f.set["bind"] {
-		b, err := remote.ValidateBind(f.bind, f.force)
-		if err != nil {
-			return next, errUsage("--bind: " + err.Error())
+		if f.bind == remote.BindAll {
+			next.Bind = remote.AllBind
+		} else {
+			b, err := remote.ValidateBind(f.bind, f.force)
+			if err != nil {
+				return next, errUsage("--bind: " + err.Error())
+			}
+			next.Bind = b
 		}
-		next.Bind = b
 	}
 	if f.set["advertise"] {
 		a, err := remote.ValidHost(f.advertise)
@@ -398,6 +402,13 @@ func (f cfgFlags) apply(cur remote.Config, have bool) (remote.Config, error) {
 			return next, errUsage("--alias: " + err.Error())
 		}
 		next.Alias = f.alias
+	}
+	if remote.IsWildcard(next.Bind) && next.Advertise == "" {
+		msg := "--bind all needs --advertise, the address or name peers dial"
+		if t, ok := remote.TailnetAddr(); ok {
+			msg += "; this host has a tailnet address, suggestion: --advertise " + t
+		}
+		return next, errUsage(msg)
 	}
 	return next, nil
 }

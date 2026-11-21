@@ -38,7 +38,10 @@ func installRemoteChecks(home, bin string) []harness.CheckResult {
 	if _, err := remote.NewPeers(dir).List(); err != nil {
 		rs = append(rs, k8(false, false, "%v", err))
 	}
-	_, bindErr := remote.ValidateBind(cfg.Bind, false)
+	bindErr := error(nil)
+	if !remote.IsWildcard(cfg.Bind) {
+		_, bindErr = remote.ValidateBind(cfg.Bind, false)
+	}
 	if uerr == nil {
 		switch {
 		case cfg.UnitSHA256 != sha256Hex(unitBytes):
@@ -58,17 +61,17 @@ func installRemoteChecks(home, bin string) []harness.CheckResult {
 	}
 	switch {
 	case gs == remote.StateWaitingAddr:
-		rs = append(rs, k8(false, true, "gateway is waiting for its bind address %s, which is not on this host; it recovers by itself when the address returns; to use another address now run: crosstalk remote config --bind <current address>, then restart the gateway (stop and rerun crosstalk remote serve, or run crosstalk remote disable then crosstalk remote enable)", cfg.Bind))
+		rs = append(rs, k8(false, true, "gateway is waiting for its bind address %s, which is not on this host; it recovers by itself when the address returns; to use another address now run: crosstalk remote config --bind <current address>, or to listen on all addresses run: crosstalk remote config --bind all --advertise <tailnet address or name>, then restart the gateway (stop and rerun crosstalk remote serve, or run crosstalk remote disable then crosstalk remote enable)", cfg.Bind))
 	case gs == remote.StateRunning:
 		if len(rs) == 0 {
-			rs = append(rs, k8(true, false, "remote configured, gateway answering on %s:%d", cfg.Bind, cfg.Port))
+			rs = append(rs, k8(true, false, "remote configured, gateway answering on %s", cfg.ListenLabel()))
 		}
 	case uerr == nil && gs == remote.StateNotRunning:
-		rs = append(rs, k8(false, false, "gateway not answering on %s:%d (%s) and the login unit %s exists", cfg.Bind, cfg.Port, gs, unit))
+		rs = append(rs, k8(false, false, "gateway not answering on %s (%s) and the login unit %s exists", cfg.ListenLabel(), gs, unit))
 	case uerr == nil:
-		rs = append(rs, k8(false, true, "gateway process runs but is not answering on %s:%d (%s)", cfg.Bind, cfg.Port, gs))
+		rs = append(rs, k8(false, true, "gateway process runs but is not answering on %s (%s)", cfg.ListenLabel(), gs))
 	default:
-		rs = append(rs, k8(false, true, "gateway not answering on %s:%d (%s); fine for foreground use", cfg.Bind, cfg.Port, gs))
+		rs = append(rs, k8(false, true, "gateway not answering on %s (%s); fine for foreground use", cfg.ListenLabel(), gs))
 	}
 	return rs
 }
