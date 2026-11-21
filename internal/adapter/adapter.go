@@ -63,6 +63,8 @@ type Delivery struct {
 	Inbox string
 	// InboxCopy marks a watcher's copy of an inbox message: informational, with no reply route.
 	InboxCopy bool
+	// Notice is the notice class the receiver chose for this delivery; "" reads as info.
+	Notice msg.NoticeClass
 	// ReplyAddress is the target harness's NativeReplyAddress for the
 	// injecting agent; "" when it has none.
 	ReplyAddress string

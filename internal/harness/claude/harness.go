@@ -218,14 +218,16 @@ func socketExists(path string) bool {
 
 // Render is the envelope Inject writes, with from.Address as the uds path
 // a native reply reaches.
-func (h *Harness) Notice() string { return Notice }
+func (h *Harness) Notice(c msg.NoticeClass, fromHarness string) string {
+	return msg.PeerNotice(c, fromHarness)
+}
 
 func (h *Harness) Render(m msg.Message, from harness.Identity) any {
 	addr, err := FromAddress(from.Address)
 	if err != nil {
 		addr = ""
 	}
-	return Envelope(addr, from.Name, from.Harness, "", m)
+	return EnvelopeIn(addr, from.Name, from.Harness, "", "", false, from.Notice, m)
 }
 
 func (h *Harness) NativeReplyAddress(self harness.Self) string { return self.UDSPath }

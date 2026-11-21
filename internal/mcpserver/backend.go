@@ -55,12 +55,14 @@ type MailboxEntry struct {
 	State     adapter.State `json:"state"`
 	Reason    string        `json:"reason,omitempty"`
 	Text      string        `json:"text,omitempty"`
-	// Notice is the harness's warning that Text is peer text with no operator authority.
+	// Notice is the harness's warning about how to treat Text, chosen by who sent it.
 	Notice     string `json:"notice,omitempty"`
 	InstanceID string `json:"instance_id"`
 	SessionRef string `json:"session_ref"`
 	// PossiblySeen marks a delivered entry returned again because an earlier pull may not have reached the model.
 	PossiblySeen bool `json:"possibly_seen,omitempty"`
+	// InboxCopy marks a watcher's copy of a role inbox message.
+	InboxCopy bool `json:"inbox_copy,omitempty"`
 }
 
 // Session is one harness session a Backend can see.
