@@ -1066,3 +1066,60 @@ func TestPurgeStopRechecksOwnershipAfterPrompt(t *testing.T) {
 		}
 	})
 }
+
+func TestUninstallCodexKeepsUnitWhileClaudeRuns(t *testing.T) {
+	hostOS(t, func(t *testing.T, goos string) {
+		home, _ := unitSandbox(t, goos, "claude", "codex")
+		bin := filepath.Join(home, "bin")
+		if code, out := installRemote(t, bin); code != 0 {
+			t.Fatalf("install --remote: exit %d\n%s", code, out)
+		}
+		if code, out := installRunCmd(t, "uninstall", "codex", "--yes", "--bin-dir", bin); code != 0 {
+			t.Fatalf("uninstall codex: exit %d\n%s", code, out)
+		}
+		if _, err := os.Stat(remoteUnitPath(home)); err != nil {
+			t.Fatalf("unit removed while claude still runs the binary: %v", err)
+		}
+	})
+}
+
+func TestUninstallCodexOnlyRemovesUnit(t *testing.T) {
+	hostOS(t, func(t *testing.T, goos string) {
+		home, _ := unitSandbox(t, goos, "codex")
+		bin := filepath.Join(home, "bin")
+		if code, out := installRemote(t, bin); code != 0 {
+			t.Fatalf("install --remote: exit %d\n%s", code, out)
+		}
+		if code, out := installRunCmd(t, "uninstall", "codex", "--yes", "--bin-dir", bin); code != 0 {
+			t.Fatalf("uninstall codex: exit %d\n%s", code, out)
+		}
+		unitAbsent(t, home)
+	})
+}
+
+func TestUninstallFromOtherBinaryKeepsUnitWhileUnitBinaryInUse(t *testing.T) {
+	hostOS(t, func(t *testing.T, goos string) {
+		home, _ := unitSandbox(t, goos, "claude", "codex")
+		a, b := filepath.Join(home, "binA"), filepath.Join(home, "binB")
+		if code, out := installRemote(t, a); code != 0 {
+			t.Fatalf("install --remote: exit %d\n%s", code, out)
+		}
+		code, out := installRunCmd(t, "uninstall", "codex", "--yes", "--bin-dir", b)
+		if code != 0 {
+			t.Fatalf("uninstall codex: exit %d\n%s", code, out)
+		}
+		if _, err := os.Stat(remoteUnitPath(home)); err != nil {
+			t.Fatalf("unit removed while claude still runs the unit's binary: %v\n%s", err, out)
+		}
+	})
+}
+
+func TestUnitBinaryRoundTrip(t *testing.T) {
+	for _, goos := range []string{"darwin", "linux"} {
+		for _, bin := range []string{"/opt/homebrew/bin/crosstalk", "/Users/a b/bin/crosstalk", "/x/$y/c&d/crosstalk"} {
+			if got := unitBinary(unitContent(goos, bin, "/home/u")); got != bin {
+				t.Errorf("%s: unitBinary = %q, want %q", goos, got, bin)
+			}
+		}
+	}
+}

@@ -423,7 +423,7 @@ func (h *Harness) Registered(env harness.InstallEnv) (bool, error) {
 		return false, fmt.Errorf("%s declares the crosstalk server in a form install does not read", configPath(env.Home))
 	}
 	e, ok := readEntry(string(b))
-	return ok && e.command == env.Bin, nil
+	return ok && sameBin(e.command, env.Bin), nil
 }
 
 func (h *Harness) SetUp(env harness.InstallEnv) (bool, error) {
@@ -557,4 +557,14 @@ func (h *Harness) Checks(ctx context.Context, env harness.InstallEnv) []harness.
 		k6.OK, k6.Detail = true, "registered server lists the CrossTalk tools at "+env.Version
 	}
 	return []harness.CheckResult{k1, k2, k3, k5, k6, h.k9(ctx, env), h.k10(ctx, env)}
+}
+
+// sameBin reports whether two paths name the same executable, following symlinks.
+func sameBin(a, b string) bool {
+	if a == b {
+		return true
+	}
+	ra, errA := filepath.EvalSymlinks(a)
+	rb, errB := filepath.EvalSymlinks(b)
+	return errA == nil && errB == nil && ra == rb
 }

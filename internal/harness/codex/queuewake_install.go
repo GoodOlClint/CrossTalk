@@ -172,6 +172,28 @@ func removeHook(path string) error {
 	return writeHooks(path, doc, existed)
 }
 
+// ourHookRefs lists the "<group>:<handler>" position of each of this program's
+// SessionStart handlers, the suffix of its hooks.state trust key.
+func ourHookRefs(path string) []string {
+	doc, _, err := readHooks(path)
+	if err != nil {
+		return nil
+	}
+	hooks, _ := doc["hooks"].(map[string]any)
+	groups, _ := hooks["SessionStart"].([]any)
+	var refs []string
+	for gi, g := range groups {
+		gm, _ := g.(map[string]any)
+		hs, _ := gm["hooks"].([]any)
+		for hi, h := range hs {
+			if isOurHook(h) {
+				refs = append(refs, fmt.Sprintf("%d:%d", gi, hi))
+			}
+		}
+	}
+	return refs
+}
+
 func hasHook(path string) bool {
 	doc, _, err := readHooks(path)
 	if err != nil {
@@ -221,6 +243,10 @@ func queueWakeRemoveStep(env harness.InstallEnv) harness.Step {
 			if err := os.Remove(sp); err != nil && !errors.Is(err, os.ErrNotExist) {
 				return err
 			}
+			refs := ourHookRefs(hp)
+			if err := removeTrustRecords(env, hp, refs); err != nil {
+				return err
+			}
 			return removeHook(hp)
 		},
 	}
@@ -252,4 +278,88 @@ func (h *Harness) k10(ctx context.Context, env harness.InstallEnv) harness.Check
 	}
 	r.Detail = "experimental --no-daemon queue wake is on: hook installed, codex version passes the gate"
 	return r
+}
+
+// removeTrustRecords deletes the hooks.state table Codex wrote when the user
+// trusted each removed hook: its header line and its own key lines only, so
+// comments, blank lines and every other table stay. Lines inside a multi-line
+// string are never read as headers.
+func removeTrustRecords(env harness.InstallEnv, hooksFile string, refs []string) error {
+	if len(refs) == 0 {
+		return nil
+	}
+	path := configPath(env.Home)
+	b, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	drop := map[string]bool{}
+	for _, r := range refs {
+		drop[`[hooks.state."`+hooksFile+`:session_start:`+r+`"]`] = true
+	}
+	var out []string
+	inStr, skip, changed := "", false, false
+	for _, l := range strings.Split(string(b), "\n") {
+		t := strings.TrimSpace(l)
+		inside := inStr != ""
+		switch {
+		case !inside && drop[t]:
+			skip, changed = true, true
+			continue
+		case skip && (inside || keyRe.MatchString(l)):
+		default:
+			skip = false
+		}
+		inStr = tomlStringState(l, inStr)
+		if !skip {
+			out = append(out, l)
+		}
+	}
+	if !changed {
+		return nil
+	}
+	return harness.ReplaceFile(path, []byte(strings.Join(out, "\n")))
+}
+
+// tomlStringState is the multi-line string state ("", `"""` or `”'`) after
+// line, given the state before it. Backslashes escape in basic strings; a
+// quote inside a single-line string or after # opens nothing.
+func tomlStringState(line, in string) string {
+	for i := 0; i < len(line); i++ {
+		c := line[i]
+		switch in {
+		case `"""`:
+			if c == '\\' {
+				i++
+			} else if strings.HasPrefix(line[i:], `"""`) {
+				in, i = "", i+2
+			}
+		case `'''`:
+			if strings.HasPrefix(line[i:], `'''`) {
+				in, i = "", i+2
+			}
+		default:
+			switch {
+			case c == '#':
+				return ""
+			case strings.HasPrefix(line[i:], `"""`):
+				in, i = `"""`, i+2
+			case strings.HasPrefix(line[i:], `'''`):
+				in, i = `'''`, i+2
+			case c == '"':
+				for i++; i < len(line) && line[i] != '"'; i++ {
+					if line[i] == '\\' {
+						i++
+					}
+				}
+			case c == '\'':
+				for i++; i < len(line) && line[i] != '\''; i++ {
+				}
+			}
+		}
+	}
+	return in
 }
