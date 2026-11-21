@@ -90,6 +90,40 @@ The self-re-exec candidate holds. Exit-and-respawn fails on Codex.
 5. `crosstalk install` takes the lock (blocking, with a message while waiting) and writes the marker only for the targets it installed and verified.
 6. Formula caveats (`scripts/release-build.sh` heredoc): the plugin update runs when a session next starts; `crosstalk install` stays the manual path; `crosstalk uninstall` before `brew uninstall` is unchanged.
 
+### 4.3 Shim state across a refresh
+
+Every in-memory field of a running shim is either carried in the handoff, rebuilt from disk the same way a normal start rebuilds it, or dropped with the reason given. Field names are as of main @ cb603d0.
+
+Carried in the handoff:
+
+| Where | Field | Why carried |
+|---|---|---|
+| MCP session (go-sdk) | initialize params, negotiated protocol version, initialized, log level | The client does not repeat `initialize` (spike 20) |
+| `mcpserver.Agent` | `id`, `harness`, `sessionRef`, `req` (parent pid or thread id), `harnessName` | Re-registration must happen before any call (review finding 2) |
+| `mcpserver.Agent` | `viaCall` | `RetireSession` leaves a call-bound agent alone; losing it would let the Claude poll retire a session bound by a call |
+| `mcpserver.Agent` | `pendingNotice` | A notice not yet attached to a tool result would be lost |
+| `shim.AgentState` | `binding`, `boundAt` | `boundAt` picks the pre-bind hint for `no_such_message` (`internal/shim/send.go:735`) |
+| `codex.Claims` (ADR 0028) | each proven `Binding` (its `Claim`, `Live`) | See ADR 0028 below |
+
+Rebuilt from disk, as at every start: the journal and its replay (dedupe, routes, reply obligations, `PinnedName`); ask deadline timers (`rearmDeadlines`, `internal/shim/send.go:541`, from journaled `sent_at` plus `deadline_seconds`); the pre-bind store; descriptors, the agent flock, the unix socket and the A2A listener, opened again with new endpoints; wake generations (`codex.Wakes`, one file per thread; replay writes no row, ADR 0028 item 4).
+
+Dropped, safe because a restart drops them today:
+
+| Where | Field | Why safe |
+|---|---|---|
+| `shim.AgentState` | `sends` (per-peer counts) | ADR 0014: the nudge count resets on restart |
+| `shim.AgentState` | `retrying` | Reply obligations are journaled; replay drives the retry (`OnReply` runs again on replay) |
+| `shim.AgentState`, `mcpserver.Agent` | `up`, `closed`, `ready`, `draining`, `calls`, `callMu`, `replyMu`, `drainMu` | Lifecycle and locks; zero when quiescent |
+| `mcpserver.Server` | `timedOut` (retired agents kept to hold their flock until exit) | Exec ends them as process exit does |
+| `codex.Adapter` | `bindings`, `rebinding`, `lookedUp` (thread to app-server endpoint) | `Inject` looks the thread up again on a miss |
+| `codex.Adapter` | `backends`, `probes` (ADR 0025 reachability cache) | Probed again on first use |
+| `codex.ClaimServer` | `failed` (durable claims already tried) | A failed durable claim is tried once more; its proof fails again unless it now holds |
+| `codex.Wakes` | `threads`, `replayed` | Per-thread mutexes; replay is idempotent |
+| queue gate | Codex version cache per (parent pid, start time) | Recomputed; the schema is re-checked per write anyway (ADR 0028 item 5) |
+| Claude harness | `ServeClaims` log dedupe (`readFailed`, `failed`) | Logging only |
+
+ADR 0028 (Codex `--no-daemon` queue wake, experimental, off by default): a claim-serving shim holds proven claims in `codex.Claims.byID`, and the `delivery_mode` on its own `list_agents` row is derived from them (`DeliveryQueueWake`, `internal/harness/codex/harness.go:108`). The handoff carries each proven binding. On resume, each one is proven again by the target check of ADR 0028 item 8 (the shim's parent, unchanged by exec, still owns the thread's writer lock, and no other process has it open). A binding that fails is dropped and its agent retired, as on a recheck failure today. The live-origin proof (the hook's peer credential) is not repeated, because the handoff reaches the new image through an inherited descriptor that no other process can write. A durable claim file that is not in the handoff goes through the normal start scan, which is what a restart does today. The claim socket is closed during the exec gap. A SessionStart hook that dials in that gap fails, but it writes its durable 0600 claim file before it dials (`internal/harness/codex/hook.go:106-110`), and the resumed scan picks that file up. Quiescence also waits for a running claim proof and an open wake transaction (`Wakes` holds its cross-process lock).
+
 ## 5. Conflicts with existing rules, resolved in this edit window
 
 All ADRs here are provisional and edited in place (AGENTS.md). Each edit lands with the implementing slice, and the ADR text named here is the change:
@@ -97,6 +131,7 @@ All ADRs here are provisional and edited in place (AGENTS.md). Each edit lands w
 - ADR 0006 "At runtime CrossTalk spawns nothing": a shim may run the harness CLIs and the login-unit command for the follow-up (ADR 0031). Re-exec spawns nothing.
 - ADR 0016 "Each step is shown and confirmed on a terminal": the plugin and gateway steps may run unconfirmed in the follow-up; install takes the lock and writes the marker. The "Install prints that running sessions keep their old server until restarted" line changes to say they refresh on their own unless turned off.
 - ADR 0018: `post_install` stays rejected, now with the sandbox evidence; the caveats and the "plugin stays at the old version until the user runs `crosstalk install`" consequence change.
+- ADR 0028: item 8 gains one sentence. A refresh carries proven claims in the handoff and proves each one again by the target check only; a claim not in the handoff takes the normal start scan (section 4.3). Item 4 gains one sentence: an open wake transaction is part of refresh quiescence.
 - AGENTS.md Architecture: one line naming ADRs 0030 and 0031.
 
 ## 6. Slices and test bar
@@ -106,12 +141,12 @@ Each slice is one PR with its tests registered first; each test fails with its g
 | Slice | Change | Pinning tests |
 |---|---|---|
 | R1 | The shim's own `mcp.Transport`: stdin read byte by byte to `\n`, request ids tracked from `Read` to the response `Write`, initialize, initialized and setLevel captured from the wire; `mcpserver.Server.Run` takes it (no behaviour change) | `TestConnNoReadAhead` (two requests in one write: after the first is returned, the second's bytes are still in the pipe); `TestConnFragmentedFrame` (a request split across writes is not quiescent until whole); `TestConnPendingUntilResponseWritten` (a handler done but its response blocked on a full pipe is not quiescent); `TestConnCapturesState` (a real `initialize`, `initialized` and `setLevel` over one connection give the captured state); `TestRunKeepsRetirementAndClose` (the superseded-retirement tick runs while connected, `Close` on EOF); the MCP golden tests pass unchanged |
-| R2 | Versioned handoff, `version --json` with `refresh_handoff`, resume | `TestResumeAcceptsCallWithoutInitialize` (captured from a real handshake, then resumed: `tools/call` works, `list_changed` sent first, negotiated version and log level kept); `TestNoHandoffRejectsCallBeforeInitialize`; `TestResumeReRegistersBoundAgents` (the descriptor carries the new endpoints before the first stdin read) |
-| R3 | Arm, detect, probe, quiesce, exec | `TestRefreshExecsOnInodeChange` (built test binary replaced by rename: same pid, new version answers on the same pipe); `TestRefreshNotArmedForRelativeArgv0`; `TestRefreshNotArmedForUnregisteredPath`; `TestRefreshNoLsofOnTick` (the tick only stats); `TestRefreshWaitsWhileBusy` (in-flight call, partial frame, running inject); `TestRefreshSkipsBadBinary` (`version` fails: no exec, old code answers); `TestRefreshSkipsBinaryWithoutHandoff` (downgrade: a binary whose `version --json` lacks `refresh_handoff` is not exec'd); `TestRefreshInodeChangedAfterProbe`; `TestRefreshOffByEnv`; `TestRefreshInboundBeforeAnyCall` (right after refresh, before any tool call, an inform reaches a bound Claude agent and two bound idle Codex threads on one shim) |
+| R2 | Versioned handoff, `version --json` with `refresh_handoff`, resume | `TestResumeAcceptsCallWithoutInitialize` (captured from a real handshake, then resumed: `tools/call` works, `list_changed` sent first, negotiated version and log level kept); `TestNoHandoffRejectsCallBeforeInitialize`; `TestResumeReRegistersBoundAgents` (the descriptor carries the new endpoints before the first stdin read); `TestResumeKeepsViaCallAndNotices` (a call-bound agent is not retired by the Claude poll after refresh; a held notice reaches the next tool result); `TestResumeKeepsBoundAtHint`; `TestResumeReprovesCodexClaims` (a carried claim whose lock is still parent-owned stays bound with `delivery_mode` queue wake; one whose lock is now held by another process is dropped and its agent retired); `TestResumeRearmsDeadlines` (an ask deadline set before refresh fires after it) |
+| R3 | Arm, detect, probe, quiesce, exec | `TestRefreshExecsOnInodeChange` (built test binary replaced by rename: same pid, new version answers on the same pipe); `TestRefreshNotArmedForRelativeArgv0`; `TestRefreshNotArmedForUnregisteredPath`; `TestRefreshNoLsofOnTick` (the tick only stats); `TestRefreshWaitsWhileBusy` (in-flight call, partial frame, running inject, running claim proof, open wake transaction); `TestRefreshSkipsBadBinary` (`version` fails: no exec, old code answers); `TestRefreshSkipsBinaryWithoutHandoff` (downgrade: a binary whose `version --json` lacks `refresh_handoff` is not exec'd); `TestRefreshInodeChangedAfterProbe`; `TestRefreshOffByEnv`; `TestRefreshInboundBeforeAnyCall` (right after refresh, before any tool call, an inform reaches a bound Claude agent and two bound idle Codex threads on one shim) |
 | R4 | `--no-auto-refresh` in install for both harnesses; K11 text | `TestInstallNoAutoRefreshWritesEnv` (Claude `-e`, Codex `env` table); `TestK11CodexNotesNewThreads` |
 | F1 | Upgrade lock, per-target markers, follow-up runner | `TestFollowUpRunsOnce` (two shims, one runs); `TestFollowUpRechecksMarkerUnderLock` (forced interleaving: marker written between the first check and the lock; the second run does nothing); `TestFollowUpOnlyPluginAndGateway` (a fake `Run` records commands: plugin and unit commands only; no `mcp add`, no settings or config write, no registered command or login shell started); `TestFollowUpNoMarkerWhenK1Fails` (plugin command succeeds but installs the old version: no marker, retried); `TestFollowUpPerHarnessMarkers` (Claude-only install leaves the Codex target pending); `TestInstallWritesMarkerForItsTargets`; `TestFollowUpNoticeOnce` |
 | F2 | Caveats text, docs (`docs/setup.md` Upgrade section, site), ADR edits of section 5 | `TestFormulaRender` updated; `TestSetupDocCoversAutoRefresh` |
-| L | Live run, recorded in the plan | Homebrew upgrade on a Mac with an interactive Claude TUI session, a managed-daemon Codex thread and a pooled shim with two bound idle Codex threads open: within 10 s every shim is on the new inode (K11 PASS); an inform reaches each before any tool call; Claude lists a tool added in the new version; a Codex model turn works with the new code; the plugin is at the new tag (K1 PASS); no Codex turn was interrupted |
+| L | Live run, recorded in the plan | Homebrew upgrade on a Mac with an interactive Claude TUI session, a managed-daemon Codex thread and a pooled shim with two bound idle Codex threads open: within 10 s every shim is on the new inode (K11 PASS); an inform reaches each before any tool call; Claude lists a tool added in the new version; a Codex model turn works with the new code; the plugin is at the new tag (K1 PASS); no Codex turn was interrupted. Unattended plugin commands: while the follow-up runs `claude plugin marketplace update` and `claude plugin update`, and `codex plugin marketplace upgrade` and `codex plugin add`, keep the Claude session and the Codex daemon thread in a running turn. Check that both turns complete. No prompt or dialog appears in either. `~/.codex/config.toml` keeps its `[mcp_servers.crosstalk]` table byte for byte (`codex plugin add` rewrites the file). The daemon keeps serving its threads (same pid, `codex mcp list` succeeds). The Claude session's skill still loads (`/skills`) |
 
 Rollout: R1-R4 and F1-F2 land as normal PRs; the behaviour ships in the next patch release after L passes on an rc built from main. An older shim (before R3) never refreshes; K11 keeps listing it and the release notes say one last restart is needed.
 
