@@ -68,7 +68,7 @@ func TestK9DefaultsToHomeUnderEnv(t *testing.T) {
 
 func TestK9FindsDaemonUnderCodexHome(t *testing.T) {
 	s := appservertest.New(t)
-	ch, err := os.MkdirTemp("", "ch")
+	ch, err := os.MkdirTemp("/tmp", "ch")
 	if err != nil {
 		t.Fatal(err)
 	}

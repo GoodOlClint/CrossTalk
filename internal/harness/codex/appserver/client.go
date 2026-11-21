@@ -20,9 +20,12 @@ import (
 // ControlSocketRel is the managed daemon socket, relative to the Codex home.
 const ControlSocketRel = "app-server-control/app-server-control.sock"
 
-// CodexHome is $CODEX_HOME, else .codex under home.
+// CodexHome is $CODEX_HOME made absolute, else .codex under home.
 func CodexHome(home string) string {
 	if d := os.Getenv("CODEX_HOME"); d != "" {
+		if a, err := filepath.Abs(d); err == nil {
+			return a
+		}
 		return d
 	}
 	return filepath.Join(home, ".codex")
