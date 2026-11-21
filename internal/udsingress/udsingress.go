@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/GoodOlClint/crosstalk/internal/adapter"
@@ -109,11 +110,22 @@ func EnsureKey(path string) (string, error) {
 	return t, nil
 }
 
+// MaxSockPath is the longest unix socket path the platform binds (sun_path
+// less its NUL): 103 on macOS, 107 on Linux.
+const MaxSockPath = len(syscall.RawSockaddrUnix{}.Path) - 1
+
+// ErrPathTooLong is Listen's error for a Path over MaxSockPath; bind alone
+// reports only "invalid argument".
+var ErrPathTooLong = errors.New("unix socket path too long")
+
 // Listen binds Path. A leftover socket with no listener is replaced; the
 // caller holds the agent record lock, so no other registration owns it.
 func (s *Server) Listen() error {
 	if s.KeyPath == "" {
 		s.KeyPath = KeyPath(s.Path)
+	}
+	if len(s.Path) > MaxSockPath {
+		return fmt.Errorf("%w: %d bytes, limit %d: %s (shorten HOME or the state directory)", ErrPathTooLong, len(s.Path), MaxSockPath, s.Path)
 	}
 	tok, err := EnsureKey(s.KeyPath)
 	if err != nil {
