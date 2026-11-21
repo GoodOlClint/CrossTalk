@@ -70,6 +70,43 @@ assert-home-descriptor)
 		exit 1
 	fi
 	;;
+turns)
+	python3 -I - "${2:?usage: harness-compat-live.sh turns ROLLOUT_DIR SESSION_REF}" "${3:?}" <<'PY'
+import glob, json, sys
+root, ref = sys.argv[1], sys.argv[2]
+n = {"task_started": 0, "task_complete": 0, "turn_aborted": 0}
+for f in glob.glob(root + "/**/rollout-*.jsonl", recursive=True):
+    if not f.endswith("-" + ref + ".jsonl"):
+        continue
+    for line in open(f, errors="replace"):
+        try:
+            kind = json.loads(line).get("payload", {}).get("type")
+        except ValueError:
+            continue
+        if kind in n:
+            n[kind] += 1
+print(n["task_started"], n["task_complete"], n["turn_aborted"])
+PY
+	;;
+triggers)
+	python3 -I - "${2:?usage: harness-compat-live.sh triggers ROLLOUT_DIR SESSION_REF}" "${3:?}" <<'PY'
+import glob, json, sys
+root, ref = sys.argv[1], sys.argv[2]
+for f in glob.glob(root + "/**/rollout-*.jsonl", recursive=True):
+    if not f.endswith("-" + ref + ".jsonl"):
+        continue
+    for line in open(f, errors="replace"):
+        try:
+            p = json.loads(line).get("payload", {})
+        except ValueError:
+            continue
+        if p.get("type") == "task_started":
+            print("queue" if (p.get("turn_attribution") or {}).get("turn_trigger") == "queue" else "user")
+PY
+	;;
+wake-state)
+	jq -r '.state // "missing"' "${2:?usage: harness-compat-live.sh wake-state STATE SESSION_REF}/codex-wakes/${3:?}.json" 2>/dev/null || echo missing
+	;;
 assert-wake)
 	state="${2:?usage: harness-compat-live.sh assert-wake STATE SESSION_REF}"
 	ref="${3:?}"
@@ -427,6 +464,84 @@ leg)
 			sleep 5
 		done
 	}
+	interrupted_case() { # tab_ref codex_id: plan 3 b probe 3, fds 8 (tab) and 9 (sender) are the queue phase's pty tabs
+		iref="$1" icid="$2"
+		fail() { echo "FAIL interrupted: $1"; return 1; }
+		w=0
+		while :; do
+			read -r s c _ <<EOF
+$("$0" turns "$home/.codex/sessions" "$iref")
+EOF
+			[ "$s" -eq "$c" ] && break
+			w=$((w + 1))
+			[ "$w" -lt 45 ] || fail "the tab's earlier turn never finished (started $s, completed $c)" || return 1
+			sleep 2
+		done
+		read -r s0 c0 _ <<EOF
+$("$0" turns "$home/.codex/sessions" "$iref")
+EOF
+		printf '%s\r' "Run the shell command: sleep 120. Then say DONE." >&8
+		w=0
+		while :; do
+			read -r s c _ <<EOF
+$("$0" turns "$home/.codex/sessions" "$iref")
+EOF
+			[ "$s" -gt "$s0" ] && [ "$c" -eq "$c0" ] && break
+			w=$((w + 1))
+			[ "$w" -lt 60 ] || fail "the tab never started a long turn (started $s, completed $c)" || return 1
+			sleep 2
+		done
+		printf '%s\r' "Use the crosstalk send_message tool to send an inform to the agent whose agent_id is $icid with the text: compat-W2, please fetch your mail. Then say SENT." >&9
+		w=0
+		until [ "$("$0" wake-state "$state" "$iref")" = queued ]; do
+			w=$((w + 1))
+			[ "$w" -lt 45 ] || fail "no queued wake generation appeared while the tab's turn was running" || return 1
+			sleep 2
+		done
+		wake_id="$(jq -r '.wake_id // empty' "$state/codex-wakes/$iref.json")"
+		[ -n "$wake_id" ] || fail "the queued generation records no wake_id" || return 1
+		echo "PASS interrupted: a long turn was running and a wake row was queued behind it"
+		printf '\033' >&8
+		w=0
+		while :; do
+			read -r s c a <<EOF
+$("$0" turns "$home/.codex/sessions" "$iref")
+EOF
+			[ "$a" -gt 0 ] && break
+			w=$((w + 1))
+			[ "$w" -lt 15 ] || fail "Esc did not abort the tab's turn (aborted $a)" || return 1
+			sleep 2
+		done
+		n=0
+		while [ "$n" -lt 9 ]; do
+			sleep 5
+			n=$((n + 1))
+			read -r s2 _ _ <<EOF
+$("$0" turns "$home/.codex/sessions" "$iref")
+EOF
+			[ "$s2" -eq "$s" ] || fail "a turn started while the thread was interrupted (started $s, now $s2)" || return 1
+			[ "$("$0" wake-state "$state" "$iref")" = queued ] || fail "the wake generation left queued while the thread was interrupted" || return 1
+			rows="$(sqlite3 -readonly "$home/.codex/queue_1.sqlite" "select count(*) from queued_items where json_extract(payload_json, '\$.UserInput.client_id') = '$wake_id'" 2>&1)" || fail "cannot read the queue: $rows" || return 1
+			[ "$rows" -ge 1 ] || fail "the wake row $wake_id was consumed while the thread was interrupted" || return 1
+		done
+		echo "PASS interrupted: after Esc the turn aborted, and for 45 s no turn started, the wake generation stayed queued and the queue row stayed"
+		printf '%s\r' "Say one word." >&8
+		w=0
+		while :; do
+			read -r s3 _ _ <<EOF
+$("$0" turns "$home/.codex/sessions" "$iref")
+EOF
+			if [ "$s3" -ge $((s + 2)) ] && [ "$("$0" wake-state "$state" "$iref")" = collected ]; then
+				order="$("$0" triggers "$home/.codex/sessions" "$iref" | tail -n 2 | paste -sd' ' -)"
+				[ "$order" = "user queue" ] || fail "the wake did not dispatch after the operator's prompt (last two turn triggers: $order)" || return 1
+				break
+			fi
+			w=$((w + 1))
+			[ "$w" -lt 60 ] || fail "after the next prompt the wake did not dispatch (started $s3, generation $("$0" wake-state "$state" "$iref"))" || return 1
+			sleep 3
+		done
+		echo "PASS interrupted: the next prompt ran, then the wake dispatched (generation collected)"
+	}
 	install_claude() { "$xt" install claude --yes </dev/null >"$logs/install-claude.log" 2>&1; }
 	install_codex() { # [queue]
 		"$0" write-codex-config "$home" "$CODEX_MODEL"
@@ -527,6 +642,7 @@ PY
 		fi
 		cat "$logs/assert-mode.log"
 		"$0" assert-wake "$state" "$tab_ref"
+		interrupted_case "$tab_ref" "$codex_id"
 		;;
 	*)
 		echo "unknown leg: $leg" >&2
