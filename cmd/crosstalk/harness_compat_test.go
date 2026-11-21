@@ -674,6 +674,30 @@ func TestHarnessCompatAgentID(t *testing.T) {
 	}
 }
 
+// notTmpDir returns a fresh directory whose resolved path is not under /tmp, or skips the test.
+func notTmpDir(t *testing.T, prefix string) string {
+	t.Helper()
+	tmp, _ := filepath.EvalSymlinks("/tmp")
+	for _, base := range []string{releaseRepoRoot(t), os.Getenv("HOME")} {
+		if base == "" {
+			continue
+		}
+		d, err := os.MkdirTemp(base, prefix)
+		if err != nil {
+			continue
+		}
+		real, _ := filepath.EvalSymlinks(d)
+		if real == tmp || strings.HasPrefix(real, tmp+string(os.PathSeparator)) {
+			os.RemoveAll(d)
+			continue
+		}
+		t.Cleanup(func() { os.RemoveAll(d) })
+		return d
+	}
+	t.Skip("no writable directory outside /tmp")
+	return ""
+}
+
 func tmpHomeUnder(t *testing.T) func() string {
 	return func() string {
 		d, err := os.MkdirTemp("/tmp", "ptyrun")
@@ -768,11 +792,7 @@ func TestHarnessCompatPtyrun(t *testing.T) {
 		t.Fatal(err)
 	}
 	refused("$HOME/.codex is a symlink out of the scratch home while CODEX_HOME is inside", h, h, "CODEX_HOME="+filepath.Join(h, "profile"))
-	notTmp, err := os.MkdirTemp(releaseRepoRoot(t), "nottmp")
-	if err != nil {
-		t.Skip("repo not writable")
-	}
-	defer os.RemoveAll(notTmp)
+	notTmp := notTmpDir(t, "nottmp")
 	notTmpHome := filepath.Join(notTmp, "home")
 	if err := os.Mkdir(notTmpHome, 0o755); err != nil {
 		t.Fatal(err)
@@ -1017,15 +1037,81 @@ func TestHarnessCompatMacosLegRunsHookBypassOnlyInAScratchHome(t *testing.T) {
 	if n := strings.Count(string(b), "--dangerously-bypass-hook-trust"); n != 1 {
 		t.Fatalf("the hook-trust bypass must appear exactly once, in the macOS tab launch; found %d", n)
 	}
-	home, err := os.MkdirTemp(root, "notscratch")
-	if err != nil {
-		t.Skip("repo not writable")
+	run := func(home, logs string) (string, error) {
+		cmd := exec.Command(script, "leg", "codex-macos", home)
+		cmd.Env = append(os.Environ(), "OPENROUTER_API_KEY=dummy", "CLAUDE_MODEL=x", "CODEX_MODEL=y", "CROSSTALK_BIN=/nonexistent", "LIVE_LOGS="+logs)
+		out, err := cmd.CombinedOutput()
+		return string(out), err
 	}
-	defer os.RemoveAll(home)
-	cmd := exec.Command(script, "leg", "codex-macos", home)
-	cmd.Env = append(os.Environ(), "OPENROUTER_API_KEY=dummy", "CLAUDE_MODEL=x", "CODEX_MODEL=y", "CROSSTALK_BIN=/nonexistent", "LIVE_LOGS="+t.TempDir())
-	out, err := cmd.CombinedOutput()
-	if err == nil || !strings.Contains(string(out), "scratch directory under /tmp") {
-		t.Fatalf("a home outside /tmp must be refused before anything runs: %v\n%s", err, out)
+	entries := func(dir string) []string {
+		var names []string
+		_ = filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+			if err == nil && p != dir {
+				names = append(names, p)
+			}
+			return nil
+		})
+		return names
 	}
+
+	t.Run("a real home is refused before anything is created, installed or copied", func(t *testing.T) {
+		home := notTmpDir(t, "notscratch")
+		sentinel := filepath.Join(home, ".codex", "sessions", "2026", "rollout-private.jsonl")
+		if err := os.MkdirAll(filepath.Dir(sentinel), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(sentinel, []byte("private transcript"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		before := entries(home)
+		logs := t.TempDir()
+		out, err := run(home, logs)
+		if err == nil || !strings.Contains(out, "scratch directory under /tmp") {
+			t.Fatalf("a home outside /tmp must be refused: %v\n%s", err, out)
+		}
+		if after := entries(home); strings.Join(after, "\n") != strings.Join(before, "\n") {
+			t.Errorf("the refused home was modified: before %v after %v", before, after)
+		}
+		if got := entries(logs); len(got) != 0 {
+			t.Errorf("a refused home must not be copied into the logs: %v", got)
+		}
+	})
+
+	t.Run("an empty home outside /tmp is refused by the /tmp rule alone", func(t *testing.T) {
+		home := notTmpDir(t, "emptyreal")
+		logs := t.TempDir()
+		out, err := run(home, logs)
+		if err == nil || !strings.Contains(out, "scratch directory under /tmp") {
+			t.Fatalf("an empty home outside /tmp must be refused: %v\n%s", err, out)
+		}
+		if got := entries(home); len(got) != 0 {
+			t.Errorf("the refused home was modified: %v", got)
+		}
+		if got := entries(logs); len(got) != 0 {
+			t.Errorf("nothing may be copied into the logs: %v", got)
+		}
+	})
+
+	t.Run("a scratch home that is not empty is refused, so a planted .codex link is never followed", func(t *testing.T) {
+		home, err := os.MkdirTemp("/tmp", "ptyhome")
+		if err != nil {
+			t.Skip("no /tmp")
+		}
+		defer os.RemoveAll(home)
+		external := t.TempDir()
+		if err := os.Symlink(external, filepath.Join(home, ".codex")); err != nil {
+			t.Fatal(err)
+		}
+		logs := t.TempDir()
+		out, err := run(home, logs)
+		if err == nil || !strings.Contains(out, "empty scratch home") {
+			t.Fatalf("a non-empty home must be refused: %v\n%s", err, out)
+		}
+		if got := entries(external); len(got) != 0 {
+			t.Errorf("the linked profile was touched: %v", got)
+		}
+		if got := entries(logs); len(got) != 0 {
+			t.Errorf("nothing may be copied into the logs: %v", got)
+		}
+	})
 }

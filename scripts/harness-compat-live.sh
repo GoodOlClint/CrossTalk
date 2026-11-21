@@ -274,6 +274,21 @@ leg)
 	leg="${2:?usage: harness-compat-live.sh leg claude|codex-linux|cross HOME}"
 	home="${3:?usage: harness-compat-live.sh leg LEG HOME}"
 	: "${OPENROUTER_API_KEY:?}" "${CLAUDE_MODEL:?}" "${CODEX_MODEL:?}"
+	if [ "$leg" = codex-macos ]; then
+		# This leg runs Codex with hook trust bypassed: refuse before creating, copying or installing anything unless the home is a fresh, empty directory under /tmp.
+		real="$(cd "$home" 2>/dev/null && pwd -P)" || real=
+		case "$real" in
+		"$(cd /tmp && pwd -P)"/*) ;;
+		*)
+			echo "codex-macos needs a scratch directory under /tmp as its home, not '$home'" >&2
+			exit 1
+			;;
+		esac
+		[ -z "$(ls -A "$real")" ] || {
+			echo "codex-macos needs an empty scratch home, '$home' has content" >&2
+			exit 1
+		}
+	fi
 	export HOME="$home"
 	state="$home/.local/state/crosstalk"
 	logs="$home/raw"
@@ -435,14 +450,6 @@ PY
 		dump_threads end
 		;;
 	codex-macos)
-		real="$(cd "$home" && pwd -P)"
-		case "$real" in
-		"$(cd /tmp && pwd -P)"/*) ;;
-		*)
-			echo "codex-macos runs Codex with hook trust bypassed, so its home must be a scratch directory under /tmp, not $real" >&2
-			exit 1
-			;;
-		esac
 		install_claude
 		install_codex queue
 		start_claude send 7 "$auth Call the crosstalk list_agents tool once, then reply READY."
