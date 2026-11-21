@@ -1,6 +1,6 @@
 # ADR 0029 — Harness releases are re-validated by a scheduled CI job, and the queue gate trusts the schema, not a version list
 
-- **Status:** Provisional (operator 2026-11-20; design only, nothing built)
+- **Status:** Provisional (operator 2026-11-20; amended 2026-11-21 for the leg matrix, ruling R229; record, detect, tier 0 and the Linux round trip are built, the rest is not)
 - **Date:** 2026-11-20
 - **Deciders:** operator (rulings 2026-11-20, amendment on macOS runners the same day) + Claude (Opus 5.5)
 - **Context source:** [change plan](https://github.com/GoodOlClint/CrossTalk/blob/main/docs/plans/harness-compat-ci.md); ADR 0015, 0019, 0028
@@ -15,7 +15,7 @@ Operator rulings, 2026-11-20: detection is automatic and scheduled, checks run o
 
 ## Decision
 
-- A scheduled workflow, `harness-compat.yml` (daily plus `workflow_dispatch`, no pull-request trigger), compares the npm `latest` version of each harness with `.github/harness-compat.json` and runs checks only for a changed one: tier 0 with no tokens on Linux (install, `install --check`, the Codex version format and queue schema, the Claude registry file and socket), a live CrossTalk round trip on Linux through OpenRouter, and for Codex the queue-wake acceptance on `macos-latest`, including an interrupted thread staying paused; the macOS run is required for every Codex bump.
+- A scheduled workflow, `harness-compat.yml` (daily plus `workflow_dispatch`, no pull-request trigger), compares the npm `latest` version of each harness with `.github/harness-compat.json` and runs checks only for a changed one. Tier 0 runs with no tokens on Linux (install, `install --check`, the Codex version format and queue schema, the Claude registry file and socket). The live checks are a matrix (R229, 2026-11-21): one build job, then one same-harness leg per harness behind one script entry point keyed by harness (`claude`: Claude asks Claude; `codex-linux`: Codex asks Codex; `codex-macos`: the queue-wake acceptance on `macos-latest`, an idle `codex --no-daemon` session woken by a peer, including an interrupted thread staying paused), then one `cross` job, run only when every leg passed, with the Claude and Codex round trip at the tested versions, then a `report` job that writes one result per harness (and the cross result) for the bump and issue jobs. A harness passes on its own legs, so a new harness is one matrix entry and one Claude or Codex break does not hide behind the other; the macOS leg is required for every Codex bump.
 - Checks assert CrossTalk state (journal, `list_agents`, exit codes), never model prose; a live message passes only when its receiver calls `reply` on its id.
 - On pass, a separate job in a `main`-only environment `harness-compat-bump` holds the release App token (ADR 0019; its `homebrew-tap` environment is tag-only), bumps only `.github/harness-compat.json`, and lands it through `land-pr` bound to the exact PR number, head repository, head commit and a record-only diff; required checks gate the merge. On fail, the workflow's `GITHUB_TOKEN` opens or reuses one issue per (harness, version), with no session or host detail.
 - The OpenRouter key is an environment secret of environment `harness-compat`, deployable from `main` only, with an OpenRouter credit limit; jobs that run harness code never hold the App key, write no cache and persist no credentials, and the job holding the App key runs no harness code.
@@ -40,5 +40,5 @@ Operator rulings, 2026-11-20: detection is automatic and scheduled, checks run o
 
 - Council: none sat; one-shot Codex review recorded in the plan's "Codex review" section.
 - Rests on: ADR 0019 (App token, `land-pr`), ADR 0028 (queue gate).
-- Commits: none yet (design only).
+- Commits: record, detect and tier 0 (#158); the Linux round trip (#162, #167, #169); the leg matrix is in progress.
 - Pinning tests: planned in the plan's section 5.
