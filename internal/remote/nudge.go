@@ -6,6 +6,7 @@ import (
 	"net"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/GoodOlClint/crosstalk/internal/identity"
@@ -15,7 +16,8 @@ import (
 
 const (
 	NudgeBudget     = 12 * time.Second
-	nudgeMaxRows    = 50
+	nudgeMaxRows    = 20
+	nudgePeerConc   = 4
 	nudgeSenderName = "crosstalk-remote-config"
 )
 
@@ -38,18 +40,35 @@ func NudgeSender(fingerprint string, taken func(string) bool) registry.Descripto
 	}
 }
 
+// listenerMoves reports whether a running gateway must restart to listen on
+// next: it reads its config once, at start.
+func listenerMoves(old, next Config) bool {
+	return old.Port != next.Port || old.Bind != next.Bind
+}
+
+const restartLocal = " A running gateway keeps listening on the old address until it is restarted, so restart it before pairing again."
+const restartPeer = " That host's gateway may still listen on the old address until it restarts, so pairing again can fail until then."
+
 func hostPort(c Config) string {
 	return net.JoinHostPort(c.AdvertiseAddr(), strconv.Itoa(c.Port))
 }
 
 // LocalNudgeText tells a session on this host that the gateway moved.
 func LocalNudgeText(old, next Config) string {
-	return fmt.Sprintf("CrossTalk notice from this host's `crosstalk remote config`, not from a session: the gateway address changed from %s to %s. Paired hosts still dial the old address and may show as unreachable until they pair again with `crosstalk remote pair` and `crosstalk remote join`. This is information only; nothing is asked of you.", hostPort(old), hostPort(next))
+	t := fmt.Sprintf("CrossTalk notice from this host's `crosstalk remote config`, not from a session: the configured gateway address changed from %s to %s. Paired hosts still dial the old address and may show as unreachable until they pair again with `crosstalk remote pair` and `crosstalk remote join`.", hostPort(old), hostPort(next))
+	if listenerMoves(old, next) {
+		t += restartLocal
+	}
+	return t + " This is information only; nothing is asked of you."
 }
 
 // PeerNudgeText tells a session on a paired host that this host moved.
 func PeerNudgeText(alias string, old, next Config) string {
-	return fmt.Sprintf("CrossTalk notice from the `crosstalk remote config` command on host %s, not from a session: that host's gateway address changed from %s to %s. Its sessions may show as unreachable from this host until the two hosts pair again. This is information only; nothing is asked of you.", alias, hostPort(old), hostPort(next))
+	t := fmt.Sprintf("CrossTalk notice from the `crosstalk remote config` command on host %s, not from a session: that host's configured gateway address changed from %s to %s. Its sessions may show as unreachable from this host until the two hosts pair again.", alias, hostPort(old), hostPort(next))
+	if listenerMoves(old, next) {
+		t += restartPeer
+	}
+	return t + " This is information only; nothing is asked of you."
 }
 
 // NudgeDeps are the effects the nudge needs; tests replace them.
@@ -64,11 +83,17 @@ type NudgeDeps struct {
 	Now        func() time.Time
 }
 
+// NudgeResult counts sessions: Sent were accepted by a send, Missed were
+// attempted or skipped and not delivered (a peer that could not be listed
+// counts one).
+type NudgeResult struct{ Sent, Missed int }
+
 // SendAddressNudge delivers the address-change nudge to this host's sessions
 // and to the sessions of every paired host, all concurrently under one
 // deadline. A peer that cannot be reached gets nothing and never delays the
 // local sends. It returns when every send finished or the deadline passed.
-func SendAddressNudge(ctx context.Context, d NudgeDeps, aliasOfThisHost string, old, next Config) {
+func SendAddressNudge(ctx context.Context, d NudgeDeps, aliasOfThisHost string, old, next Config) NudgeResult {
+	var sent, missed atomic.Int64
 	if d.Timeout <= 0 {
 		d.Timeout = NudgeBudget
 	}
@@ -87,7 +112,11 @@ func SendAddressNudge(ctx context.Context, d NudgeDeps, aliasOfThisHost string, 
 		wg.Add(1)
 		go func(l registry.Descriptor) {
 			defer wg.Done()
-			d.SendLocal(l, text)
+			if d.SendLocal(l, text) != nil {
+				missed.Add(1)
+				return
+			}
+			sent.Add(1)
 		}(l)
 	}
 	taken := map[string]bool{}
@@ -102,27 +131,37 @@ func SendAddressNudge(ctx context.Context, d NudgeDeps, aliasOfThisHost string, 
 			defer wg.Done()
 			rows, err := d.Rows(ctx, d.Host, p)
 			if err != nil {
+				missed.Add(1)
 				return
 			}
 			var inner sync.WaitGroup
+			slots := make(chan struct{}, nudgePeerConc)
 			n := 0
 			for _, r := range rows {
 				if !r.CrossTalk || !r.Messageable {
 					continue
 				}
 				if n++; n > nudgeMaxRows {
-					break
+					missed.Add(1)
+					continue
 				}
+				slots <- struct{}{}
 				inner.Add(1)
 				go func(r AgentRow) {
 					defer inner.Done()
+					defer func() { <-slots }()
 					id := msg.NewUUIDv7()
-					d.SendRemote(ctx, from, d.Host, p, r.AgentID, msg.Message{
+					err := d.SendRemote(ctx, from, d.Host, p, r.AgentID, msg.Message{
 						MessageID: id, ContextID: id, From: from.Name, To: r.AgentID + "@" + p.Alias,
 						Kind: msg.Inform, Delivery: msg.Immediate,
 						HopChain: []string{msg.Hop(from.AgentID)}, SentAt: d.Now(),
 						Parts: []msg.Part{{Type: "text", Text: ptext}},
 					})
+					if err != nil {
+						missed.Add(1)
+						return
+					}
+					sent.Add(1)
 				}(r)
 			}
 			inner.Wait()
@@ -134,4 +173,5 @@ func SendAddressNudge(ctx context.Context, d NudgeDeps, aliasOfThisHost string, 
 	case <-done:
 	case <-ctx.Done():
 	}
+	return NudgeResult{Sent: int(sent.Load()), Missed: int(missed.Load())}
 }

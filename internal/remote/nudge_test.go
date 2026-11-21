@@ -6,6 +6,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -214,6 +215,53 @@ func TestNudgeTextSaysItIsNotASession(t *testing.T) {
 	}
 }
 
+func TestNudgeRestartGuidanceOnlyWhenListenerMoves(t *testing.T) {
+	adv := Config{Alias: "lab", Bind: "10.0.0.1", Advertise: "h.example", Port: 7745}
+	advOnly := Config{Alias: "lab", Bind: "10.0.0.1", Advertise: "h2.example", Port: 7745}
+	port := Config{Alias: "lab", Bind: "10.0.0.1", Advertise: "h.example", Port: 7790}
+	for _, txt := range []string{LocalNudgeText(adv, advOnly), PeerNudgeText("lab", adv, advOnly)} {
+		if strings.Contains(txt, "restart") {
+			t.Errorf("advertise-only change carries restart guidance: %q", txt)
+		}
+	}
+	for _, txt := range []string{LocalNudgeText(adv, port), PeerNudgeText("lab", adv, port)} {
+		if !strings.Contains(txt, "restart") {
+			t.Errorf("port change lacks restart guidance: %q", txt)
+		}
+	}
+}
+
+func TestNudgeLimitsConcurrencyPerPeerAndCountsMisses(t *testing.T) {
+	var rows []AgentRow
+	for i := 0; i < nudgeMaxRows+5; i++ {
+		rows = append(rows, AgentRow{AgentID: strings.Repeat("a", 12) + string(rune('a'+i/26)) + string(rune('a'+i%26)) + "aa", CrossTalk: true, Messageable: true})
+	}
+	var r nudgeRec
+	d := r.deps([]Peer{{Alias: "desk"}, {Alias: "gone"}}, map[string][]AgentRow{"desk": rows})
+	d.Locals = []registry.Descriptor{{AgentID: "1111111111111111", Name: "one", UDSPath: "/s/1"}}
+	var cur, peak atomic.Int64
+	base := d.SendRemote
+	d.SendRemote = func(ctx context.Context, from registry.Descriptor, h Host, p Peer, id string, m msg.Message) error {
+		n := cur.Add(1)
+		for {
+			o := peak.Load()
+			if n <= o || peak.CompareAndSwap(o, n) {
+				break
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+		cur.Add(-1)
+		return base(ctx, from, h, p, id, m)
+	}
+	res := SendAddressNudge(context.Background(), d, "lab", nudgeOld, nudgeNext)
+	if peak.Load() > nudgePeerConc {
+		t.Errorf("%d concurrent sends to one peer, limit %d", peak.Load(), nudgePeerConc)
+	}
+	if res.Sent != 1+nudgeMaxRows || res.Missed != 1+5 {
+		t.Errorf("result %+v, want %d sent and 6 missed (5 over the cap, 1 unlisted peer)", res, 1+nudgeMaxRows)
+	}
+}
+
 func TestNudgeBoundsRowsPerPeer(t *testing.T) {
 	var rows []AgentRow
 	for i := 0; i < nudgeMaxRows+30; i++ {
@@ -228,3 +276,21 @@ func TestNudgeBoundsRowsPerPeer(t *testing.T) {
 }
 
 func base64URL(s string) string { return base64.RawURLEncoding.EncodeToString([]byte(s)) }
+
+func TestNudgeCountsAFailedSendAsMissed(t *testing.T) {
+	var r nudgeRec
+	d := r.deps([]Peer{{Alias: "desk"}}, map[string][]AgentRow{"desk": {
+		{AgentID: "aaaaaaaaaaaaaaaa", CrossTalk: true, Messageable: true},
+		{AgentID: "bbbbbbbbbbbbbbbb", CrossTalk: true, Messageable: true},
+	}})
+	base := d.SendRemote
+	d.SendRemote = func(ctx context.Context, from registry.Descriptor, h Host, p Peer, id string, m msg.Message) error {
+		if id == "bbbbbbbbbbbbbbbb" {
+			return errors.New("unreachable")
+		}
+		return base(ctx, from, h, p, id, m)
+	}
+	if res := SendAddressNudge(context.Background(), d, "lab", nudgeOld, nudgeNext); res.Sent != 1 || res.Missed != 1 {
+		t.Errorf("result %+v, want 1 sent and 1 missed", res)
+	}
+}

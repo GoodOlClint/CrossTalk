@@ -4,7 +4,7 @@ Pre-registration: the tests and the guard each one pins, committed before the co
 
 ## Design in one paragraph
 
-`crosstalk remote config` is the only place a gateway address change is known: the gateway reads `remote.json` once at start. When a write changes `AdvertiseAddr()` or `Port` against the config read under the write lock, the same command sends one visible `inform` to every local session that has a socket, and one `inform` to every CrossTalk session listed by each paired host. The peer message uses a synthetic sender (host-stable agent_id, a name that no local session carries, harness `claude`, role `primary`); the far side sees it as `remote:<pinned fingerprint>/<id>`, so there is no forwarder, attestation or receiver change and no trust change. Local sends and peer sends run concurrently under one bounded budget.
+`crosstalk remote config` is the only place a gateway address change is known: the gateway reads `remote.json` once at start. When a write changes `AdvertiseAddr()` or `Port` against the config read under the write lock, the same command sends one visible `inform` to every local session that has a socket, and one `inform` to every CrossTalk session listed by each paired host (at most 20 per peer, 4 at a time), and prints how many sessions were told and how many were not. The peer message uses a synthetic sender (host-stable agent_id, a name that no local session carries, harness `claude`, role `primary`); the far side sees it as `remote:<pinned fingerprint>/<id>`, so there is no forwarder, attestation or receiver change and no trust change. Local sends and peer sends run concurrently under one bounded budget.
 
 ## Tests and guards
 
@@ -17,7 +17,11 @@ Pre-registration: the tests and the guard each one pins, committed before the co
 | `TestNudgeSenderIsInformAndNeverCommand` | same | the peer message is kind `inform`, validates as a message, and no path builds a `command` |
 | `TestNudgeSenderNameAvoidsLocalNames` | same | the synthetic sender name differs from every local descriptor name, and its agent_id passes attestation and is stable per host fingerprint |
 | `TestNudgeTextSaysItIsNotASession` | same | both texts name `remote config` as the source, say it is not from a session, and carry the old and new address |
-| `TestNudgeBoundsRowsPerPeer` | same | at most a fixed number of rows per peer are messaged |
+| `TestNudgeBoundsRowsPerPeer` | same | at most 20 rows per peer are messaged |
+| `TestNudgeLimitsConcurrencyPerPeerAndCountsMisses` | same | at most 4 sends in flight to one peer; sessions over the cap and unlisted peers count as missed (Codex finding 1) |
+| `TestNudgeCountsAFailedSendAsMissed` | same | a failed send is counted missed, not sent |
+| `TestNudgeRestartGuidanceOnlyWhenListenerMoves` | same | restart guidance appears for a port or bind move and not for an advertise-only change (Codex finding 2) |
+| `TestNudgeReachesEveryEligibleSessionThroughProductionLimits` | `internal/wire/remote_nudge_test.go` | 12 eligible sessions on a host with the production per-peer limit of 8 all receive it (Codex finding 1) |
 | `TestRemoteConfigNudgesOncePerChangingWrite` | `cmd/crosstalk/remote_nudge_test.go` | one nudge per `remote config` write that changes the address, none for an unchanged rewrite, none on first configure, none when the write is refused or declined |
 | `TestNudgeArrivesAsInformFromPinnedFingerprint` | `internal/wire/remote_nudge_test.go` | a nudge sent through the real remote path is injected on host 2 once, as an inform, journaled under `remote:<host 1 fingerprint>/<synthetic id>`; text that claims another sender does not change that key |
 | `TestNudgeCannotCarryCommandClaimRelease` | same | a nudge-shaped message with kind `command` is rejected by the receiving host and nothing is injected |

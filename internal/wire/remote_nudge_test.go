@@ -2,6 +2,7 @@ package wire
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -122,5 +123,39 @@ func TestReplyToNudgeSenderFailsCleanly(t *testing.T) {
 		}
 	case <-time.After(10 * time.Second):
 		t.Fatal("reply hung")
+	}
+}
+
+func TestNudgeReachesEveryEligibleSessionThroughProductionLimits(t *testing.T) {
+	h1, h2 := newRHost(t), newRHost(t)
+	h1.agent("alice")
+	var bobs []*node
+	for i := 0; i < 12; i++ {
+		bobs = append(bobs, h2.agent(fmt.Sprintf("bob%d", i)))
+	}
+	h1.serve()
+	h2.serve()
+	pairHosts(t, h1, "lab", h2, "desk")
+	if remote.DefaultLimits().MaxPeerConcurrent >= len(bobs) {
+		t.Fatalf("production per-peer limit %d does not bind 12 sessions", remote.DefaultLimits().MaxPeerConcurrent)
+	}
+	w := new(Wire)
+	old, next := remote.Config{Alias: "lab", Bind: "127.0.0.1", Port: 7745}, remote.Config{Alias: "lab", Bind: "127.0.0.1", Port: 7790}
+	res := remote.SendAddressNudge(context.Background(), remote.NudgeDeps{
+		Host: h1.host, Peers: []remote.Peer{peerOf(t, h1)},
+		Rows: func(ctx context.Context, h remote.Host, p remote.Peer) ([]remote.AgentRow, error) {
+			return remote.NewClient(h, p).Agents(ctx)
+		},
+		SendRemote: func(ctx context.Context, from registry.Descriptor, h remote.Host, p remote.Peer, id string, m msg.Message) error {
+			_, _, err := w.SendRemote(ctx, from, h, p, id, m)
+			return err
+		},
+	}, "lab", old, next)
+	if res.Sent != len(bobs) || res.Missed != 0 {
+		t.Fatalf("result %+v, want %d sent and none missed", res, len(bobs))
+	}
+	for i, b := range bobs {
+		b := b
+		waitFor(t, fmt.Sprintf("bob%d injected", i), func() bool { return len(b.codex.Writes()) == 1 })
 	}
 }

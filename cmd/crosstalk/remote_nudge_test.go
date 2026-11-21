@@ -1,6 +1,7 @@
 package main
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/GoodOlClint/crosstalk/internal/remote"
@@ -10,7 +11,10 @@ func TestRemoteConfigNudgesOncePerChangingWrite(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	var got [][2]remote.Config
 	prev := addressNudge
-	addressNudge = func(_ string, old, next remote.Config) { got = append(got, [2]remote.Config{old, next}) }
+	addressNudge = func(_ string, old, next remote.Config) remote.NudgeResult {
+		got = append(got, [2]remote.Config{old, next})
+		return remote.NudgeResult{Sent: 3, Missed: 1}
+	}
 	t.Cleanup(func() { addressNudge = prev })
 	run := func(args ...string) int {
 		code, _, _ := remoteRun(t, false, append([]string{"config", "--yes"}, args...)...)
@@ -35,6 +39,10 @@ func TestRemoteConfigNudgesOncePerChangingWrite(t *testing.T) {
 	if run("--port", "7790") != 0 || len(got) != 1 {
 		t.Fatalf("port change: %d nudges, want 1", len(got))
 	}
+	if code, out, _ := remoteRun(t, false, "config", "--yes", "--port", "7792"); code != 0 || !strings.Contains(out, "told 3 sessions") || !strings.Contains(out, "1 not told") {
+		t.Errorf("config output does not report delivery: %q", out)
+	}
+	got = got[:1]
 	if got[0][0].Port != 7745 || got[0][1].Port != 7790 {
 		t.Errorf("nudge saw %d -> %d, want 7745 -> 7790", got[0][0].Port, got[0][1].Port)
 	}

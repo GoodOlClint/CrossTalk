@@ -453,18 +453,18 @@ func (f cfgFlags) write(dir string, rePair []string, stdout io.Writer) error {
 		fmt.Fprintf(stdout, "peers still dial the old address: pair again with %s\n", strings.Join(rePair, ", "))
 	}
 	if remote.AddressChanged(prev, next, had) {
-		fmt.Fprintln(stdout, "telling sessions on this host and on paired hosts that the gateway address changed")
-		addressNudge(dir, prev, next)
+		r := addressNudge(dir, prev, next)
+		fmt.Fprintf(stdout, "told %d sessions on this host and paired hosts that the gateway address changed; %d not told (a paired host that is off or unreachable gets nothing)\n", r.Sent, r.Missed)
 	}
 	return nil
 }
 
 var addressNudge = sendAddressNudge
 
-func sendAddressNudge(dir string, old, next remote.Config) {
+func sendAddressNudge(dir string, old, next remote.Config) remote.NudgeResult {
 	host, err := remote.LoadHost(dir)
 	if err != nil {
-		return
+		return remote.NudgeResult{}
 	}
 	peers, _ := remote.NewPeers(dir).List()
 	var locals []registry.Descriptor
@@ -472,7 +472,7 @@ func sendAddressNudge(dir string, old, next remote.Config) {
 		locals, _ = registry.New(state).List()
 	}
 	w := new(wire.Wire)
-	remote.SendAddressNudge(context.Background(), remote.NudgeDeps{
+	return remote.SendAddressNudge(context.Background(), remote.NudgeDeps{
 		Locals: locals,
 		SendLocal: func(d registry.Descriptor, text string) error {
 			_, err := udsingress.Send(d.UDSPath, text, 5*time.Second)
