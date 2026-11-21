@@ -208,8 +208,8 @@ func TestListAgentsGatewayDown(t *testing.T) {
 
 	start := time.Now()
 	out := h1.n.ok(nil, "list_agents", map[string]any{})
-	if d := time.Since(start); d > 1600*time.Millisecond {
-		t.Fatalf("list_agents took %v with a refused peer", d)
+	if d := time.Since(start); d >= RemoteFetchBudget {
+		t.Fatalf("list_agents took %v with a refused peer; a refusal must not wait out the %v budget", d, RemoteFetchBudget)
 	}
 	he := hostEntry(t, out, "lab")
 	if he == nil || he["reachable"] != false || he["error"] != "gateway_not_running" {
@@ -233,7 +233,7 @@ func TestListAgentsGatewayDown(t *testing.T) {
 }
 
 // stallPeer accepts the TLS handshake and never answers a request.
-func stallPeer(t *testing.T) remote.Peer {
+func stallPeer(t *testing.T, arrived chan<- time.Time) remote.Peer {
 	t.Helper()
 	h, err := remote.LoadOrCreateHost(filepath.Join(t.TempDir(), "crosstalk"))
 	if err != nil {
@@ -250,6 +250,7 @@ func stallPeer(t *testing.T) remote.Peer {
 			if err != nil {
 				return
 			}
+			arrived <- time.Now()
 			go func() { c.(*tls.Conn).Handshake(); <-stop; c.Close() }()
 		}
 	}()
@@ -257,22 +258,54 @@ func stallPeer(t *testing.T) remote.Peer {
 	return remote.Peer{Address: ln.Addr().String(), Fingerprint: h.Fingerprint}
 }
 
+func shortBudget(t *testing.T) time.Duration {
+	t.Helper()
+	old := remoteFetchBudget
+	remoteFetchBudget = 500 * time.Millisecond
+	t.Cleanup(func() { remoteFetchBudget = old })
+	return remoteFetchBudget
+}
+
 func TestListAgentsTimeoutBound(t *testing.T) {
 	for _, n := range []int{1, 2} {
 		t.Run(string(rune('0'+n))+" stalled", func(t *testing.T) {
 			h1 := newRHost(t, 4001, "alice")
+			arrived := make(chan time.Time, n)
 			for i := 0; i < n; i++ {
-				p := stallPeer(t)
+				p := stallPeer(t, arrived)
 				p.Alias = "slow" + string(rune('a'+i))
 				if err := h1.peers.Upsert(p); err != nil {
 					t.Fatal(err)
 				}
 			}
+			budget := shortBudget(t)
 			before := runtime.NumGoroutine()
 			start := time.Now()
 			out := h1.n.ok(nil, "list_agents", map[string]any{})
-			if d := time.Since(start); d > 1600*time.Millisecond {
-				t.Fatalf("list_agents took %v with %d stalled peers, want at most 1.5 s", d, n)
+			d := time.Since(start)
+			if d < budget {
+				t.Fatalf("list_agents returned after %v, before the %v budget, with %d stalled peers", d, budget, n)
+			}
+			if d > 3*budget {
+				t.Fatalf("list_agents took %v with %d stalled peers, budget %v: the budget did not bound it", d, n, budget)
+			}
+			var first, last time.Time
+			for i := 0; i < n; i++ {
+				var a time.Time
+				select {
+				case a = <-arrived:
+				case <-time.After(5 * time.Second):
+					t.Fatalf("stalled peer %d was never contacted", i)
+				}
+				if first.IsZero() || a.Before(first) {
+					first = a
+				}
+				if a.After(last) {
+					last = a
+				}
+			}
+			if skew := last.Sub(first); skew >= budget {
+				t.Errorf("stalled peers were contacted %v apart, budget %v: fetches are not concurrent", skew, budget)
 			}
 			for i := 0; i < n; i++ {
 				he := hostEntry(t, out, "slow"+string(rune('a'+i)))
