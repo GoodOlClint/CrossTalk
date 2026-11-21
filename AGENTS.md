@@ -45,9 +45,11 @@ v1 implemented on main, with the agent plugins and the skill (ADR 0013; `docs/se
 
 The repo is public (the operator flipped it on 2026-11-04) at https://github.com/GoodOlClint/CrossTalk; a stranger installs with no credentials (`docs/setup.md`). Commit author email stays as is; no history rewrite.
 
-Delivery (operator ruling, 2026-11-05): `main` is protected by a ruleset (required checks `test (ubuntu-latest)` and `test (macos-latest)`, a pull request for every change, no force-push or deletion; the operator can bypass). For 0.1.4 work, agents may push branches, open pull requests and merge them once CI is green without asking each time; release tags still need the operator's yes.
+Delivery (operator ruling, 2026-11-05): `main` is protected by a ruleset (required checks `test (ubuntu-latest)` and `test (macos-latest)`, a pull request for every change, no force-push or deletion; the operator can bypass). For 0.1.4 work, agents may push branches, open pull requests and merge them once CI is green without asking each time; release tags follow the 2026-11-21 rule below.
 
-Standing work permission (operator, 2026-11-07): the coordinator chooses the next v0.2.0 work and launches workers without asking each time, to keep development moving; implementation may go to Codex workers as well as Claude workers. Release tags and anything outside the repo still need the operator.
+Standing work permission (operator, 2026-11-07): the coordinator chooses the next v0.2.0 work and launches workers without asking each time, to keep development moving; implementation may go to Codex workers as well as Claude workers. Anything outside the repo still needs the operator.
+
+Release tags (operator, 2026-11-21): the coordinator may cut a patch release tag when merged fixes warrant one, without asking each time, at a sane cadence: batch merged fixes, at most one tag a day. The tag push's permission prompt and the release environment's deployment approval in the Actions UI stay with the operator.
 
 ## Agent sessions on this repo
 
