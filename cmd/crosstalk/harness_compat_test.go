@@ -523,7 +523,7 @@ func TestHarnessCompatLegsAndReport(t *testing.T) {
 			}
 		})
 	}
-	// A queue leg that ran another Codex version does not make the candidate pass.
+	// A rehearsal override that runs the queue leg on another Codex version does not make the candidate pass.
 	pinned := `[{"leg":"codex-linux","harness":"codex","version":"0.171.0"},{"leg":"codex-macos","harness":"codex","version":"0.167.0"}]`
 	allRan := write(job("harness-codex-linux", "success", ran), job("harness-codex-macos", "success", ran))
 	if got := run("report", allRan, pinned); !strings.Contains(got, `"pass":false`) || !strings.Contains(got, `"codex-macos":"0.167.0"`) {
@@ -957,9 +957,15 @@ func TestHarnessCompatMacosLegHelpers(t *testing.T) {
 			"no claim record":             {mk("th1", ""), false},
 			"records of another thread":   {mk("other", "other"), false},
 		} {
-			err := exec.Command(script, "check-staged", c.dir, "th1").Run()
+			out, err := exec.Command(script, "check-staged", c.dir, "th1").CombinedOutput()
 			if (err == nil) != c.ok {
 				t.Errorf("%s: err = %v, want ok=%v", name, err, c.ok)
+			}
+			if has := strings.Contains(string(out), "PASS staged:"); has != c.ok {
+				t.Errorf("%s: PASS staged line present = %v, want %v (output %q)", name, has, c.ok, out)
+			}
+			if c.ok && (!strings.Contains(string(out), "codex-wakes/th1.json") || !strings.Contains(string(out), "codex-claims/")) {
+				t.Errorf("%s: the PASS line must name the wake generation record and the claim record: %q", name, out)
 			}
 		}
 	})
@@ -970,10 +976,26 @@ func TestHarnessCompatMacosLegHelpers(t *testing.T) {
 			t.Fatal(err)
 		}
 		src := string(b)
-		for _, want := range []string{`check-staged "$logs/state" "$tab_ref"`, `[ "$staged" -eq 0 ] || exit 1`, `type_line 8 "Call the crosstalk list_agents tool once more."`} {
+		for _, want := range []string{`check-staged "$out/state" "$tab_ref"`, `[ "$staged" -eq 0 ] || exit 1`, `type_line 8 "Call the crosstalk list_agents tool once more."`} {
 			if !strings.Contains(src, want) {
 				t.Errorf("script lacks %q", want)
 			}
+		}
+	})
+
+	t.Run("check-staged runs on the staged copy, after staging, and a staging failure fails the leg", func(t *testing.T) {
+		b, err := os.ReadFile(script)
+		if err != nil {
+			t.Fatal(err)
+		}
+		src := string(b)
+		stage := strings.Index(src, `"$0" stage-logs "$logs" "$out" || staged=1`)
+		check := strings.Index(src, `check-staged "$out/state" "$tab_ref"`)
+		if stage < 0 || check < 0 || stage > check {
+			t.Errorf("finish must stage the logs (and count a staging failure) before checking the staged copy (stage %d, check %d)", stage, check)
+		}
+		if strings.Contains(src, `check-staged "$logs/state"`) {
+			t.Error("check-staged must read the staged artifact, not the source files")
 		}
 	})
 
@@ -1508,4 +1530,53 @@ func TestHarnessCompatInterruptedCase(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestHarnessCompatQueueVersionDefaultsToTheCandidate(t *testing.T) {
+	w := readCompatWorkflow(t)
+	i := strings.Index(w, "queue_codex_version:")
+	if i < 0 {
+		t.Fatal("workflow lacks the queue_codex_version input")
+	}
+	block := w[i:]
+	block = block[:strings.Index(block, "\npermissions:")]
+	if !strings.Contains(block, `default: ""`) {
+		t.Errorf("queue_codex_version must default to empty so codex-macos runs the candidate:\n%s", block)
+	}
+	for _, gone := range []string{"0.167", "allows 0.167.x only"} {
+		if strings.Contains(block, gone) {
+			t.Errorf("the input must not name %q:\n%s", gone, block)
+		}
+	}
+}
+
+func TestHarnessCompatReportJobFailsWhenAHarnessDidNotPass(t *testing.T) {
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not on PATH")
+	}
+	w := readCompatWorkflow(t)
+	report := workflowJobs(w)["report"]
+	write := strings.Index(report, `echo "results=$results" >> "$GITHUB_OUTPUT"`)
+	usage := strings.Index(report, "key-usage now")
+	check := strings.Index(report, "all(.[]; .pass)")
+	if write < 0 || usage < 0 || check < 0 || !(write < usage && usage < check) {
+		t.Fatalf("the report job must write its results output and usage line before a final step that fails on a non-pass (write %d, usage %d, check %d)", write, usage, check)
+	}
+	if !strings.Contains(report, "exit 1") {
+		t.Error("the report job's final step must exit 1")
+	}
+	if strings.Contains(report, "exit 0") {
+		t.Error("the report job must not exit early with exit 0 before the failure check")
+	}
+	for results, want := range map[string]bool{
+		`{"codex":{"pass":true},"claude-code":{"pass":true}}`:  true,
+		`{"codex":{"pass":true},"claude-code":{"pass":false}}`: false,
+		`{"codex":{"pass":false}}`:                             false,
+	} {
+		cmd := exec.Command("sh", "-c", `printf '%s' "$R" | jq -e 'all(.[]; .pass)' >/dev/null`)
+		cmd.Env = append(os.Environ(), "R="+results)
+		if got := cmd.Run() == nil; got != want {
+			t.Errorf("%s: check passed = %v, want %v", results, got, want)
+		}
+	}
 }

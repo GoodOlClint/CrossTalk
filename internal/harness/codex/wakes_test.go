@@ -386,7 +386,7 @@ func TestWakes_ReplayPendingQueueUnreadable_ExpectUnknown(t *testing.T) {
 	}
 	e.signal(w, "m1")
 	e.gate = func(g *QueueGate) {
-		g.Version = func(context.Context, ownerproof.Proc) (string, error) { return "0.168.0", nil }
+		g.Version = func(context.Context, ownerproof.Proc) (string, error) { return "0.166.0", nil }
 	}
 	r := e.wakes(dir)
 	r.load(context.Background(), wThread)
@@ -397,7 +397,7 @@ func TestWakes_GateFailures_ExpectFailedAndNoRow(t *testing.T) {
 	cases := map[string]func(e *wakeEnv){
 		"untested version": func(e *wakeEnv) {
 			e.gate = func(g *QueueGate) {
-				g.Version = func(context.Context, ownerproof.Proc) (string, error) { return "0.168.0", nil }
+				g.Version = func(context.Context, ownerproof.Proc) (string, error) { return "0.166.0", nil }
 			}
 		},
 		"missing trigger": func(e *wakeEnv) { execFixture(e.t, e.queue, "DROP TRIGGER queued_items_revision_after_insert") },
@@ -483,7 +483,7 @@ func TestWakes_RowFromAnotherWriter_ExpectFailedNoSecondRow(t *testing.T) {
 func TestWakes_RepeatedFailures_ExpectOneCoalescedRecord(t *testing.T) {
 	e := newWakeEnv(t)
 	e.gate = func(g *QueueGate) {
-		g.Version = func(context.Context, ownerproof.Proc) (string, error) { return "0.168.0", nil }
+		g.Version = func(context.Context, ownerproof.Proc) (string, error) { return "0.166.0", nil }
 	}
 	dir := t.TempDir()
 	w := e.wakes(dir)
@@ -727,7 +727,7 @@ func TestWakes_PendingLeftInProcess_ExpectTickResolvesIt(t *testing.T) {
 func TestWakes_DistinctMessagesFailedWakesAndPulls_ExpectEligibleDoesNotAccumulate(t *testing.T) {
 	e := newWakeEnv(t)
 	e.gate = func(g *QueueGate) {
-		g.Version = func(context.Context, ownerproof.Proc) (string, error) { return "0.168.0", nil }
+		g.Version = func(context.Context, ownerproof.Proc) (string, error) { return "0.166.0", nil }
 	}
 	w := e.wakes(t.TempDir())
 	for i := range 100 {

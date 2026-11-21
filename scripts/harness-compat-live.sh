@@ -142,6 +142,7 @@ check-staged)
 		echo "staged artifact lacks the claim record for $ref" >&2
 		exit 1
 	}
+	echo "PASS staged: the artifact carries the wake generation record codex-wakes/$ref.json and the claim record codex-claims/*-$ref.json"
 	;;
 assert-own-delivery-mode)
 	python3 -I - "${2:?usage: harness-compat-live.sh assert-own-delivery-mode ROLLOUT_DIR SESSION_REF AGENT_ID}" "${3:?}" "${4:?}" <<'PY'
@@ -366,8 +367,9 @@ leg)
 		cp "$home/.codex/config.toml" "$logs/codex-config.toml" 2>/dev/null || true
 		[ -d "$home/.codex/sessions" ] && cp -R "$home/.codex/sessions" "$logs/codex-sessions" 2>/dev/null || true
 		staged=0
-		if [ "$ok" = true ] && [ "$leg" = codex-macos ]; then
-			"$0" check-staged "$logs/state" "$tab_ref" || staged=1
+		"$0" stage-logs "$logs" "$out" || staged=1
+		if [ "$ok" = true ] && [ "$leg" = codex-macos ] && [ "$staged" -eq 0 ]; then
+			"$0" check-staged "$out/state" "$tab_ref" || staged=1
 		fi
 		[ "$staged" -eq 0 ] || ok=false
 		jq -nc --arg leg "$leg" --argjson ok "$ok" '{leg: $leg, ok: $ok}' >"$logs/result.json"

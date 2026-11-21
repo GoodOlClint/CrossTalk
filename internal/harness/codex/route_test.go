@@ -210,7 +210,7 @@ func TestRoute_Row3_NoHostCapabilityAbsent_ExpectUnreachableAskNoEndpointNoRow(t
 		{"owner proof fails at write time", true, func(e *routeEnv) { e.sys.set(wThread, false, nil) }},
 		{"gate fails", true, func(e *routeEnv) {
 			e.gate = func(g *QueueGate) {
-				g.Version = func(context.Context, ownerproof.Proc) (string, error) { return "0.168.0", nil }
+				g.Version = func(context.Context, ownerproof.Proc) (string, error) { return "0.166.0", nil }
 			}
 		}},
 		{"queue file missing", true, func(e *routeEnv) { os.Remove(e.queue) }},
