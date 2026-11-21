@@ -970,7 +970,7 @@ func TestHarnessCompatMacosLegHelpers(t *testing.T) {
 			t.Fatal(err)
 		}
 		src := string(b)
-		for _, want := range []string{`check-staged "$logs/state" "$tab_ref"`, `[ "$staged" -eq 0 ] || exit 1`, `Call the crosstalk list_agents tool once more." >&8`} {
+		for _, want := range []string{`check-staged "$logs/state" "$tab_ref"`, `[ "$staged" -eq 0 ] || exit 1`, `type_line 8 "Call the crosstalk list_agents tool once more."`} {
 			if !strings.Contains(src, want) {
 				t.Errorf("script lacks %q", want)
 			}
@@ -1381,7 +1381,7 @@ func TestHarnessCompatInterruptedCase(t *testing.T) {
 		}
 	})
 
-	t.Run("triggers lists each started turn as queue or user, in order", func(t *testing.T) {
+	t.Run("events lists turn starts as queue or user, completions and aborts, in order", func(t *testing.T) {
 		if _, err := exec.LookPath("python3"); err != nil {
 			t.Skip("python3 not on PATH")
 		}
@@ -1393,9 +1393,14 @@ func TestHarnessCompatInterruptedCase(t *testing.T) {
 			b, _ := json.Marshal(map[string]any{"payload": p})
 			return string(b) + "\n"
 		}
+		ev := func(kind string) string {
+			b, _ := json.Marshal(map[string]any{"payload": map[string]any{"type": kind}})
+			return string(b) + "\n"
+		}
 		for name, c := range map[string]struct{ body, want string }{
-			"operator then wake": {started("") + started("queue"), "user queue"},
-			"wake then operator": {started("queue") + started(""), "queue user"},
+			"operator then wake":             {started("") + ev("task_complete") + started("queue") + ev("task_complete"), "user done queue done"},
+			"wake first":                     {started("queue") + ev("task_complete") + started(""), "queue done user"},
+			"operator aborted, wake follows": {started("") + ev("turn_aborted") + started("queue"), "user abort queue"},
 		} {
 			dir := filepath.Join(t.TempDir(), "2026", "11", "21")
 			if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -1404,12 +1409,12 @@ func TestHarnessCompatInterruptedCase(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(dir, "rollout-2026-11-21T01-00-00-th1.jsonl"), []byte(c.body), 0o644); err != nil {
 				t.Fatal(err)
 			}
-			out, err := exec.Command(script, "triggers", filepath.Dir(filepath.Dir(filepath.Dir(dir))), "th1").Output()
+			out, err := exec.Command(script, "events", filepath.Dir(filepath.Dir(filepath.Dir(dir))), "th1").Output()
 			if err != nil {
 				t.Fatal(err)
 			}
 			if got := strings.Join(strings.Fields(string(out)), " "); got != c.want {
-				t.Errorf("%s: triggers = %q, want %q", name, got, c.want)
+				t.Errorf("%s: events = %q, want %q", name, got, c.want)
 			}
 		}
 	})
@@ -1477,15 +1482,25 @@ func TestHarnessCompatInterruptedCase(t *testing.T) {
 		if wake < 0 || call < wake {
 			t.Error("the macOS leg must call interrupted_case after assert-wake")
 		}
+		if strings.Contains(src, `'%s\r'`) {
+			t.Error("typed lines must send Enter as its own write after the text (type_line), not appended to it")
+		}
+		if strings.Index(src, "type_line() {") > strings.Index(src, "interrupted_case() {") {
+			t.Error("type_line must be defined with the leg helpers, before interrupted_case and the delivery-mode retry")
+		}
 		for _, want := range []string{
 			`printf '\033' >&8`,
+			`type_line 8 "Run the shell command: sleep 120.`,
+			`type_line 9 "Use the crosstalk send_message tool`,
+			`type_line 8 "Say one word."`,
+			`tab rollout events (last 12):`,
 			`PASS interrupted: a long turn was running and a wake row was queued behind it`,
 			`PASS interrupted: after Esc the turn aborted, and for 45 s no turn started, the wake generation stayed queued and the queue row stayed`,
 			`PASS interrupted: the next prompt ran, then the wake dispatched (generation collected)`,
 			`fail "a turn started while the thread was interrupted`,
 			`from queued_items`,
-			`"$0" triggers "$home/.codex/sessions" "$iref"`,
-			`"user queue"`,
+			`"$0" events "$home/.codex/sessions" "$iref"`,
+			`"user done queue"`,
 			`the tab's earlier turn never finished`,
 		} {
 			if !strings.Contains(src, want) {
