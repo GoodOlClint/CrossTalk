@@ -83,7 +83,7 @@ func TestHarnessCompatTier0CodexFailsClosed(t *testing.T) {
 		name, version, exec string
 		ok                  bool
 	}{
-		{"banner before version", "echo banner; echo 'codex-cli 0.171.0'", "true", false},
+		{"banner before version", "echo banner; echo 'codex-cli 0.171.0'", `touch "$CODEX_HOME/queue_1.sqlite"`, false},
 		{"unparseable", "echo 'codex 0.171.0'", "true", false},
 		{"no queue created", "echo 'codex-cli 0.171.0'", "true", false},
 		{"queue created", "echo 'codex-cli 0.171.0'", `touch "$CODEX_HOME/queue_1.sqlite"`, true},

@@ -129,6 +129,7 @@ Each step is one PR; nothing is built before the operator approves this plan. `w
 ## 7. Open points and risks
 
 - The two unknowns in 3 a and 3 c are answered by the first dispatch run, not assumed.
+- Whether a plain `codex` on Linux attaches to the managed app-server daemon is unmeasured (`docs/setup.md`); the live Linux leg (slice 2b) waits for the OpenRouter key and answers it.
 - A harness release on npm's `latest` that is pulled back the same day can produce a bump for a version no user runs; harmless, the record only says it passed.
 - The macOS leg drives a TUI through a pty. If it proves flaky, Codex bumps stop (the leg is required for them) and an issue says so; it is not retried until green, and Claude bumps continue.
 - OpenRouter's model routing can change behind a slug; a live failure whose tier 0 passed is reported as such so a model-side failure is not read as a harness break.
