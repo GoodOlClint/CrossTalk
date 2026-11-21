@@ -17,8 +17,8 @@ semver() {
 }
 
 case "${1:-}" in
-detect)
-	usage="usage: harness-compat.sh detect RECORD HARNESS VERSION FORCE RECORDED"
+check-updates)
+	usage="usage: harness-compat.sh check-updates RECORD HARNESS VERSION FORCE RECORDED"
 	record="${2:?$usage}"
 	which="${3:?$usage}"
 	forced="${4-}"
@@ -50,24 +50,9 @@ detect)
 	done
 	printf '%s\n' "$out"
 	;;
-pair)
-	usage="usage: harness-compat.sh pair CHANGED_JSON"
-	changed="${2:?$usage}"
-	out="{}"
-	for h in codex claude-code; do
-		v="$(printf '%s' "$changed" | jq -r --arg h "$h" '[.[] | select(.harness == $h) | .version][0] // empty')"
-		[ -n "$v" ] || v="$(npm view "$(pkg "$h")" version)"
-		semver "$v" || {
-			echo "not a version for $h: $v" >&2
-			exit 1
-		}
-		out="$(printf '%s' "$out" | jq -c --arg h "$h" --arg v "$v" '. + {($h): $v}')"
-	done
-	printf '%s\n' "$out"
-	;;
 legs)
 	usage="usage: harness-compat.sh legs CHANGED_JSON [QUEUE_CODEX_VERSION]"
-	printf '%s' "${2:?$usage}" | jq -c --arg q "${3-}" '[.[] | (if .harness == "claude-code" then {leg: "claude", harness: .harness, version: .version, runner: "ubuntu-latest"} elif .harness == "codex" then ({leg: "codex-linux", harness: .harness, version: .version, runner: "ubuntu-latest"}, {leg: "codex-macos", harness: .harness, version: (if $q != "" then $q else .version end), runner: "macos-latest"}) else empty end)]'
+	printf '%s' "${2:?$usage}" | jq -c --arg q "${3-}" '[.[] | (if .harness == "claude-code" then ({leg: "claude-linux", harness: .harness, version: .version, runner: "ubuntu-latest"}, {leg: "claude-macos", harness: .harness, version: .version, runner: "macos-latest"}) elif .harness == "codex" then ({leg: "codex-linux", harness: .harness, version: .version, runner: "ubuntu-latest"}, {leg: "codex-macos", harness: .harness, version: (if $q != "" then $q else .version end), runner: "macos-latest"}) else empty end)]'
 	;;
 step-status)
 	usage="usage: harness-compat.sh step-status JOBS_FILE JOB STEP"
@@ -78,12 +63,6 @@ step-status)
 		elif $c == "skipped" and $job.conclusion != "failure" then "skipped"
 		else "fail" end end' "${2:?$usage}"
 	;;
-legs-passed)
-	usage="usage: harness-compat.sh legs-passed JOBS_FILE LEGS_JSON"
-	for leg in $(printf '%s' "${3:?$usage}" | jq -r '.[].leg'); do
-		[ "$("$0" step-status "${2:?$usage}" "harness-$leg" "Run the leg")" = pass ] || exit 1
-	done
-	;;
 report)
 	usage="usage: harness-compat.sh report JOBS_FILE LEGS_JSON"
 	jobs="${2:?$usage}"
@@ -93,12 +72,11 @@ report)
 		st="$("$0" step-status "$jobs" "harness-$leg" "Run the leg")"
 		res="$(printf '%s' "$res" | jq -c --arg l "$leg" --arg s "$st" '. + {($l): $s}')"
 	done
-	cross="$("$0" step-status "$jobs" cross "Ask each way between Claude and Codex")"
-	printf '%s' "$legs" | jq -c --argjson res "$res" --arg cross "$cross" '
-		(group_by(.harness) | map({key: .[0].harness, value: (.[0].version as $v | {version: $v, legs: (map({key: .leg, value: $res[.leg]}) | from_entries), leg_versions: (map({key: .leg, value: .version}) | from_entries), pass: (all(.[]; $res[.leg] == "pass" and .version == $v))})}) | from_entries) + {cross: $cross}'
+	printf '%s' "$legs" | jq -c --argjson res "$res" '
+		(group_by(.harness) | map({key: .[0].harness, value: (.[0].version as $v | {version: $v, legs: (map({key: .leg, value: $res[.leg]}) | from_entries), leg_versions: (map({key: .leg, value: .version}) | from_entries), pass: (all(.[]; $res[.leg] == "pass" and .version == $v))})}) | from_entries)'
 	;;
-tier0-claude)
-	usage="usage: harness-compat.sh tier0-claude HOME"
+compare-claude)
+	usage="usage: harness-compat.sh compare-claude HOME"
 	home="${2:?$usage}"
 	port="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')"
 	HOME="$home" ANTHROPIC_BASE_URL="http://127.0.0.1:$port" ANTHROPIC_AUTH_TOKEN=dummy ANTHROPIC_API_KEY='' \
@@ -129,8 +107,8 @@ tier0-claude)
 	done
 	echo "claude session file and socket ok"
 	;;
-tier0-codex)
-	usage="usage: harness-compat.sh tier0-codex HOME"
+compare-codex)
+	usage="usage: harness-compat.sh compare-codex HOME"
 	home="${2:?$usage}"
 	mkdir -p "$home/.codex"
 	out="$(HOME="$home" CODEX_HOME="$home/.codex" codex --version)"
@@ -140,7 +118,11 @@ tier0-codex)
 	}
 	port="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')"
 	TIMEOUT_CMD=
-	command -v timeout >/dev/null 2>&1 && TIMEOUT_CMD="timeout 60"
+	if command -v timeout >/dev/null 2>&1; then
+		TIMEOUT_CMD="timeout 60"
+	elif command -v perl >/dev/null 2>&1; then
+		TIMEOUT_CMD="perl -e alarm(60);exec(@ARGV) --"
+	fi
 	HOME="$home" CODEX_HOME="$home/.codex" OR_KEY=dummy $TIMEOUT_CMD codex exec --skip-git-repo-check \
 		-c "model_providers.closed={name=\"closed\",base_url=\"http://127.0.0.1:$port/v1\",env_key=\"OR_KEY\",wire_api=\"responses\"}" \
 		-c model_provider=closed -m closed/none hi >/dev/null 2>&1 || true
@@ -152,7 +134,7 @@ tier0-codex)
 	echo "$q"
 	;;
 *)
-	echo "usage: harness-compat.sh detect|pair|legs|step-status|legs-passed|report|tier0-claude|tier0-codex ..." >&2
+	echo "usage: harness-compat.sh check-updates|legs|step-status|report|compare-claude|compare-codex ..." >&2
 	exit 2
 	;;
 esac

@@ -28,18 +28,19 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  detect:
+  check-updates:
+    name: Check for updates
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
-      changed: ${{ steps.detect.outputs.changed }}
-      pair: ${{ steps.detect.outputs.pair }}
-      legs: ${{ steps.detect.outputs.legs }}
+      changed: ${{ steps.check.outputs.changed }}
+      compare: ${{ steps.check.outputs.compare }}
+      legs: ${{ steps.check.outputs.legs }}
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - id: detect
+      - id: check
         env:
           HARNESS: ${{ inputs.harness }}
           VERSION: ${{ inputs.version }}
@@ -48,21 +49,21 @@ jobs:
           QUEUE_VERSION: ${{ inputs.queue_codex_version }}
         run: |
           set -eu
-          changed="$(scripts/harness-compat.sh detect .github/harness-compat.json "$HARNESS" "$VERSION" "$FORCE" "$RECORDED")"
+          changed="$(scripts/harness-compat.sh check-updates .github/harness-compat.json "$HARNESS" "$VERSION" "$FORCE" "$RECORDED")"
           echo "changed=$changed" >> "$GITHUB_OUTPUT"
           echo "changed: $changed"
-          echo "pair=$(scripts/harness-compat.sh pair "$changed")" >> "$GITHUB_OUTPUT"
+          echo "compare=$(scripts/harness-compat.sh legs "$changed")" >> "$GITHUB_OUTPUT"
           echo "legs=$(scripts/harness-compat.sh legs "$changed" "$QUEUE_VERSION")" >> "$GITHUB_OUTPUT"
 
-  tier0:
-    name: tier0-${{ matrix.harness }}
-    needs: detect
-    if: needs.detect.outputs.changed != '[]'
+  compare:
+    name: compare-${{ matrix.leg }}
+    needs: check-updates
+    if: needs.check-updates.outputs.changed != '[]'
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(needs.detect.outputs.changed) }}
-    runs-on: ubuntu-latest
+        include: ${{ fromJSON(needs.check-updates.outputs.compare) }}
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
@@ -98,16 +99,16 @@ jobs:
         run: |
           set -eu
           if [ "$HARNESS" = codex ]; then
-            q="$(scripts/harness-compat.sh tier0-codex "$SCRATCH_HOME")"
+            q="$(scripts/harness-compat.sh compare-codex "$SCRATCH_HOME")"
             test -f "$q"
             CROSSTALK_COMPAT_QUEUE_DB="$q" go test ./internal/harness/codex -run TestInstalledCodexQueueSchema -count=1 -v
           else
-            scripts/harness-compat.sh tier0-claude "$SCRATCH_HOME"
+            scripts/harness-compat.sh compare-claude "$SCRATCH_HOME"
           fi
 
   build:
-    needs: detect
-    if: needs.detect.outputs.changed != '[]'
+    needs: check-updates
+    if: needs.check-updates.outputs.changed != '[]'
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
@@ -135,59 +136,17 @@ jobs:
           path: ${{ runner.temp }}/out
           if-no-files-found: error
 
-  key-before:
-    needs: [detect, tier0]
-    if: always() && needs.detect.outputs.changed != '[]'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    environment: harness-compat
-    env:
-      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-    outputs:
-      usage: ${{ steps.usage.outputs.usage }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - id: usage
-        run: |
-          set -eu
-          [ -n "$OPENROUTER_API_KEY" ] || { echo "usage=unavailable" >> "$GITHUB_OUTPUT"; exit 0; }
-          scripts/harness-compat-live.sh key-usage before "$RUNNER_TEMP" || true
-          echo "usage=$(cat "$RUNNER_TEMP/key-before.json" 2>/dev/null || echo unavailable)" >> "$GITHUB_OUTPUT"
-
-  key-after:
-    needs: [detect, harness, cross]
-    if: always() && needs.detect.outputs.changed != '[]'
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    environment: harness-compat
-    env:
-      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-    outputs:
-      usage: ${{ steps.usage.outputs.usage }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - id: usage
-        run: |
-          set -eu
-          [ -n "$OPENROUTER_API_KEY" ] || { echo "usage=unavailable" >> "$GITHUB_OUTPUT"; exit 0; }
-          scripts/harness-compat-live.sh key-usage after "$RUNNER_TEMP" || true
-          echo "usage=$(cat "$RUNNER_TEMP/key-after.json" 2>/dev/null || echo unavailable)" >> "$GITHUB_OUTPUT"
-
   harness:
     name: harness-${{ matrix.leg }}
-    needs: [detect, tier0, build, key-before]
-    if: always() && needs.detect.outputs.changed != '[]' && needs.build.result == 'success'
+    needs: [check-updates, compare, build]
+    if: always() && needs.check-updates.outputs.changed != '[]' && needs.build.result == 'success'
     permissions:
       contents: read
       actions: read
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(needs.detect.outputs.legs) }}
+        include: ${{ fromJSON(needs.check-updates.outputs.legs) }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     environment: harness-compat
@@ -199,56 +158,41 @@ jobs:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - id: prereq
+      - name: Require its compare job, the key and the models
         env:
           GH_TOKEN: ${{ github.token }}
-          TIER0: tier0-${{ matrix.harness }}
+          COMPARE: compare-${{ matrix.leg }}
+          HARNESS: ${{ matrix.harness }}
         run: |
           set -eu
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs" --paginate --jq '.jobs[]' > "$RUNNER_TEMP/jobs.json"
-          c="$(jq -rs --arg n "$TIER0" 'map(select(.name == $n)) | .[0].conclusion // "missing"' "$RUNNER_TEMP/jobs.json")"
-          if [ "$c" = success ]; then
-            echo "ok=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "ok=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::$TIER0 was $c, so this leg is blocked"
-          fi
-      - id: gate
-        env:
-          PREREQ: ${{ steps.prereq.outputs.ok }}
-        run: |
-          if [ "$PREREQ" != true ]; then
-            echo "ran=false" >> "$GITHUB_OUTPUT"
-          elif [ -z "$OPENROUTER_API_KEY" ]; then
-            echo "ran=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::skipped: OPENROUTER_API_KEY is not set"
-          elif [ -z "$CLAUDE_MODEL" ] || [ -z "$CODEX_MODEL" ]; then
-            echo "::error::HARNESS_COMPAT_CLAUDE_MODEL and HARNESS_COMPAT_CODEX_MODEL must both be set when OPENROUTER_API_KEY is"
+          c="$(jq -rs --arg n "$COMPARE" 'map(select(.name == $n)) | .[0].conclusion // "missing"' "$RUNNER_TEMP/jobs.json")"
+          if [ "$c" != success ]; then
+            echo "::error::blocked: $COMPARE was $c"
             exit 1
-          else
-            echo "ran=true" >> "$GITHUB_OUTPUT"
           fi
-      - if: steps.gate.outputs.ran == 'true'
-        uses: actions/download-artifact@v8
+          [ -n "$OPENROUTER_API_KEY" ] || { echo "::error::OPENROUTER_API_KEY is not set"; exit 1; }
+          case "$HARNESS" in
+            claude-code) model="$CLAUDE_MODEL"; var=HARNESS_COMPAT_CLAUDE_MODEL ;;
+            *) model="$CODEX_MODEL"; var=HARNESS_COMPAT_CODEX_MODEL ;;
+          esac
+          [ -n "$model" ] || { echo "::error::$var is not set"; exit 1; }
+      - uses: actions/download-artifact@v8
         with:
           name: crosstalk-bin-${{ matrix.runner }}
           path: ${{ runner.temp }}/bin
       - name: Install the harness for this leg
-        if: steps.gate.outputs.ran == 'true'
         env:
-          LEG: ${{ matrix.leg }}
+          HARNESS: ${{ matrix.harness }}
           VERSION: ${{ matrix.version }}
-          PAIR: ${{ needs.detect.outputs.pair }}
         run: |
           set -eu
-          case "$LEG" in
-            claude) npm install -g "@anthropic-ai/claude-code@$VERSION"; claude --version ;;
-            codex-linux) npm install -g "@openai/codex@$VERSION"; codex --version ;;
-            codex-macos) npm install -g "@openai/codex@$VERSION" "@anthropic-ai/claude-code@$(printf '%s' "$PAIR" | jq -r '.["claude-code"]')"; codex --version; claude --version ;;
-            *) echo "unknown leg: $LEG" >&2; exit 1 ;;
+          case "$HARNESS" in
+            claude-code) npm install -g "@anthropic-ai/claude-code@$VERSION"; claude --version ;;
+            codex) npm install -g "@openai/codex@$VERSION"; codex --version ;;
+            *) echo "unknown harness: $HARNESS" >&2; exit 1 ;;
           esac
       - name: Run the leg
-        if: steps.gate.outputs.ran == 'true'
         timeout-minutes: 20
         env:
           LEG: ${{ matrix.leg }}
@@ -258,98 +202,24 @@ jobs:
           home="$(mktemp -d /tmp/ct.XXXXXX)"
           CROSSTALK_BIN="$RUNNER_TEMP/bin/crosstalk" THREADDUMP_BIN="$RUNNER_TEMP/bin/threaddump" LIVE_LOGS="$RUNNER_TEMP/live-logs" scripts/harness-compat-live.sh leg "$LEG" "$home"
       - name: Upload logs
-        if: always() && steps.gate.outputs.ran == 'true'
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: logs-${{ matrix.leg }}
           path: ${{ runner.temp }}/live-logs
           if-no-files-found: ignore
 
-  cross:
-    needs: [detect, build, harness]
-    if: always() && needs.detect.outputs.changed != '[]' && needs.build.result == 'success'
-    permissions:
-      contents: read
-      actions: read
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    environment: harness-compat
-    env:
-      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-      CLAUDE_MODEL: ${{ vars.HARNESS_COMPAT_CLAUDE_MODEL }}
-      CODEX_MODEL: ${{ vars.HARNESS_COMPAT_CODEX_MODEL }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - id: prereq
-        env:
-          GH_TOKEN: ${{ github.token }}
-          LEGS: ${{ needs.detect.outputs.legs }}
-        run: |
-          set -eu
-          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs" --paginate --jq '.jobs[]' > "$RUNNER_TEMP/jobs.json"
-          if scripts/harness-compat.sh legs-passed "$RUNNER_TEMP/jobs.json" "$LEGS"; then
-            echo "ok=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "ok=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::not every leg passed, so cross is skipped"
-          fi
-      - id: gate
-        env:
-          PREREQ: ${{ steps.prereq.outputs.ok }}
-        run: |
-          if [ "$PREREQ" != true ]; then
-            echo "ran=false" >> "$GITHUB_OUTPUT"
-          elif [ -z "$OPENROUTER_API_KEY" ]; then
-            echo "ran=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::skipped: OPENROUTER_API_KEY is not set"
-          elif [ -z "$CLAUDE_MODEL" ] || [ -z "$CODEX_MODEL" ]; then
-            echo "::error::HARNESS_COMPAT_CLAUDE_MODEL and HARNESS_COMPAT_CODEX_MODEL must both be set when OPENROUTER_API_KEY is"
-            exit 1
-          else
-            echo "ran=true" >> "$GITHUB_OUTPUT"
-          fi
-      - if: steps.gate.outputs.ran == 'true'
-        uses: actions/download-artifact@v8
-        with:
-          name: crosstalk-bin-ubuntu-latest
-          path: ${{ runner.temp }}/bin
-      - name: Install both harnesses
-        if: steps.gate.outputs.ran == 'true'
-        env:
-          PAIR: ${{ needs.detect.outputs.pair }}
-        run: |
-          set -eu
-          codex="$(printf '%s' "$PAIR" | jq -r '.codex')"
-          claude="$(printf '%s' "$PAIR" | jq -r '.["claude-code"]')"
-          npm install -g "@openai/codex@$codex" "@anthropic-ai/claude-code@$claude"
-          codex --version
-          claude --version
-      - name: Ask each way between Claude and Codex
-        if: steps.gate.outputs.ran == 'true'
-        timeout-minutes: 20
-        run: |
-          set -eu
-          chmod +x "$RUNNER_TEMP/bin/crosstalk" "$RUNNER_TEMP/bin/threaddump"
-          home="$(mktemp -d /tmp/ct.XXXXXX)"
-          CROSSTALK_BIN="$RUNNER_TEMP/bin/crosstalk" THREADDUMP_BIN="$RUNNER_TEMP/bin/threaddump" LIVE_LOGS="$RUNNER_TEMP/live-logs" scripts/harness-compat-live.sh leg cross "$home"
-      - name: Upload logs
-        if: always() && steps.gate.outputs.ran == 'true'
-        uses: actions/upload-artifact@v7
-        with:
-          name: logs-cross
-          path: ${{ runner.temp }}/live-logs
-          if-no-files-found: ignore
-
   report:
-    needs: [detect, harness, cross, key-before, key-after]
-    if: always() && needs.detect.outputs.changed != '[]'
+    needs: [check-updates, harness]
+    if: always() && needs.check-updates.outputs.changed != '[]'
     permissions:
       contents: read
       actions: read
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    environment: harness-compat
+    env:
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
     outputs:
       results: ${{ steps.report.outputs.results }}
     steps:
@@ -359,13 +229,13 @@ jobs:
       - id: report
         env:
           GH_TOKEN: ${{ github.token }}
-          LEGS: ${{ needs.detect.outputs.legs }}
-          USAGE_BEFORE: ${{ needs.key-before.outputs.usage }}
-          USAGE_AFTER: ${{ needs.key-after.outputs.usage }}
+          LEGS: ${{ needs.check-updates.outputs.legs }}
         run: |
           set -eu
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs" --paginate --jq '.jobs[]' > "$RUNNER_TEMP/jobs.json"
-          echo "OpenRouter key usage, which lags the spend: before the legs $USAGE_BEFORE; after cross $USAGE_AFTER. The next run's before value gives the true cost of this run." | tee -a "$GITHUB_STEP_SUMMARY"
           results="$(scripts/harness-compat.sh report "$RUNNER_TEMP/jobs.json" "$LEGS")"
           echo "results=$results" >> "$GITHUB_OUTPUT"
-          printf '%s' "$results" | jq -r 'to_entries[] | if .key == "cross" then "cross: \(.value)" else "\(.key) \(.value.version): \(if .value.pass then "PASS" else "NOT PASSED" end) (\(.value.legs | to_entries | map("\(.key)=\(.value)") | join(", ")))" end' | tee -a "$GITHUB_STEP_SUMMARY"
+          printf '%s' "$results" | jq -r 'to_entries[] | "\(.key) \(.value.version): \(if .value.pass then "PASS" else "NOT PASSED" end) (\(.value.legs | to_entries | map("\(.key)=\(.value)") | join(", ")))"' | tee -a "$GITHUB_STEP_SUMMARY"
+          [ -n "$OPENROUTER_API_KEY" ] || { echo "OpenRouter key usage: unavailable, no key" | tee -a "$GITHUB_STEP_SUMMARY"; exit 0; }
+          scripts/harness-compat-live.sh key-usage now "$RUNNER_TEMP" | tee -a "$GITHUB_STEP_SUMMARY"
+          echo "OpenRouter usage lags the spend: this run's cost is the next run's read minus this one." | tee -a "$GITHUB_STEP_SUMMARY"

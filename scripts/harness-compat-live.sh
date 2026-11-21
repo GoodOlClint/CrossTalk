@@ -1,32 +1,6 @@
 #!/bin/sh
 set -eu
 
-# assert-roundtrip STATE: each direction passes only when the asker's journal
-# holds a receipt (an admitted reply) for an ask it sent to the other harness.
-assert_one() {
-	state="$1" a="$2" b="$3"
-	aid="$(jq -r --arg h "$a" 'select(.harness == $h) | .agent_id' "$state"/agents/*.json 2>/dev/null | head -n 1)"
-	bid="$(jq -r --arg h "$b" 'select(.harness == $h) | .agent_id' "$state"/agents/*.json 2>/dev/null | head -n 1)"
-	[ -n "$aid" ] && [ -n "$bid" ] && [ -f "$state/journal/$aid.jsonl" ] || {
-		echo "FAIL $a->$b: agent or journal missing (a=$aid b=$bid)"
-		return 1
-	}
-	asks="$(jq -r --arg to "$bid" 'select(.type == "outbound" and .kind == "ask" and .to == $to) | .message_id' "$state/journal/$aid.jsonl" | sort -u)"
-	[ -n "$asks" ] || {
-		echo "FAIL $a->$b: no ask sent"
-		return 1
-	}
-	got="$(jq -r 'select(.type == "receipt") | .in_reply_to' "$state/journal/$aid.jsonl" | sort -u)"
-	for m in $asks; do
-		if printf '%s\n' "$got" | grep -qx "$m"; then
-			echo "PASS $a->$b: reply receipt for ask $m"
-			return 0
-		fi
-	done
-	echo "FAIL $a->$b: ask sent, no reply receipt"
-	return 1
-}
-
 assert_ids() { # state asker_id target_id
 	state="$1" aid="$2" bid="$3"
 	[ -f "$state/journal/$aid.jsonl" ] || {
@@ -86,6 +60,15 @@ for f in files:
             sys.exit(0)
 sys.exit(1)
 PY
+	;;
+assert-home-descriptor)
+	state="${2:?usage: harness-compat-live.sh assert-home-descriptor STATE HARNESS}"
+	if cat "$state"/agents/*.json 2>/dev/null | jq -es --arg h "${3:?}" 'map(select(.harness == $h)) | length > 0' >/dev/null 2>&1; then
+		echo "PASS home: a $3 descriptor exists under the scratch state $state"
+	else
+		echo "FAIL home: no $3 descriptor under the scratch state $state, so the harness-launched shim did not resolve the leg's HOME"
+		exit 1
+	fi
 	;;
 assert-wake)
 	state="${2:?usage: harness-compat-live.sh assert-wake STATE SESSION_REF}"
@@ -158,16 +141,6 @@ for f in files:
 print("FAIL delivery mode: no list_agents result in the tab's rollout shows " + agent + " as queue-wake")
 sys.exit(1)
 PY
-	;;
-assert-delivery-mode)
-	jsonl="${2:?usage: harness-compat-live.sh assert-delivery-mode CLAUDE_JSONL CODEX_ID}"
-	id="${3:?}"
-	if jq -e --arg id "$id" 'select(.type == "user") | .message.content | if type == "array" then .[] else empty end | .content | (if type == "string" then . else tostring end) | (try fromjson catch empty) | .agents[]? | select(.agent_id == $id and (.delivery_mode // "" | startswith("queue-wake")))' "$jsonl" >/dev/null 2>&1; then
-		echo "PASS delivery mode: Claude's list_agents showed codex $id as queue-wake"
-	else
-		echo "FAIL delivery mode: no list_agents result shows codex $id as queue-wake"
-		exit 1
-	fi
 	;;
 assert-mailbox)
 	state="${2:?usage: harness-compat-live.sh assert-mailbox STATE SENDER_ID RECEIVER_ID}"
@@ -309,24 +282,16 @@ assert-discovery)
 		exit 1
 	fi
 	;;
-assert-roundtrip)
-	state="${2:?usage: harness-compat-live.sh assert-roundtrip STATE}"
-	rc=0
-	case "${3:-both}" in
-	codex-to-claude) assert_one "$state" codex claude || rc=1 ;;
-	*)
-		assert_one "$state" claude codex || rc=1
-		assert_one "$state" codex claude || rc=1
-		;;
-	esac
-	exit "$rc"
-	;;
 leg)
-	leg="${2:?usage: harness-compat-live.sh leg claude|codex-linux|cross HOME}"
+	leg="${2:?usage: harness-compat-live.sh leg claude-linux|claude-macos|codex-linux|codex-macos HOME}"
 	home="${3:?usage: harness-compat-live.sh leg LEG HOME}"
-	: "${OPENROUTER_API_KEY:?}" "${CLAUDE_MODEL:?}" "${CODEX_MODEL:?}"
+	: "${OPENROUTER_API_KEY:?}"
+	case "$leg" in
+	claude-*) : "${CLAUDE_MODEL:?}" ;;
+	*) : "${CODEX_MODEL:?}" ;;
+	esac
 	if [ "$leg" = codex-macos ]; then
-		# This leg runs Codex with hook trust bypassed: refuse before creating, copying or installing anything unless the home is a fresh, empty directory under /tmp.
+		# The queue phase of this leg runs Codex with hook trust bypassed: refuse before creating, copying or installing anything unless the home is a fresh, empty directory under /tmp.
 		real="$(cd "$home" 2>/dev/null && pwd -P)" || real=
 		case "$real" in
 		"$(cd /tmp && pwd -P)"/*) ;;
@@ -387,13 +352,13 @@ leg)
 	send_claude() { # fd prompt
 		jq -nc --arg c "$2" '{type: "user", message: {role: "user", content: $c}}' >&"$1"
 	}
-	start_codex() { # label fd prompt (no single quotes)
+	start_codex() { # label fd prompt (no single quotes): a daemon-mode tab in a pty
 		fifo="$home/codex-$1.in"
 		mkfifo "$fifo"
 		eval "exec $2<>\"\$fifo\""
 		(
 			cd "$home/work"
-			OPENROUTER_API_KEY="$OPENROUTER_API_KEY" exec script -qec "codex --dangerously-bypass-approvals-and-sandbox '$3'" /dev/null <"$fifo" >"$logs/codex-$1.log" 2>&1
+			exec python3 "${PTYRUN:?}" "$logs/codex-$1.log" "$fifo" codex --dangerously-bypass-approvals-and-sandbox "$3"
 		) &
 		pids="$pids $!"
 	}
@@ -403,7 +368,7 @@ leg)
 		eval "exec $2<>\"\$fifo\""
 		(
 			cd "$home/work"
-			exec python3 "${PTYRUN:?}" "$logs/codex-$1.log" "$fifo" codex --no-daemon --dangerously-bypass-hook-trust --dangerously-bypass-approvals-and-sandbox "$3"
+			exec env PTYRUN_ANSWER_HOOKS=1 python3 "${PTYRUN:?}" "$logs/codex-$1.log" "$fifo" codex --no-daemon --dangerously-bypass-hook-trust --dangerously-bypass-approvals-and-sandbox "$3"
 		) &
 		pids="$pids $!"
 	}
@@ -418,6 +383,7 @@ leg)
 			sleep 5
 		done
 	}
+	assert_home_resolved() { "$0" assert-home-descriptor "$state" "$1"; }
 	agent_ids() { agent_ids_of "$state" "$1"; }
 	only_id() { "$0" agent-id "$state" "$1"; }
 	other_id() { "$0" agent-id "$state" "$1" "$2"; }
@@ -482,22 +448,11 @@ PY
 		}
 	}
 
-	case "$leg" in
-	claude)
-		install_claude
-		start_claude recv 7 "$auth Call the crosstalk list_agents tool once, then reply READY."
-		wait_n claude 1
-		recv="$(only_id claude)"
-		start_claude ask 9 "$auth Call the crosstalk list_agents tool first and confirm that agent_id $recv appears. Then use the crosstalk ask tool to ask the agent whose agent_id is $recv: compat-C, reply with the single word PONG. Then wait for its reply."
-		wait_n claude 2
-		asker="$(other_id claude "$recv")"
-		await_pair "$asker" "$recv"
-		"$0" assert-discovery "$logs/claude-ask.jsonl" "$recv"
-		;;
-	codex-linux)
+	codex_roundtrip() {
 		install_codex
 		start_codex recv 7 "$auth Call the crosstalk list_agents tool once, then reply READY and wait."
 		wait_n codex 1
+		assert_home_resolved codex
 		recv="$(only_id codex)"
 		dump_threads lone
 		one_row_check "$recv"
@@ -506,21 +461,49 @@ PY
 		asker="$(other_id codex "$recv")"
 		await_pair "$asker" "$recv"
 		dump_threads end
+	}
+
+	case "$leg" in
+	claude-linux|claude-macos)
+		install_claude
+		start_claude recv 7 "$auth Call the crosstalk list_agents tool once, then reply READY."
+		wait_n claude 1
+		assert_home_resolved claude
+		recv="$(only_id claude)"
+		start_claude ask 9 "$auth Call the crosstalk list_agents tool first and confirm that agent_id $recv appears. Then use the crosstalk ask tool to ask the agent whose agent_id is $recv: compat-C, reply with the single word PONG. Then wait for its reply."
+		wait_n claude 2
+		asker="$(other_id claude "$recv")"
+		await_pair "$asker" "$recv"
+		"$0" assert-discovery "$logs/claude-ask.jsonl" "$recv"
+		;;
+	codex-linux)
+		codex_roundtrip
 		;;
 	codex-macos)
-		install_claude
+		codex_roundtrip
+		for p in $pids; do kill "$p" 2>/dev/null || true; done
+		pids=
+		codex app-server daemon stop >"$logs/codex-daemon-stop.log" 2>&1 || true
+		mkdir -p "$logs/state-shared"
+		cp -R "$state/agents" "$state/journal" "$logs/state-shared/" 2>/dev/null || true
+		home="$(mktemp -d /tmp/ct.XXXXXX)"
+		export HOME="$home"
+		state="$home/.local/state/crosstalk"
+		CODEX_HOME="$home/.codex"
+		export CODEX_HOME
+		mkdir -p "$home/work"
 		install_codex queue
-		start_claude send 7 "$auth Call the crosstalk list_agents tool once, then reply READY."
-		wait_n claude 1
-		claude_id="$(only_id claude)"
 		start_codex_nd tab 8 "$auth Call the crosstalk list_agents tool once, then finish your turn with one short sentence."
 		wait_n codex 1
+		assert_home_resolved codex
 		codex_id="$(only_id codex)"
 		tab_ref="$(session_of "$codex_id")"
 		await_ready "$tab_ref"
-		send_claude 7 "$auth Call the crosstalk list_agents tool and confirm that agent_id $codex_id appears. Then use the crosstalk send_message tool to send an inform to the agent whose agent_id is $codex_id with the text: compat-W1, please fetch your mail. Then say SENT."
+		start_codex_nd send 9 "$auth Call the crosstalk list_agents tool and confirm that agent_id $codex_id appears. Then use the crosstalk send_message tool to send an inform to the agent whose agent_id is $codex_id with the text: compat-W1, please fetch your mail. Then say SENT."
+		wait_n codex 2
+		sender_id="$(other_id codex "$codex_id")"
 		w=0
-		until "$0" assert-mailbox "$state" "$claude_id" "$codex_id" >"$logs/assert-mailbox.log" 2>&1; do
+		until "$0" assert-mailbox "$state" "$sender_id" "$codex_id" >"$logs/assert-mailbox.log" 2>&1; do
 			w=$((w + 1))
 			[ "$w" -lt 30 ] || {
 				cat "$logs/assert-mailbox.log" >&2
@@ -545,23 +528,6 @@ PY
 		cat "$logs/assert-mode.log"
 		"$0" assert-wake "$state" "$tab_ref"
 		;;
-	cross)
-		install_claude
-		install_codex
-		start_claude recv 7 "$auth Call the crosstalk list_agents tool once, then reply READY."
-		wait_n claude 1
-		claude_id="$(only_id claude)"
-		start_codex ask 8 "$auth Use the crosstalk list_agents tool to find the Claude agent whose agent_id is $claude_id, then use the crosstalk ask tool to ask it: compat-B, reply with the single word PONG. Then wait for its reply."
-		wait_n codex 1
-		codex_id="$(only_id codex)"
-		dump_threads lone
-		await_pair "$codex_id" "$claude_id"
-		send_claude 7 "$auth Call the crosstalk list_agents tool first and confirm that agent_id $codex_id appears. Then use the crosstalk ask tool to ask the agent whose agent_id is $codex_id (the Codex test peer; ignore any other Codex entry): compat-A, reply with the single word PONG. Then wait for its reply."
-		await_pair "$claude_id" "$codex_id"
-		"$0" assert-discovery "$logs/claude-recv.jsonl" "$codex_id"
-		dump_threads end
-		one_row_check "$codex_id"
-		;;
 	*)
 		echo "unknown leg: $leg" >&2
 		exit 2
@@ -570,7 +536,7 @@ PY
 	ok=true
 	;;
 *)
-	echo "usage: harness-compat-live.sh assert-roundtrip|assert-pair|assert-discovery|leg ..." >&2
+	echo "usage: harness-compat-live.sh assert-pair|assert-discovery|assert-home-descriptor|leg ..." >&2
 	exit 2
 	;;
 esac

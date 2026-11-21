@@ -3,7 +3,7 @@
 
 usage: ptyrun.py LOG FIFO CMD [ARG...]   |   ptyrun.py --match CAPTURED_BYTES_FILE
 Answers the cursor-position query, and answers the Codex hooks-review dialog with "2" + Enter ("Trust all and continue") once,
-only when $HOME is a scratch directory under /tmp (neither RUNNER_TEMP nor TMPDIR is trusted) and both $CODEX_HOME (which must be set) and $HOME/.codex resolve, symlinks followed, inside it.
+only when PTYRUN_ANSWER_HOOKS=1 (set by the queue phase alone) and $HOME is a scratch directory under /tmp (neither RUNNER_TEMP nor TMPDIR is trusted) and both $CODEX_HOME (which must be set) and $HOME/.codex resolve, symlinks followed, inside it.
 """
 import codecs, fcntl, os, pty, re, select, signal, struct, sys, termios, time
 
@@ -120,6 +120,8 @@ def matched(screen_text):
 
 def disposable_home():
     """True only for a scratch HOME under /tmp, with CODEX_HOME and $HOME/.codex both inside it after symlinks are resolved."""
+    if os.environ.get("PTYRUN_ANSWER_HOOKS") != "1":
+        return False
     raw = os.environ.get("HOME", "")
     if not raw:
         return False
@@ -149,7 +151,7 @@ def main():
     fired = set()
     if not disposable_home():
         fired = set(range(len(TRIGGERS)))
-        log.write(b"ptyrun: HOME is not a disposable directory, so no dialog is answered\n")
+        log.write(b"ptyrun: PTYRUN_ANSWER_HOOKS is not 1 or HOME is not a disposable directory, so no dialog is answered\n")
     screen = Screen()
     signal.signal(signal.SIGTERM, lambda *_: (os.kill(pid, signal.SIGKILL), sys.exit(0)))
     while True:

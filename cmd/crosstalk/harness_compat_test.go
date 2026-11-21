@@ -22,7 +22,7 @@ func compatDetect(t *testing.T, npmVersion string, args ...string) (string, erro
 	if err := os.WriteFile(filepath.Join(bin, "npm"), []byte(fake), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(filepath.Join(root, "scripts", "harness-compat.sh"), append([]string{"detect", filepath.Join(root, ".github", "harness-compat.json")}, args...)...)
+	cmd := exec.Command(filepath.Join(root, "scripts", "harness-compat.sh"), append([]string{"check-updates", filepath.Join(root, ".github", "harness-compat.json")}, args...)...)
 	cmd.Dir = root
 	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	out, err := cmd.CombinedOutput()
@@ -83,7 +83,7 @@ func TestHarnessCompatWorkflowSafe(t *testing.T) {
 		t.Error("the workflow is dispatch-only until slice 5")
 	}
 	jobs := workflowJobs(w)
-	secretJobs := map[string]bool{"key-before": true, "key-after": true, "harness": true, "cross": true}
+	secretJobs := map[string]bool{"harness": true, "report": true}
 	for name, body := range jobs {
 		has := strings.Contains(body, "secrets.") || strings.Contains(body, "environment:")
 		if has != secretJobs[name] {
@@ -93,36 +93,14 @@ func TestHarnessCompatWorkflowSafe(t *testing.T) {
 			t.Errorf("job %s must not echo the key", name)
 		}
 	}
-	for _, name := range []string{"harness", "cross"} {
-		body := jobs[name]
-		for _, want := range []string{"environment: harness-compat\n", "secrets.OPENROUTER_API_KEY", "ran=false", "must both be set when OPENROUTER_API_KEY is", "steps.gate.outputs.ran == 'true'"} {
-			if !strings.Contains(body, want) {
-				t.Errorf("%s lacks %q", name, want)
-			}
+	body := jobs["harness"]
+	for _, want := range []string{"environment: harness-compat\n", "secrets.OPENROUTER_API_KEY", "HARNESS_COMPAT_CODEX_MODEL", "HARNESS_COMPAT_CLAUDE_MODEL", "fail-fast: false"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("harness lacks %q", want)
 		}
 	}
-	if !strings.Contains(jobs["harness"], "fail-fast: false") || !strings.Contains(jobs["cross"], "legs-passed") {
-		t.Error("harness must not fail fast and cross must gate on legs-passed")
-	}
-}
-
-func TestHarnessCompatLegsGateOnTheirOwnTier0(t *testing.T) {
-	b, err := os.ReadFile(filepath.Join(releaseRepoRoot(t), ".github", "workflows", "harness-compat.yml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	w := string(b)
-	jobs := workflowJobs(w)
-	if !strings.Contains(jobs["tier0"], "name: tier0-${{ matrix.harness }}") {
-		t.Error("tier0 jobs must be named tier0-<matrix harness>")
-	}
-	for _, line := range strings.Split(jobs["harness"], "\n") {
-		if strings.Contains(line, "TIER0:") && strings.TrimSpace(line) != "TIER0: tier0-${{ matrix.harness }}" {
-			t.Errorf("a leg must gate on its own harness's tier0 job, got %q", strings.TrimSpace(line))
-		}
-	}
-	if !strings.Contains(jobs["harness"], "TIER0: tier0-${{ matrix.harness }}") {
-		t.Error("harness lacks the per-harness tier0 gate")
+	if !strings.Contains(jobs["report"], "environment: harness-compat\n") || !strings.Contains(jobs["report"], "secrets.OPENROUTER_API_KEY") {
+		t.Error("report holds the key for the one usage read")
 	}
 }
 
@@ -220,59 +198,7 @@ func journalLine(t *testing.T, v map[string]any) string {
 	return string(b) + "\n"
 }
 
-func TestHarnessCompatAssertRoundtrip(t *testing.T) {
-	if _, err := exec.LookPath("jq"); err != nil {
-		t.Skip("jq not on PATH")
-	}
-	ask := func(from, to, id string) map[string]any {
-		return map[string]any{"type": "outbound", "kind": "ask", "to": to, "message_id": id}
-	}
-	receipt := func(id string) map[string]any { return map[string]any{"type": "receipt", "in_reply_to": id} }
-	cases := []struct {
-		name   string
-		claude []map[string]any
-		codex  []map[string]any
-		ok     bool
-	}{
-		{"both directions replied", []map[string]any{ask("c", "cod", "m1"), receipt("m1")}, []map[string]any{ask("cod", "cla", "m2"), receipt("m2")}, true},
-		{"accepted ask without a reply", []map[string]any{ask("c", "cod", "m1"), receipt("m1")}, []map[string]any{ask("cod", "cla", "m2")}, false},
-		{"reply to some other id", []map[string]any{ask("c", "cod", "m1"), receipt("m9")}, []map[string]any{ask("cod", "cla", "m2"), receipt("m2")}, false},
-		{"inform is not an ask", []map[string]any{{"type": "outbound", "kind": "inform", "to": "cod", "message_id": "m1"}, receipt("m1")}, []map[string]any{ask("cod", "cla", "m2"), receipt("m2")}, false},
-		{"ask to the wrong agent", []map[string]any{ask("c", "other", "m1"), receipt("m1")}, []map[string]any{ask("cod", "cla", "m2"), receipt("m2")}, false},
-	}
-	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			state := t.TempDir()
-			for _, d := range []string{"agents", "journal"} {
-				if err := os.MkdirAll(filepath.Join(state, d), 0o755); err != nil {
-					t.Fatal(err)
-				}
-			}
-			for _, a := range []struct {
-				id, harness string
-				recs        []map[string]any
-			}{{"cla", "claude", c.claude}, {"cod", "codex", c.codex}} {
-				if err := os.WriteFile(filepath.Join(state, "agents", a.id+".json"), []byte(journalLine(t, map[string]any{"agent_id": a.id, "harness": a.harness})), 0o644); err != nil {
-					t.Fatal(err)
-				}
-				var j strings.Builder
-				for _, r := range a.recs {
-					j.WriteString(journalLine(t, r))
-				}
-				if err := os.WriteFile(filepath.Join(state, "journal", a.id+".jsonl"), []byte(j.String()), 0o644); err != nil {
-					t.Fatal(err)
-				}
-			}
-			root := releaseRepoRoot(t)
-			out, err := exec.Command(filepath.Join(root, "scripts", "harness-compat-live.sh"), "assert-roundtrip", state).CombinedOutput()
-			if (err == nil) != c.ok {
-				t.Fatalf("err = %v, want ok=%v\n%s", err, c.ok, out)
-			}
-		})
-	}
-}
-
-func TestHarnessCompatTier0CodexFailsClosed(t *testing.T) {
+func TestHarnessCompatCompareCodexFailsClosed(t *testing.T) {
 	cases := []struct {
 		name, version, exec string
 		ok                  bool
@@ -290,7 +216,7 @@ func TestHarnessCompatTier0CodexFailsClosed(t *testing.T) {
 				t.Fatal(err)
 			}
 			root := releaseRepoRoot(t)
-			cmd := exec.Command(filepath.Join(root, "scripts", "harness-compat.sh"), "tier0-codex", home)
+			cmd := exec.Command(filepath.Join(root, "scripts", "harness-compat.sh"), "compare-codex", home)
 			cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 			out, err := cmd.CombinedOutput()
 			if (err == nil) != c.ok {
@@ -354,25 +280,6 @@ func TestHarnessCompatStageLogsScrubsNestedKey(t *testing.T) {
 	}
 }
 
-func TestHarnessCompatPair(t *testing.T) {
-	if _, err := exec.LookPath("jq"); err != nil {
-		t.Skip("jq not on PATH")
-	}
-	bin := t.TempDir()
-	if err := os.WriteFile(filepath.Join(bin, "npm"), []byte("#!/bin/sh\necho 5.6.7\n"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	cmd := exec.Command(filepath.Join(releaseRepoRoot(t), "scripts", "harness-compat.sh"), "pair", `[{"harness":"codex","version":"0.171.0"}]`)
-	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("%v\n%s", err, out)
-	}
-	if got, want := strings.TrimSpace(string(out)), `{"codex":"0.171.0","claude-code":"5.6.7"}`; got != want {
-		t.Fatalf("got %s, want %s", got, want)
-	}
-}
-
 func TestHarnessCompatScriptsShellcheck(t *testing.T) {
 	sc, err := exec.LookPath("shellcheck")
 	if err != nil {
@@ -388,7 +295,7 @@ func TestHarnessCompatScriptsShellcheck(t *testing.T) {
 	}
 }
 
-func TestHarnessCompatTier0ClaudeSocketPath(t *testing.T) {
+func TestHarnessCompatCompareClaudeSocketPath(t *testing.T) {
 	if _, err := exec.LookPath("jq"); err != nil {
 		t.Skip("jq not on PATH")
 	}
@@ -436,7 +343,7 @@ func TestHarnessCompatTier0ClaudeSocketPath(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(bin, "claude"), []byte(fake), 0o755); err != nil {
 				t.Fatal(err)
 			}
-			cmd := exec.Command(filepath.Join(releaseRepoRoot(t), "scripts", "harness-compat.sh"), "tier0-claude", home)
+			cmd := exec.Command(filepath.Join(releaseRepoRoot(t), "scripts", "harness-compat.sh"), "compare-claude", home)
 			cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "COMPAT_WAIT_TRIES=6")
 			out, err := cmd.CombinedOutput()
 			if (err == nil) != c.ok {
@@ -558,18 +465,18 @@ func TestHarnessCompatLegsAndReport(t *testing.T) {
 		return strings.TrimSpace(string(out))
 	}
 	legs := run("legs", `[{"harness":"codex","version":"0.171.0"},{"harness":"claude-code","version":"2.1.330"}]`)
-	if want := `[{"leg":"codex-linux","harness":"codex","version":"0.171.0","runner":"ubuntu-latest"},{"leg":"codex-macos","harness":"codex","version":"0.171.0","runner":"macos-latest"},{"leg":"claude","harness":"claude-code","version":"2.1.330","runner":"ubuntu-latest"}]`; legs != want {
+	if want := `[{"leg":"codex-linux","harness":"codex","version":"0.171.0","runner":"ubuntu-latest"},{"leg":"codex-macos","harness":"codex","version":"0.171.0","runner":"macos-latest"},{"leg":"claude-linux","harness":"claude-code","version":"2.1.330","runner":"ubuntu-latest"},{"leg":"claude-macos","harness":"claude-code","version":"2.1.330","runner":"macos-latest"}]`; legs != want {
 		t.Fatalf("legs = %s, want %s", legs, want)
 	}
 	rehearsal := run("legs", `[{"harness":"codex","version":"0.171.0"}]`, "0.167.0")
 	if want := `[{"leg":"codex-linux","harness":"codex","version":"0.171.0","runner":"ubuntu-latest"},{"leg":"codex-macos","harness":"codex","version":"0.167.0","runner":"macos-latest"}]`; rehearsal != want {
 		t.Fatalf("legs with a pinned queue version = %s, want %s", rehearsal, want)
 	}
-	if onlyClaude := run("legs", `[{"harness":"claude-code","version":"2.1.330"}]`, "0.167.0"); strings.Contains(onlyClaude, "codex-macos") {
-		t.Fatalf("a Claude-only change must not run the Codex macOS leg: %s", onlyClaude)
+	if onlyClaude := run("legs", `[{"harness":"claude-code","version":"2.1.330"}]`, "0.167.0"); strings.Contains(onlyClaude, "codex") {
+		t.Fatalf("a Claude-only change must not run a Codex leg: %s", onlyClaude)
 	}
 	// The report cases below use two legs so each fixture stays small.
-	legs = `[{"leg":"codex-linux","harness":"codex","version":"0.171.0"},{"leg":"claude","harness":"claude-code","version":"2.1.330"}]`
+	legs = `[{"leg":"codex-linux","harness":"codex","version":"0.171.0"},{"leg":"claude-linux","harness":"claude-code","version":"2.1.330"}]`
 	job := func(name, conclusion string, steps map[string]string) map[string]any {
 		var st []map[string]any
 		for n, c := range steps {
@@ -591,25 +498,23 @@ func TestHarnessCompatLegsAndReport(t *testing.T) {
 	}
 	ran := map[string]string{"Run the leg": "success"}
 	skipped := map[string]string{"Run the leg": "skipped"}
-	crossRan := map[string]string{"Ask each way between Claude and Codex": "success"}
-	crossSkipped := map[string]string{"Ask each way between Claude and Codex": "skipped"}
 	cases := []struct {
 		name string
 		jobs []map[string]any
 		want string
 	}{
-		{"claude passes, codex fails, cross skipped",
-			[]map[string]any{job("harness-claude", "success", ran), job("harness-codex-linux", "failure", map[string]string{"Run the leg": "failure"}), job("cross", "success", crossSkipped)},
-			`{"claude-code":{"version":"2.1.330","legs":{"claude":"pass"},"leg_versions":{"claude":"2.1.330"},"pass":true},"codex":{"version":"0.171.0","legs":{"codex-linux":"fail"},"leg_versions":{"codex-linux":"0.171.0"},"pass":false},"cross":"skipped"}`},
+		{"claude passes, codex fails",
+			[]map[string]any{job("harness-claude-linux", "success", ran), job("harness-codex-linux", "failure", map[string]string{"Run the leg": "failure"})},
+			`{"claude-code":{"version":"2.1.330","legs":{"claude-linux":"pass"},"leg_versions":{"claude-linux":"2.1.330"},"pass":true},"codex":{"version":"0.171.0","legs":{"codex-linux":"fail"},"leg_versions":{"codex-linux":"0.171.0"},"pass":false}}`},
 		{"missing key skips every step and is not a pass",
-			[]map[string]any{job("harness-claude", "success", skipped), job("harness-codex-linux", "success", skipped), job("cross", "success", crossSkipped)},
-			`{"claude-code":{"version":"2.1.330","legs":{"claude":"skipped"},"leg_versions":{"claude":"2.1.330"},"pass":false},"codex":{"version":"0.171.0","legs":{"codex-linux":"skipped"},"leg_versions":{"codex-linux":"0.171.0"},"pass":false},"cross":"skipped"}`},
+			[]map[string]any{job("harness-claude-linux", "success", skipped), job("harness-codex-linux", "success", skipped)},
+			`{"claude-code":{"version":"2.1.330","legs":{"claude-linux":"skipped"},"leg_versions":{"claude-linux":"2.1.330"},"pass":false},"codex":{"version":"0.171.0","legs":{"codex-linux":"skipped"},"leg_versions":{"codex-linux":"0.171.0"},"pass":false}}`},
 		{"success job whose test step did not succeed is not a pass",
-			[]map[string]any{job("harness-claude", "success", map[string]string{"Run the leg": "failure"}), job("harness-codex-linux", "success", ran), job("cross", "success", crossRan)},
-			`{"claude-code":{"version":"2.1.330","legs":{"claude":"fail"},"leg_versions":{"claude":"2.1.330"},"pass":false},"codex":{"version":"0.171.0","legs":{"codex-linux":"pass"},"leg_versions":{"codex-linux":"0.171.0"},"pass":true},"cross":"pass"}`},
+			[]map[string]any{job("harness-claude-linux", "success", map[string]string{"Run the leg": "failure"}), job("harness-codex-linux", "success", ran)},
+			`{"claude-code":{"version":"2.1.330","legs":{"claude-linux":"fail"},"leg_versions":{"claude-linux":"2.1.330"},"pass":false},"codex":{"version":"0.171.0","legs":{"codex-linux":"pass"},"leg_versions":{"codex-linux":"0.171.0"},"pass":true}}`},
 		{"a leg with no job reads as fail",
 			[]map[string]any{job("harness-codex-linux", "success", ran)},
-			`{"claude-code":{"version":"2.1.330","legs":{"claude":"fail"},"leg_versions":{"claude":"2.1.330"},"pass":false},"codex":{"version":"0.171.0","legs":{"codex-linux":"pass"},"leg_versions":{"codex-linux":"0.171.0"},"pass":true},"cross":"fail"}`},
+			`{"claude-code":{"version":"2.1.330","legs":{"claude-linux":"fail"},"leg_versions":{"claude-linux":"2.1.330"},"pass":false},"codex":{"version":"0.171.0","legs":{"codex-linux":"pass"},"leg_versions":{"codex-linux":"0.171.0"},"pass":true}}`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -620,21 +525,13 @@ func TestHarnessCompatLegsAndReport(t *testing.T) {
 	}
 	// A queue leg that ran another Codex version does not make the candidate pass.
 	pinned := `[{"leg":"codex-linux","harness":"codex","version":"0.171.0"},{"leg":"codex-macos","harness":"codex","version":"0.167.0"}]`
-	allRan := write(job("harness-codex-linux", "success", ran), job("harness-codex-macos", "success", ran), job("cross", "success", crossRan))
+	allRan := write(job("harness-codex-linux", "success", ran), job("harness-codex-macos", "success", ran))
 	if got := run("report", allRan, pinned); !strings.Contains(got, `"pass":false`) || !strings.Contains(got, `"codex-macos":"0.167.0"`) {
 		t.Fatalf("a queue leg on another version must not pass the candidate: %s", got)
 	}
 	same := `[{"leg":"codex-linux","harness":"codex","version":"0.171.0"},{"leg":"codex-macos","harness":"codex","version":"0.171.0"}]`
 	if got := run("report", allRan, same); !strings.Contains(got, `"pass":true`) {
 		t.Fatalf("both Codex legs on the candidate version pass it: %s", got)
-	}
-	both := write(job("harness-claude", "success", ran), job("harness-codex-linux", "success", ran))
-	if out, err := exec.Command(script, "legs-passed", both, legs).CombinedOutput(); err != nil {
-		t.Fatalf("legs-passed with both legs passing: %v\n%s", err, out)
-	}
-	one := write(job("harness-claude", "success", ran), job("harness-codex-linux", "success", skipped))
-	if err := exec.Command(script, "legs-passed", one, legs).Run(); err == nil {
-		t.Fatal("legs-passed must fail when a leg did not run")
 	}
 }
 
@@ -751,7 +648,7 @@ func TestHarnessCompatPtyrun(t *testing.T) {
 				env = append(env, kv)
 			}
 		}
-		cmd.Env = append(append(env, "HOME="+home), extraEnv...)
+		cmd.Env = append(append(env, "HOME="+home, "PTYRUN_ANSWER_HOOKS=1"), extraEnv...)
 		cmd.Dir = cwd
 		if err := cmd.Start(); err != nil {
 			t.Fatal(err)
@@ -789,6 +686,7 @@ func TestHarnessCompatPtyrun(t *testing.T) {
 			t.Errorf("%s: nothing may be answered:\n%s", name, out)
 		}
 	}
+	refused("answering is opt-in (daemon legs never set PTYRUN_ANSWER_HOOKS)", good, good, "CODEX_HOME="+filepath.Join(good, ".codex"), "PTYRUN_ANSWER_HOOKS=0")
 	// Each case below is refused by exactly one rule: the cwd and the other variables are set so every other rule would pass.
 	h := tmpHome()
 	refused("CODEX_HOME outside the scratch home", h, h, "CODEX_HOME=/Users/someone/.codex")
@@ -822,7 +720,7 @@ func TestHarnessCompatPtyrun(t *testing.T) {
 	refused("HOME is a symlink to a real home", link, tmpHome(), "CODEX_HOME="+filepath.Join(link, ".codex"))
 }
 
-func TestHarnessCompatAssertMailboxAndDeliveryMode(t *testing.T) {
+func TestHarnessCompatAssertMailbox(t *testing.T) {
 	if _, err := exec.LookPath("jq"); err != nil {
 		t.Skip("jq not on PATH")
 	}
@@ -862,26 +760,19 @@ func TestHarnessCompatAssertMailboxAndDeliveryMode(t *testing.T) {
 			}
 		})
 	}
-	row := func(mode string) string {
-		b, _ := json.Marshal(map[string]any{"agents": []map[string]any{{"agent_id": "abc", "delivery_mode": mode}}})
-		line, _ := json.Marshal(map[string]any{"type": "user", "message": map[string]any{"content": []map[string]any{{"type": "tool_result", "content": string(b)}}}})
-		return string(line) + "\n"
+}
+
+func compatLegArm(t *testing.T, src, arm string) string {
+	t.Helper()
+	i := strings.Index(src, "\n\t"+arm+")")
+	if i < 0 {
+		t.Fatalf("no %s leg arm", arm)
 	}
-	for name, c := range map[string]struct {
-		mode string
-		ok   bool
-	}{"queue wake": {"queue-wake (experimental)", true}, "no mode": {"", false}, "another mode": {"tool-output", false}} {
-		t.Run("delivery mode "+name, func(t *testing.T) {
-			f := filepath.Join(t.TempDir(), "claude.jsonl")
-			if err := os.WriteFile(f, []byte(row(c.mode)), 0o644); err != nil {
-				t.Fatal(err)
-			}
-			err := exec.Command(script, "assert-delivery-mode", f, "abc").Run()
-			if (err == nil) != c.ok {
-				t.Fatalf("err = %v, want ok=%v", err, c.ok)
-			}
-		})
+	rest := src[i+1:]
+	if j := strings.Index(rest[1:], "\n\t\t;;"); j >= 0 {
+		rest = rest[:j+1]
 	}
+	return rest
 }
 
 func TestHarnessCompatLegsCallTheOneRowCheckAndItIsFatal(t *testing.T) {
@@ -890,17 +781,14 @@ func TestHarnessCompatLegsCallTheOneRowCheckAndItIsFatal(t *testing.T) {
 		t.Fatal(err)
 	}
 	src := string(b)
-	for leg, call := range map[string]string{"codex-linux": `one_row_check "$recv"`, "cross": `one_row_check "$codex_id"`} {
-		i := strings.Index(src, "\n\t"+leg+")")
-		if i < 0 {
-			t.Fatalf("no %s leg", leg)
-		}
-		rest := src[i+1:]
-		if j := strings.Index(rest[1:], "\n\t;;"); j >= 0 {
-			rest = rest[:j+1]
-		}
-		if strings.Count(rest, call) != 1 {
-			t.Errorf("%s must call %s exactly once", leg, call)
+	fnBody := src[strings.Index(src, "\tcodex_roundtrip() {"):]
+	fnBody = fnBody[:strings.Index(fnBody, "\n\t}")]
+	if strings.Count(fnBody, `one_row_check "$recv"`) != 1 {
+		t.Error(`codex_roundtrip must call one_row_check "$recv" exactly once`)
+	}
+	for _, arm := range []string{"codex-linux", "codex-macos"} {
+		if strings.Count(compatLegArm(t, src, arm), "codex_roundtrip") != 1 {
+			t.Errorf("%s must run the shared codex_roundtrip exactly once", arm)
 		}
 	}
 	for _, line := range strings.Split(src, "\n") {
@@ -1268,5 +1156,193 @@ func TestHarnessCompatLegNeverKeysOnModelProse(t *testing.T) {
 	}
 	if !strings.Contains(string(b), "waiting for a task_complete event in the rollout of thread") {
 		t.Error("await_ready's timeout must name what it waited for")
+	}
+}
+
+func readCompatWorkflow(t *testing.T) string {
+	t.Helper()
+	b, err := os.ReadFile(filepath.Join(releaseRepoRoot(t), ".github", "workflows", "harness-compat.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(b)
+}
+
+func TestHarnessCompatRestructureJobs(t *testing.T) {
+	w := readCompatWorkflow(t)
+	jobs := workflowJobs(w)
+	var names []string
+	for n := range jobs {
+		names = append(names, n)
+	}
+	want := map[string]bool{"check-updates": true, "compare": true, "build": true, "harness": true, "report": true}
+	for _, n := range names {
+		if !want[n] {
+			t.Errorf("unexpected job %q: the workflow has check-updates, compare, build, harness and report only", n)
+		}
+	}
+	for n := range want {
+		if _, ok := jobs[n]; !ok {
+			t.Errorf("missing job %q", n)
+		}
+	}
+	for _, gone := range []string{"cross:", "detect:", "tier0", "key-before", "key-after"} {
+		if strings.Contains(w, gone) {
+			t.Errorf("the workflow must not mention %q", gone)
+		}
+	}
+	if !strings.Contains(jobs["compare"], "name: compare-${{ matrix.leg }}") || !strings.Contains(jobs["harness"], "name: harness-${{ matrix.leg }}") {
+		t.Error("compare and harness jobs are named from the leg: compare-<leg>, harness-<leg>")
+	}
+}
+
+func TestHarnessCompatLegNamesAreTheFourSameHarnessLegs(t *testing.T) {
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not on PATH")
+	}
+	out, err := exec.Command(filepath.Join(releaseRepoRoot(t), "scripts", "harness-compat.sh"), "legs",
+		`[{"harness":"codex","version":"0.171.0"},{"harness":"claude-code","version":"2.1.330"}]`).CombinedOutput()
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	var legs []struct{ Leg, Runner string }
+	if err := json.Unmarshal(out, &legs); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, l := range legs {
+		got[l.Leg] = l.Runner
+	}
+	want := map[string]string{"claude-linux": "ubuntu-latest", "claude-macos": "macos-latest", "codex-linux": "ubuntu-latest", "codex-macos": "macos-latest"}
+	if len(got) != 4 {
+		t.Fatalf("legs = %v, want exactly %v", got, want)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("leg %s runner = %q, want %q", k, got[k], v)
+		}
+	}
+}
+
+func TestHarnessCompatUsageIsReadOnceInReport(t *testing.T) {
+	w := readCompatWorkflow(t)
+	if n := strings.Count(w, "key-usage"); n != 1 {
+		t.Fatalf("OpenRouter usage must be read in exactly one place, found %d reads", n)
+	}
+	if !strings.Contains(workflowJobs(w)["report"], "key-usage") {
+		t.Error("the one usage read belongs to the report job")
+	}
+}
+
+func TestHarnessCompatNoGateOutputs(t *testing.T) {
+	w := readCompatWorkflow(t)
+	for _, bad := range []string{"ran=false", "ran=true", "steps.gate.outputs", "ok=false", "steps.prereq.outputs"} {
+		if strings.Contains(w, bad) {
+			t.Errorf("a job must not gate by an output that later steps skip on (%q): use a job-level if or a failing step", bad)
+		}
+	}
+	h := workflowJobs(w)["harness"]
+	for _, want := range []string{"exit 1", "blocked"} {
+		if !strings.Contains(h, want) {
+			t.Errorf("harness must fail (exit 1, %q) when its compare job did not pass", want)
+		}
+	}
+	if !strings.Contains(h, "OPENROUTER_API_KEY") || !strings.Contains(h, `[ -n "$OPENROUTER_API_KEY" ]`) {
+		t.Error("harness must fail on a missing key, not skip")
+	}
+}
+
+func TestHarnessCompatEveryLegAssertsTheScratchHomeDescriptor(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join(releaseRepoRoot(t), "scripts", "harness-compat-live.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(b)
+	if strings.Count(compatLegArm(t, src, "claude-linux|claude-macos"), "assert_home_resolved claude") != 1 {
+		t.Error("the Claude legs must run assert_home_resolved claude exactly once")
+	}
+	fnBody := src[strings.Index(src, "\tcodex_roundtrip() {"):]
+	fnBody = fnBody[:strings.Index(fnBody, "\n\t}")]
+	if strings.Count(fnBody, "assert_home_resolved codex") != 1 {
+		t.Error("the shared Codex round trip must run assert_home_resolved codex exactly once")
+	}
+	if strings.Count(compatLegArm(t, src, "codex-macos"), "assert_home_resolved codex") != 1 {
+		t.Error("the macOS queue phase must also run assert_home_resolved codex exactly once")
+	}
+	for _, line := range strings.Split(src, "\n") {
+		if strings.Contains(line, "assert-home-descriptor") && strings.Contains(line, "||") {
+			t.Errorf("the scratch-HOME check must stay fatal: %q", strings.TrimSpace(line))
+		}
+	}
+}
+
+func TestHarnessCompatAssertHomeDescriptor(t *testing.T) {
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not on PATH")
+	}
+	script := filepath.Join(releaseRepoRoot(t), "scripts", "harness-compat-live.sh")
+	state := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(state, "agents"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	run := func(harness string) error {
+		return exec.Command(script, "assert-home-descriptor", state, harness).Run()
+	}
+	if run("claude") == nil {
+		t.Fatal("no descriptor in the scratch home must fail")
+	}
+	if err := os.WriteFile(filepath.Join(state, "agents", "a.json"), []byte(`{"agent_id":"a","harness":"codex"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if run("claude") == nil {
+		t.Fatal("a descriptor of another harness must fail")
+	}
+	if err := run("codex"); err != nil {
+		t.Fatalf("a codex descriptor under the scratch state must pass: %v", err)
+	}
+}
+
+func TestHarnessCompatOnlyTheQueuePhaseAnswersHookDialogs(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join(releaseRepoRoot(t), "scripts", "harness-compat-live.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(b)
+	fn := func(name string) string {
+		i := strings.Index(src, "\t"+name+"() {")
+		if i < 0 {
+			t.Fatalf("no %s", name)
+		}
+		body := src[i:]
+		return body[:strings.Index(body, "\n\t}")]
+	}
+	if strings.Contains(fn("start_codex"), "PTYRUN_ANSWER_HOOKS") {
+		t.Error("the daemon launcher must leave the hook-review dialog unanswered")
+	}
+	if !strings.Contains(fn("start_codex_nd"), "PTYRUN_ANSWER_HOOKS=1") {
+		t.Error("the no-daemon queue launcher opts in to answering the hook-review dialog")
+	}
+}
+
+func TestHarnessCompatLegNeedsOnlyItsOwnHarnessModel(t *testing.T) {
+	script := filepath.Join(releaseRepoRoot(t), "scripts", "harness-compat-live.sh")
+	for leg, c := range map[string]struct{ set, unset string }{
+		"claude-linux": {"CLAUDE_MODEL", "CODEX_MODEL"},
+		"claude-macos": {"CLAUDE_MODEL", "CODEX_MODEL"},
+		"codex-linux":  {"CODEX_MODEL", "CLAUDE_MODEL"},
+		"codex-macos":  {"CODEX_MODEL", "CLAUDE_MODEL"},
+	} {
+		cmd := exec.Command(script, "leg", leg, t.TempDir())
+		var env []string
+		for _, kv := range os.Environ() {
+			if !strings.HasPrefix(kv, "CLAUDE_MODEL=") && !strings.HasPrefix(kv, "CODEX_MODEL=") && !strings.HasPrefix(kv, "CROSSTALK_BIN=") && !strings.HasPrefix(kv, "LIVE_LOGS=") {
+				env = append(env, kv)
+			}
+		}
+		cmd.Env = append(env, "OPENROUTER_API_KEY=k", c.set+"=m")
+		out, _ := cmd.CombinedOutput()
+		if strings.Contains(string(out), c.unset) {
+			t.Errorf("%s must not need %s:\n%s", leg, c.unset, out)
+		}
 	}
 }
