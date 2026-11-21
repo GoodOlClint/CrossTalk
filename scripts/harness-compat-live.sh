@@ -71,6 +71,39 @@ agent-id)
 	}
 	printf '%s\n' "$ids"
 	;;
+assert-delivery-mode)
+	jsonl="${2:?usage: harness-compat-live.sh assert-delivery-mode CLAUDE_JSONL CODEX_ID}"
+	id="${3:?}"
+	if jq -e --arg id "$id" 'select(.type == "user") | .message.content | if type == "array" then .[] else empty end | .content | (if type == "string" then . else tostring end) | (try fromjson catch empty) | .agents[]? | select(.agent_id == $id and (.delivery_mode // "" | startswith("queue-wake")))' "$jsonl" >/dev/null 2>&1; then
+		echo "PASS delivery mode: Claude's list_agents showed codex $id as queue-wake"
+	else
+		echo "FAIL delivery mode: no list_agents result shows codex $id as queue-wake"
+		exit 1
+	fi
+	;;
+assert-mailbox)
+	state="${2:?usage: harness-compat-live.sh assert-mailbox STATE SENDER_ID RECEIVER_ID}"
+	sender="${3:?}"
+	receiver="${4:?}"
+	ids="$(jq -r --arg to "$receiver" 'select(.type == "outbound" and .kind == "inform" and .to == $to) | .message_id' "$state/journal/$sender.jsonl" 2>/dev/null | sort -u)"
+	[ -n "$ids" ] || {
+		echo "FAIL mailbox: no inform sent to $receiver"
+		exit 1
+	}
+	for m in $ids; do
+		got="$(jq -r --arg m "$m" 'select(.message_id == $m and (.type == "dedupe" or .type == "outcome")) | .state' "$state/journal/$receiver.jsonl" 2>/dev/null | sort -u | tr '\n' ' ')"
+		case " $got" in *" mailboxed "*)
+			case " $got" in *" delivered "* | *" confirmed "*)
+				echo "PASS mailbox: inform $m went mailboxed then pulled (states: $got)"
+				exit 0
+				;;
+			esac
+			;;
+		esac
+	done
+	echo "FAIL mailbox: no inform reached mailboxed and delivered (last states: ${got:-none})"
+	exit 1
+	;;
 assert-one-codex-row)
 	python3 -I - "${2:?usage: harness-compat-live.sh assert-one-codex-row ROLLOUT_DIR SESSION_REF}" "${3:?}" <<'PY'
 import glob, json, sys
@@ -210,6 +243,7 @@ leg)
 	out="${LIVE_LOGS:?}"
 	mkdir -p "$logs" "$home/work"
 	xt="${CROSSTALK_BIN:?}"
+	PTYRUN="${PTYRUN:-$(dirname "$0")/ptyrun.py}"
 	pids=
 	ok=false
 	finish() {
@@ -248,6 +282,16 @@ leg)
 		(
 			cd "$home/work"
 			OPENROUTER_API_KEY="$OPENROUTER_API_KEY" exec script -qec "codex --dangerously-bypass-approvals-and-sandbox '$3'" /dev/null <"$fifo" >"$logs/codex-$1.log" 2>&1
+		) &
+		pids="$pids $!"
+	}
+	start_codex_nd() { # label fd prompt: a --no-daemon tab in a pty
+		fifo="$home/codex-$1.in"
+		mkfifo "$fifo"
+		eval "exec $2<>\"\$fifo\""
+		(
+			cd "$home/work"
+			exec python3 "${PTYRUN:?}" "$logs/codex-$1.log" "$fifo" codex --no-daemon --dangerously-bypass-approvals-and-sandbox "$3"
 		) &
 		pids="$pids $!"
 	}
@@ -295,15 +339,20 @@ leg)
 		done
 	}
 	install_claude() { "$xt" install claude --yes </dev/null >"$logs/install-claude.log" 2>&1; }
-	install_codex() {
+	install_codex() { # [queue]
 		"$0" write-codex-config "$home" "$CODEX_MODEL"
-		"$xt" install codex --yes </dev/null >"$logs/install-codex.log" 2>&1
+		if [ "${1:-}" = queue ]; then
+			"$xt" install codex --codex-no-daemon-queue --yes </dev/null >"$logs/install-codex.log" 2>&1
+		else
+			"$xt" install codex --yes </dev/null >"$logs/install-codex.log" 2>&1
+		fi
 		python3 -I - "$home/.codex/config.toml" "$CODEX_MODEL" <<'PY'
 import sys, tomllib
 c = tomllib.load(open(sys.argv[1], "rb"))
 assert c.get("model") == sys.argv[2] and c.get("model_provider") == "openrouter", "root model keys missing"
 assert "crosstalk" in c.get("mcp_servers", {}), "crosstalk not registered"
 PY
+		[ "${1:-}" != queue ] || return 0
 		codex app-server daemon start >"$logs/codex-daemon.log" 2>&1 || {
 			echo "codex app-server daemon start failed; see codex-daemon.log" >&2
 			return 1
@@ -334,6 +383,29 @@ PY
 		asker="$(other_id codex "$recv")"
 		await_pair "$asker" "$recv"
 		dump_threads end
+		;;
+	codex-macos)
+		install_claude
+		install_codex queue
+		start_claude send 7 "$auth Call the crosstalk list_agents tool once, then reply READY."
+		wait_n claude 1
+		claude_id="$(only_id claude)"
+		start_codex_nd tab 8 "$auth Call the crosstalk list_agents tool once, then reply READY."
+		wait_n codex 1
+		codex_id="$(only_id codex)"
+		sleep 30
+		send_claude 7 "$auth Call the crosstalk list_agents tool and confirm that agent_id $codex_id appears. Then use the crosstalk send_message tool to send an inform to the agent whose agent_id is $codex_id with the text: compat-W1, please fetch your mail. Then say SENT."
+		w=0
+		until "$0" assert-mailbox "$state" "$claude_id" "$codex_id" >"$logs/assert-mailbox.log" 2>&1; do
+			w=$((w + 1))
+			[ "$w" -lt 30 ] || {
+				cat "$logs/assert-mailbox.log" >&2
+				exit 1
+			}
+			sleep 5
+		done
+		cat "$logs/assert-mailbox.log"
+		"$0" assert-delivery-mode "$logs/claude-send.jsonl" "$codex_id"
 		;;
 	cross)
 		install_claude

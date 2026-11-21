@@ -66,8 +66,8 @@ pair)
 	printf '%s\n' "$out"
 	;;
 legs)
-	usage="usage: harness-compat.sh legs CHANGED_JSON"
-	printf '%s' "${2:?$usage}" | jq -c '[.[] | (if .harness == "claude-code" then {leg: "claude", harness: .harness, version: .version} elif .harness == "codex" then {leg: "codex-linux", harness: .harness, version: .version} else empty end)]'
+	usage="usage: harness-compat.sh legs CHANGED_JSON [QUEUE_CODEX_VERSION]"
+	printf '%s' "${2:?$usage}" | jq -c --arg q "${3-}" '[.[] | (if .harness == "claude-code" then {leg: "claude", harness: .harness, version: .version, runner: "ubuntu-latest"} elif .harness == "codex" then ({leg: "codex-linux", harness: .harness, version: .version, runner: "ubuntu-latest"}, (if $q != "" then {leg: "codex-macos", harness: .harness, version: $q, runner: "macos-latest"} else empty end)) else empty end)]'
 	;;
 step-status)
 	usage="usage: harness-compat.sh step-status JOBS_FILE JOB STEP"

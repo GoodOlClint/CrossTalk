@@ -37,3 +37,20 @@ func TestKindsHandlesCustomAndPlainSources(t *testing.T) {
 		}
 	}
 }
+
+func TestPickDropsIDsThatAreNotPlainStrings(t *testing.T) {
+	in := map[string]json.RawMessage{
+		"id": json.RawMessage(`{"nested":"secret text"}`), "parentThreadId": json.RawMessage(`"has a space and /path"`),
+		"sessionId": json.RawMessage(`"ok-123_x"`), "ephemeral": json.RawMessage(`"yes"`),
+	}
+	b, _ := json.Marshal(pick(in))
+	out := string(b)
+	for _, leak := range []string{"secret", "path", "nested", "yes"} {
+		if strings.Contains(out, leak) {
+			t.Errorf("dump leaks %q: %s", leak, out)
+		}
+	}
+	if !strings.Contains(out, `"sessionId":"ok-123_x"`) {
+		t.Errorf("a plain id is kept: %s", out)
+	}
+}

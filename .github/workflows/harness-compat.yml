@@ -16,6 +16,9 @@ on:
       recorded:
         description: treat this as the recorded version (a test aid)
         default: ""
+      queue_codex_version:
+        description: Codex version for the macOS queue-wake leg (the queue gate allows 0.167.x only); empty skips the leg
+        default: "0.167.0"
 
 permissions:
   contents: read
@@ -42,13 +45,14 @@ jobs:
           VERSION: ${{ inputs.version }}
           FORCE: ${{ inputs.force }}
           RECORDED: ${{ inputs.recorded }}
+          QUEUE_VERSION: ${{ inputs.queue_codex_version }}
         run: |
           set -eu
           changed="$(scripts/harness-compat.sh detect .github/harness-compat.json "$HARNESS" "$VERSION" "$FORCE" "$RECORDED")"
           echo "changed=$changed" >> "$GITHUB_OUTPUT"
           echo "changed: $changed"
           echo "pair=$(scripts/harness-compat.sh pair "$changed")" >> "$GITHUB_OUTPUT"
-          echo "legs=$(scripts/harness-compat.sh legs "$changed")" >> "$GITHUB_OUTPUT"
+          echo "legs=$(scripts/harness-compat.sh legs "$changed" "$QUEUE_VERSION")" >> "$GITHUB_OUTPUT"
 
   tier0:
     name: tier0-${{ matrix.harness }}
@@ -179,7 +183,7 @@ jobs:
       fail-fast: false
       matrix:
         include: ${{ fromJSON(needs.detect.outputs.legs) }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     environment: harness-compat
     env:
@@ -229,11 +233,13 @@ jobs:
         env:
           LEG: ${{ matrix.leg }}
           VERSION: ${{ matrix.version }}
+          PAIR: ${{ needs.detect.outputs.pair }}
         run: |
           set -eu
           case "$LEG" in
             claude) npm install -g "@anthropic-ai/claude-code@$VERSION"; claude --version ;;
             codex-linux) npm install -g "@openai/codex@$VERSION"; codex --version ;;
+            codex-macos) npm install -g "@openai/codex@$VERSION" "@anthropic-ai/claude-code@$(printf '%s' "$PAIR" | jq -r '.["claude-code"]')"; codex --version; claude --version ;;
             *) echo "unknown leg: $LEG" >&2; exit 1 ;;
           esac
       - name: Run the leg
