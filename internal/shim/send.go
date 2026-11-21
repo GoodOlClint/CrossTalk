@@ -353,7 +353,7 @@ func (st *AgentState) deliver(ctx context.Context, m msg.Message) mcpserver.Resu
 		res.State, res.Reason = adapter.Unreachable, receiver.ReasonJournal
 		return res
 	}
-	state, err = ad.Inject(ctx, m, adapter.Delivery{Mode: m.Delivery, Target: b, VerifiedSender: true, SenderHarness: string(st.agent.Harness()), SenderAgentID: st.agent.ID()})
+	state, err = ad.Inject(ctx, m, adapter.Delivery{Mode: m.Delivery, Target: b, VerifiedSender: true, Notice: msg.NoticeTeammate, SenderHarness: string(st.agent.Harness()), SenderAgentID: st.agent.ID()})
 	if !state.Injectable() {
 		state = adapter.Unknown
 	}

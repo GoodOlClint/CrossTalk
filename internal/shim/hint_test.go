@@ -207,6 +207,25 @@ func TestAcceptedNativeSendWarnsOneWay(t *testing.T) {
 	}
 }
 
+func TestFirstContactInformCarriesTeammateNotice(t *testing.T) {
+	w := newWorld(t)
+	alice := w.claude(4001, "sess-alice", "alice")
+	w.codex.addThread("T-bob", "bob")
+	na := w.node(alice.pid, w.lb, nil)
+	na.ok(nil, "send_message", send("bob", "fyi"))
+	writes := w.codex.Writes()
+	if len(writes) != 1 {
+		t.Fatalf("writes %+v", writes)
+	}
+	d := writes[0].Delivery
+	if d.Notice != msg.NoticeTeammate || d.SenderHarness != "claude" {
+		t.Fatalf("delivery notice %q harness %q", d.Notice, d.SenderHarness)
+	}
+	if got := codex.Preamble(d.Notice, d.SenderHarness); !strings.Contains(got, "another Claude Code session") || !strings.Contains(got, "teammate's request") {
+		t.Fatalf("rendered notice %q", got)
+	}
+}
+
 func TestNativeSendWritesPreBindEntryOnlyForAcceptedOrQueuedInform(t *testing.T) {
 	w := newWorld(t)
 	alice := w.claude(4001, "sess-alice", "alice")
