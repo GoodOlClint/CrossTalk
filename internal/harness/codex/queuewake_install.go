@@ -234,6 +234,8 @@ func queueWakeStep(env harness.InstallEnv) harness.Step {
 	}
 }
 
+var restoreFile = harness.ReplaceFile
+
 func queueWakeRemoveStep(env harness.InstallEnv) harness.Step {
 	hp, sp := hooksPath(env.Home), filepath.Join(stateDirOf(env), SettingFile)
 	return harness.Step{
@@ -249,33 +251,46 @@ func queueWakeRemoveStep(env harness.InstallEnv) harness.Step {
 				return err
 			}
 			cp := configPath(env.Home)
-			origCfg, cfgErr := os.ReadFile(cp)
-			origHooks, hooksErr := os.ReadFile(hp)
-			restore := func() {
-				for _, f := range []struct {
-					path string
-					b    []byte
-					err  error
-				}{{cp, origCfg, cfgErr}, {hp, origHooks, hooksErr}} {
-					if f.err == nil {
-						_ = harness.ReplaceFile(f.path, f.b)
-					} else if errors.Is(f.err, os.ErrNotExist) {
-						_ = os.Remove(f.path)
+			type undo struct {
+				path string
+				orig []byte
+				had  bool
+			}
+			snap := func(path string) undo {
+				b, err := os.ReadFile(path)
+				return undo{path, b, err == nil}
+			}
+			var done []undo
+			rollback := func(cause error) error {
+				errs := []error{cause}
+				for _, u := range done {
+					var err error
+					if u.had {
+						err = restoreFile(u.path, u.orig)
+					} else {
+						err = os.Remove(u.path)
+					}
+					if err != nil {
+						errs = append(errs, fmt.Errorf("rollback of %s failed, restore it from its .crosstalk-backup: %w", u.path, err))
 					}
 				}
+				return errors.Join(errs...)
 			}
-			for _, w := range []func() error{writeTrust, writeHook} {
-				if w == nil {
+			for _, w := range []struct {
+				path  string
+				write func() error
+			}{{cp, writeTrust}, {hp, writeHook}} {
+				if w.write == nil {
 					continue
 				}
-				if err := w(); err != nil {
-					restore()
-					return err
+				u := snap(w.path)
+				if err := w.write(); err != nil {
+					return rollback(err)
 				}
+				done = append(done, u)
 			}
 			if err := os.Remove(sp); err != nil && !errors.Is(err, os.ErrNotExist) {
-				restore()
-				return err
+				return rollback(err)
 			}
 			return nil
 		},

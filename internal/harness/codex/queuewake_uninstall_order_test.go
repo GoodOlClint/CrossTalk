@@ -1,6 +1,7 @@
 package codex
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -173,4 +174,31 @@ func TestUninstallOrder_SettingFileDeleteFails_BothRestored(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.assertRemoved(t)
+}
+
+func TestUninstallOrder_RollbackAlsoFails_BothErrorsSurface(t *testing.T) {
+	f := newUninstallFixture(t, strings.Replace(orderRecord, "session_start:0:0", "session_start:1:0", 1))
+	scratch := filepath.Join(t.TempDir(), "hooks.json")
+	other := `{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"echo user"}]}]}}`
+	os.WriteFile(scratch, []byte(other), 0o600)
+	if err := addHook(scratch, f.env.Bin); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(scratch)
+	os.WriteFile(f.hp, b, 0o600)
+	if err := os.Mkdir(f.hp+".crosstalk-backup", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	orig := restoreFile
+	restoreFile = func(string, []byte) error { return errors.New("injected rollback failure") }
+	defer func() { restoreFile = orig }()
+	err := queueWakeRemoveStep(f.env).Apply(t.Context())
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	for _, want := range []string{"crosstalk-backup", "rollback of " + f.cp + " failed", "injected rollback failure"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q lacks %q", err, want)
+		}
+	}
 }
