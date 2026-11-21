@@ -134,11 +134,12 @@ func probeListener(addr, fingerprint string) ListenerProbe {
 			return nil
 		},
 	})
+	err = c.HandshakeContext(ctx)
 	switch {
-	case c.HandshakeContext(ctx) != nil || !seen:
-		return ProbeHandshakeFailed
-	case !ours:
+	case seen && !ours:
 		return ProbeMismatch
+	case err != nil || !seen:
+		return ProbeHandshakeFailed
 	}
 	return ProbeOurs
 }

@@ -178,12 +178,43 @@ garbage
 	}
 }
 
-func TestParseLsofInode(t *testing.T) {
-	if n, ok := parseLsofInode("p3672\nftxt\ni450578831\nn/x/crosstalk\nftxt\ni1152921500312613838\nn/usr/lib/dyld\n"); !ok || n != 450578831 {
-		t.Errorf("got %d, %v", n, ok)
+func TestParseLsofFile(t *testing.T) {
+	if id, ok := parseLsofFile("p3672\nftxt\nD0x1000010\ni450578831\nn/x/crosstalk\nftxt\nD0x1\ni1152921500312613838\nn/usr/lib/dyld\n"); !ok || id != (fileID{0x1000010, 450578831}) {
+		t.Errorf("got %+v, %v", id, ok)
 	}
-	if _, ok := parseLsofInode("p1\nfcwd\ni5\n"); ok {
+	if _, ok := parseLsofFile("p1\nfcwd\nD0x1\ni5\n"); ok {
 		t.Error("a non-txt entry was read")
+	}
+	if _, ok := parseLsofFile("p1\nftxt\ni5\n"); ok {
+		t.Error("an entry without a device was accepted")
+	}
+}
+
+func TestProcRunsBinComparesDeviceAndInode(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "crosstalk")
+	if err := os.WriteFile(bin, []byte("x"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fi, _ := os.Stat(bin)
+	want, ok := idOf(fi)
+	if !ok {
+		t.Fatal("no Stat_t")
+	}
+	old := procFile
+	t.Cleanup(func() { procFile = old })
+	for _, tc := range []struct {
+		name string
+		got  fileID
+		runs bool
+	}{
+		{"same file", want, true},
+		{"same inode, other device", fileID{want.Dev + 1, want.Ino}, false},
+		{"same device, other inode", fileID{want.Dev, want.Ino + 1}, false},
+	} {
+		procFile = func(int) (fileID, bool) { return tc.got, true }
+		if runs, known := procRunsBin(1, bin); !known || runs != tc.runs {
+			t.Errorf("%s: runs=%v known=%v", tc.name, runs, known)
+		}
 	}
 }
 
@@ -445,7 +476,7 @@ func TestInstallBinaryKeepsIdenticalCopy(t *testing.T) {
 func TestK11ReportsUnidentifiedProcesses(t *testing.T) {
 	fakeShims(t, shimProc{PID: 41, PPID: 2, ParentCmd: claudeCmd, ParentPPID: 1, Unknown: true})
 	rs := installShimChecks("/bin/crosstalk")
-	if len(rs) != 1 || rs[0].OK || !strings.Contains(rs[0].Detail, "could not tell") || !strings.Contains(rs[0].Detail, "pids 41") {
+	if len(rs) != 1 || rs[0].OK || !rs[0].WarnOnly || !strings.Contains(rs[0].Detail, "could not tell") || !strings.Contains(rs[0].Detail, "pids 41") {
 		t.Errorf("got %v", k11Lines(rs))
 	}
 }
@@ -495,5 +526,69 @@ func TestInstallNoAdviceWhenShimsCurrent(t *testing.T) {
 	code, out := installRunCmd(t, "install", "--yes", "--bin-dir", filepath.Join(home, "bin"))
 	if code != 0 || strings.Contains(out, "K11 crosstalk WARN") || strings.Contains(out, "daemon restart") {
 		t.Errorf("exit %d:\n%s", code, out)
+	}
+}
+
+func ownedUnitHome(t *testing.T) (home string, rec *runLog, bin string) {
+	t.Helper()
+	home, _, _ = statusHome(t, true)
+	statusUnit(t, home)
+	rec = &runLog{}
+	oldRun := unitRun
+	unitRun = rec.run
+	t.Cleanup(func() { unitRun = oldRun })
+	gatewayRunning(t, false)
+	return home, rec, filepath.Join(home, "bin", "crosstalk")
+}
+
+func TestGatewayRestartStepSkipsWhenLockNotHeld(t *testing.T) {
+	home, rec, bin := ownedUnitHome(t)
+	state := filepath.Join(home, ".local", "state", "crosstalk")
+	if err := os.MkdirAll(state, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(state, "gateway.lock"), []byte("99999\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	step := gatewayRestartStep(home, filepath.Join(home, ".config", "crosstalk"), state, bin, &out)
+	if err := step.Apply(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if c := rec.all(); len(c) != 0 || !strings.Contains(out.String(), "no gateway is running") {
+		t.Errorf("calls %v:\n%s", c, out.String())
+	}
+}
+
+func TestGatewayRestartStepSkipsUnitNotOwned(t *testing.T) {
+	home, rec, bin := ownedUnitHome(t)
+	dir := filepath.Join(home, ".config", "crosstalk")
+	state := filepath.Join(home, ".local", "state", "crosstalk")
+	holdGatewayLock(t, state)
+	if err := setUnitHash(dir, "not-the-hash-of-this-file"); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := gatewayRestartStep(home, dir, state, bin, &out).Apply(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if c := rec.all(); len(c) != 0 || !strings.Contains(out.String(), "runs a binary other than") {
+		t.Errorf("restarted a unit CrossTalk did not write; calls %v:\n%s", c, out.String())
+	}
+}
+
+func TestInstallPlansNoGatewayStepForUnitNotOwned(t *testing.T) {
+	home, rec := unitSandbox(t, "linux", "claude")
+	gatewayRunning(t, false)
+	p := remoteUnitPath(home)
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(p, unitContent(remoteGOOS, filepath.Join(home, "bin", "crosstalk"), home), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, out := installRunCmd(t, "install", "--yes", "--bin-dir", filepath.Join(home, "bin"))
+	if !strings.Contains(out, "== checks") || strings.Contains(out, "== gateway") || len(rec.all()) != 0 {
+		t.Errorf("calls %v:\n%s", rec.all(), out)
 	}
 }

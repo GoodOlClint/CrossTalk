@@ -89,46 +89,63 @@ func parseShimTable(out string) []shimProc {
 	return shims
 }
 
-// parseLsofInode returns the inode of the first txt entry (the executable)
-// in `lsof -Fi` output.
-func parseLsofInode(out string) (uint64, bool) {
-	txt := false
+// fileID is a file's device and inode; an inode alone repeats across
+// filesystems.
+type fileID struct{ Dev, Ino uint64 }
+
+// parseLsofFile returns the device and inode of the first txt entry (the
+// executable) in `lsof -FiD` output.
+func parseLsofFile(out string) (fileID, bool) {
+	var id fileID
+	txt, haveDev, haveIno := false, false, false
 	for _, l := range strings.Split(out, "\n") {
 		switch {
 		case strings.HasPrefix(l, "f"):
+			if haveDev && haveIno {
+				return id, true
+			}
 			txt = l == "ftxt"
 		case txt && strings.HasPrefix(l, "i"):
 			n, err := strconv.ParseUint(l[1:], 10, 64)
-			return n, err == nil
+			if err != nil {
+				return fileID{}, false
+			}
+			id.Ino, haveIno = n, true
+		case txt && strings.HasPrefix(l, "D"):
+			n, err := strconv.ParseUint(strings.TrimPrefix(l[1:], "0x"), 16, 64)
+			if err != nil {
+				return fileID{}, false
+			}
+			id.Dev, haveDev = n, true
 		}
 	}
-	return 0, false
+	return id, haveDev && haveIno
 }
 
-// procInode is the inode of the file pid executes: through /proc on Linux
-// (it names the file even after a rename replaced it), through lsof on
-// macOS, where ps shows only the path the process was started with.
-func procInode(pid int) (uint64, bool) {
+// procFile is the file pid executes: through /proc on Linux (it names the
+// file even after a rename replaced it), through lsof on macOS, where ps
+// shows only the path the process was started with.
+var procFile = func(pid int) (fileID, bool) {
 	if runtime.GOOS == "linux" {
 		fi, err := os.Stat("/proc/" + strconv.Itoa(pid) + "/exe")
 		if err != nil {
-			return 0, false
+			return fileID{}, false
 		}
-		st, ok := fi.Sys().(*syscall.Stat_t)
-		return uint64(st.Ino), ok
+		return idOf(fi)
 	}
-	out, err := exec.Command("lsof", "-a", "-p", strconv.Itoa(pid), "-d", "txt", "-Fi").Output()
+	out, err := exec.Command("lsof", "-a", "-p", strconv.Itoa(pid), "-d", "txt", "-FiD").Output()
 	if err != nil && len(out) == 0 {
-		return 0, false
+		return fileID{}, false
 	}
-	return parseLsofInode(string(out))
+	return parseLsofFile(string(out))
 }
 
-func inodeOf(fi os.FileInfo) uint64 {
-	if st, ok := fi.Sys().(*syscall.Stat_t); ok {
-		return uint64(st.Ino)
+func idOf(fi os.FileInfo) (fileID, bool) {
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return fileID{}, false
 	}
-	return 0
+	return fileID{uint64(st.Dev), uint64(st.Ino)}, true
 }
 
 // procRunsBin reports whether pid executes the file at bin; known is false
@@ -138,11 +155,12 @@ func procRunsBin(pid int, bin string) (runs, known bool) {
 	if err != nil {
 		return false, false
 	}
-	ino, ok := procInode(pid)
-	if !ok {
+	want, ok1 := idOf(fi)
+	got, ok2 := procFile(pid)
+	if !ok1 || !ok2 {
 		return false, false
 	}
-	return ino == inodeOf(fi), true
+	return got == want, true
 }
 
 func listShims(bin string) ([]shimProc, error) {
