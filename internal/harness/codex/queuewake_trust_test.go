@@ -263,3 +263,48 @@ func TestTrustRecordSingleLineEscapedQuotesDoNotOpenMultilineString(t *testing.T
 		t.Errorf("config = %q, want %q", b, keep)
 	}
 }
+
+func TestTrustRecordQuoteRunsBeforeMultilineTerminator(t *testing.T) {
+	for _, q := range []string{`"""`, `'''`} {
+		env, r := codexEnv(t, "")
+		hp := hooksPath(env.Home)
+		os.MkdirAll(filepath.Dir(hp), 0o700)
+		if err := addHook(hp, env.Bin); err != nil {
+			t.Fatal(err)
+		}
+		keep := "[a]\nx = 1\n\n"
+		rec := `[hooks.state."` + hp + `:session_start:0:0"]` + "\nargs = [" + q + "quoted" + q[:1] + q + "]\n"
+		after := "[projects.work]\ntrust_level = \"trusted\"\n"
+		if err := os.WriteFile(r.path, []byte(keep+rec+after), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := queueWakeRemoveStep(env).Apply(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		if b, _ := os.ReadFile(r.path); string(b) != keep+after {
+			t.Errorf("%s: config = %q, want %q", q, b, keep+after)
+		}
+	}
+}
+
+func TestTrustRecordUnclosedArrayLeavesConfigUntouched(t *testing.T) {
+	env, r := codexEnv(t, "")
+	hp := hooksPath(env.Home)
+	os.MkdirAll(filepath.Dir(hp), 0o700)
+	if err := addHook(hp, env.Bin); err != nil {
+		t.Fatal(err)
+	}
+	cfg := `[hooks.state."` + hp + `:session_start:0:0"]` + "\nargs = [\n\n[projects.work]\ntrust_level = \"trusted\"\n"
+	if err := os.WriteFile(r.path, []byte(cfg), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := queueWakeRemoveStep(env).Apply(t.Context()); err == nil {
+		t.Fatal("expected an error for a record that ends inside an array")
+	}
+	if b, _ := os.ReadFile(r.path); string(b) != cfg {
+		t.Errorf("config changed: %q", b)
+	}
+	if !hasHook(hp) {
+		t.Errorf("hook removed although the trust record could not be")
+	}
+}

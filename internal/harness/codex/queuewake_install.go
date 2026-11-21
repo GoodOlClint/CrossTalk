@@ -307,6 +307,9 @@ func removeTrustRecords(env harness.InstallEnv, hooksFile string, refs []string)
 		t := strings.TrimSpace(l)
 		open := inStr != "" || depth > 0
 		if !open && strings.HasPrefix(t, "[") {
+			if skip && (inStr != "" || depth > 0) {
+				return fmt.Errorf("codex config %s: the trust record for the removed hook ends inside an unclosed array or string; fix or delete it by hand and retry", path)
+			}
 			out = append(out, pending...)
 			pending, skip = nil, drop[t]
 			changed = changed || skip
@@ -327,6 +330,9 @@ func removeTrustRecords(env harness.InstallEnv, hooksFile string, refs []string)
 			pending = nil
 		}
 	}
+	if skip && (inStr != "" || depth > 0) {
+		return fmt.Errorf("codex config %s: the trust record for the removed hook ends inside an unclosed array or string; fix or delete it by hand and retry", path)
+	}
 	out = append(out, pending...)
 	if !changed {
 		return nil
@@ -346,12 +352,12 @@ func tomlStringState(line, in string) (string, int) {
 		case `"""`:
 			if c == '\\' {
 				i++
-			} else if strings.HasPrefix(line[i:], `"""`) {
-				in, i = "", i+2
+			} else if n := quoteRun(line[i:], '"'); n >= 3 {
+				in, i = "", i+n-1
 			}
 		case `'''`:
-			if strings.HasPrefix(line[i:], `'''`) {
-				in, i = "", i+2
+			if n := quoteRun(line[i:], '\''); n >= 3 {
+				in, i = "", i+n-1
 			}
 		default:
 			switch {
@@ -378,4 +384,14 @@ func tomlStringState(line, in string) (string, int) {
 		}
 	}
 	return in, depth
+}
+
+// quoteRun is the length, capped at 5, of the run of q at the start of s: a
+// multi-line string ends at the last three quotes of a run of 3 to 5.
+func quoteRun(s string, q byte) int {
+	n := 0
+	for n < len(s) && n < 5 && s[n] == q {
+		n++
+	}
+	return n
 }
