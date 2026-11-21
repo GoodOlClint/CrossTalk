@@ -78,21 +78,31 @@ func TestHarnessCompatWorkflowSafe(t *testing.T) {
 	if strings.Contains(w, "schedule:") {
 		t.Error("the workflow is dispatch-only until slice 5")
 	}
-	i := strings.Index(w, "\n  live-linux:")
+	i := strings.Index(w, "\n  harness:")
 	if i < 0 {
-		t.Fatal("no live-linux job")
+		t.Fatal("no harness job")
 	}
 	if pre := w[:i]; strings.Contains(pre, "secrets.") || strings.Contains(pre, "environment:") {
-		t.Error("only live-linux may read secrets or enter an environment")
+		t.Error("only the harness and cross jobs may read secrets or enter an environment")
 	}
-	live := w[i:]
-	for _, want := range []string{"environment: harness-compat\n", "secrets.OPENROUTER_API_KEY", "ran=false", "must both be set when OPENROUTER_API_KEY is", "steps.gate.outputs.ran == 'true'"} {
+	rep := strings.Index(w, "\n  report:")
+	if rep < i {
+		t.Fatal("report job missing or before harness")
+	}
+	if tail := w[rep:]; strings.Contains(tail, "secrets.") || strings.Contains(tail, "environment:") {
+		t.Error("report must not read secrets or enter an environment")
+	}
+	live := w[i:rep]
+	for _, want := range []string{"environment: harness-compat\n", "secrets.OPENROUTER_API_KEY", "ran=false", "must both be set when OPENROUTER_API_KEY is", "steps.gate.outputs.ran == 'true'", "fail-fast: false", "needs.harness.result == 'success'", "cross:"} {
 		if !strings.Contains(live, want) {
-			t.Errorf("live-linux lacks %q", want)
+			t.Errorf("live jobs lack %q", want)
 		}
 	}
+	if strings.Count(live, "secrets.OPENROUTER_API_KEY") != 2 {
+		t.Error("exactly the harness and cross jobs read the key")
+	}
 	if strings.Contains(live, "echo \"$OPENROUTER_API_KEY\"") || strings.Contains(live, "set -x") {
-		t.Error("live-linux must not echo the key")
+		t.Error("live jobs must not echo the key")
 	}
 }
 
@@ -426,5 +436,43 @@ func TestHarnessCompatAssertDiscovery(t *testing.T) {
 				t.Fatalf("err = %v, want ok=%v\n%s", err, c.ok, out)
 			}
 		})
+	}
+}
+
+func TestHarnessCompatLegsAndReport(t *testing.T) {
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not on PATH")
+	}
+	script := filepath.Join(releaseRepoRoot(t), "scripts", "harness-compat.sh")
+	run := func(args ...string) string {
+		t.Helper()
+		out, err := exec.Command(script, args...).CombinedOutput()
+		if err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	legs := run("legs", `[{"harness":"codex","version":"0.171.0"},{"harness":"claude-code","version":"2.1.330"}]`)
+	if want := `[{"leg":"codex-linux","harness":"codex","version":"0.171.0"},{"leg":"claude","harness":"claude-code","version":"2.1.330"}]`; legs != want {
+		t.Fatalf("legs = %s, want %s", legs, want)
+	}
+	dir := t.TempDir()
+	for leg, ok := range map[string]string{"claude": "true", "codex-linux": "false"} {
+		d := filepath.Join(dir, "result-"+leg)
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(d, "result.json"), []byte(`{"leg":"`+leg+`","ok":`+ok+`}`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := run("report", dir, legs, "skipped")
+	want := `{"claude-code":{"version":"2.1.330","legs":{"claude":"pass"},"pass":true},"codex":{"version":"0.171.0","legs":{"codex-linux":"fail"},"pass":false},"cross":"skipped"}`
+	if got != want {
+		t.Fatalf("report = %s\nwant     %s", got, want)
+	}
+	missing := run("report", t.TempDir(), legs, "failure")
+	if !strings.Contains(missing, `"claude":"fail"`) || !strings.Contains(missing, `"cross":"fail"`) {
+		t.Fatalf("a leg with no result file must read as fail: %s", missing)
 	}
 }

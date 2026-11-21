@@ -31,6 +31,7 @@ jobs:
     outputs:
       changed: ${{ steps.detect.outputs.changed }}
       pair: ${{ steps.detect.outputs.pair }}
+      legs: ${{ steps.detect.outputs.legs }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -47,6 +48,7 @@ jobs:
           echo "changed=$changed" >> "$GITHUB_OUTPUT"
           echo "changed: $changed"
           echo "pair=$(scripts/harness-compat.sh pair "$changed")" >> "$GITHUB_OUTPUT"
+          echo "legs=$(scripts/harness-compat.sh legs "$changed")" >> "$GITHUB_OUTPUT"
 
   tier0:
     needs: detect
@@ -98,14 +100,38 @@ jobs:
             scripts/harness-compat.sh tier0-claude "$SCRATCH_HOME"
           fi
 
-  live-linux:
-    needs: [detect, tier0]
+  build:
+    needs: detect
     if: needs.detect.outputs.changed != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+      - run: go build -o "$RUNNER_TEMP/crosstalk" ./cmd/crosstalk
+      - run: go vet ./...
+      - run: go test ./cmd/crosstalk -run TestHarnessCompat -count=1
+      - uses: actions/upload-artifact@v7
+        with:
+          name: crosstalk-bin
+          path: ${{ runner.temp }}/crosstalk
+          if-no-files-found: error
+
+  harness:
+    needs: [detect, tier0, build]
+    if: needs.detect.outputs.changed != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.detect.outputs.legs) }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     environment: harness-compat
-    outputs:
-      ran: ${{ steps.gate.outputs.ran }}
     env:
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       CLAUDE_MODEL: ${{ vars.HARNESS_COMPAT_CLAUDE_MODEL }}
@@ -115,7 +141,7 @@ jobs:
         run: |
           if [ -z "$OPENROUTER_API_KEY" ]; then
             echo "ran=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::live-linux skipped: OPENROUTER_API_KEY is not set"
+            echo "::notice::skipped: OPENROUTER_API_KEY is not set"
           elif [ -z "$CLAUDE_MODEL" ] || [ -z "$CODEX_MODEL" ]; then
             echo "::error::HARNESS_COMPAT_CLAUDE_MODEL and HARNESS_COMPAT_CODEX_MODEL must both be set when OPENROUTER_API_KEY is"
             exit 1
@@ -127,10 +153,78 @@ jobs:
         with:
           persist-credentials: false
       - if: steps.gate.outputs.ran == 'true'
-        uses: actions/setup-go@v7
+        uses: actions/download-artifact@v8
         with:
-          go-version-file: go.mod
-          cache: false
+          name: crosstalk-bin
+          path: ${{ runner.temp }}/bin
+      - name: Install the harness for this leg
+        if: steps.gate.outputs.ran == 'true'
+        env:
+          LEG: ${{ matrix.leg }}
+          VERSION: ${{ matrix.version }}
+        run: |
+          set -eu
+          case "$LEG" in
+            claude) npm install -g "@anthropic-ai/claude-code@$VERSION"; claude --version ;;
+            codex-linux) npm install -g "@openai/codex@$VERSION"; codex --version ;;
+            *) echo "unknown leg: $LEG" >&2; exit 1 ;;
+          esac
+      - name: Run the leg
+        if: steps.gate.outputs.ran == 'true'
+        timeout-minutes: 20
+        env:
+          LEG: ${{ matrix.leg }}
+        run: |
+          set -eu
+          chmod +x "$RUNNER_TEMP/bin/crosstalk"
+          home="$(mktemp -d)"
+          CROSSTALK_BIN="$RUNNER_TEMP/bin/crosstalk" LIVE_LOGS="$RUNNER_TEMP/live-logs" scripts/harness-compat-live.sh leg "$LEG" "$home"
+      - name: Upload logs
+        if: always() && steps.gate.outputs.ran == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: logs-${{ matrix.leg }}
+          path: ${{ runner.temp }}/live-logs
+          if-no-files-found: ignore
+      - name: Upload the result
+        if: always() && steps.gate.outputs.ran == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: result-${{ matrix.leg }}
+          path: ${{ runner.temp }}/live-logs/result.json
+          if-no-files-found: ignore
+
+  cross:
+    needs: [detect, build, harness]
+    if: needs.harness.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: harness-compat
+    env:
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      CLAUDE_MODEL: ${{ vars.HARNESS_COMPAT_CLAUDE_MODEL }}
+      CODEX_MODEL: ${{ vars.HARNESS_COMPAT_CODEX_MODEL }}
+    steps:
+      - id: gate
+        run: |
+          if [ -z "$OPENROUTER_API_KEY" ]; then
+            echo "ran=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::skipped: OPENROUTER_API_KEY is not set"
+          elif [ -z "$CLAUDE_MODEL" ] || [ -z "$CODEX_MODEL" ]; then
+            echo "::error::HARNESS_COMPAT_CLAUDE_MODEL and HARNESS_COMPAT_CODEX_MODEL must both be set when OPENROUTER_API_KEY is"
+            exit 1
+          else
+            echo "ran=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.gate.outputs.ran == 'true'
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - if: steps.gate.outputs.ran == 'true'
+        uses: actions/download-artifact@v8
+        with:
+          name: crosstalk-bin
+          path: ${{ runner.temp }}/bin
       - name: Install both harnesses
         if: steps.gate.outputs.ran == 'true'
         env:
@@ -142,20 +236,44 @@ jobs:
           npm install -g "@openai/codex@$codex" "@anthropic-ai/claude-code@$claude"
           codex --version
           claude --version
-      - name: Build crosstalk
-        if: steps.gate.outputs.ran == 'true'
-        run: go build -o "$RUNNER_TEMP/bin/crosstalk" ./cmd/crosstalk
-      - name: Ask each way through CrossTalk
+      - name: Ask each way between Claude and Codex
         if: steps.gate.outputs.ran == 'true'
         timeout-minutes: 20
         run: |
           set -eu
+          chmod +x "$RUNNER_TEMP/bin/crosstalk"
           home="$(mktemp -d)"
-          CROSSTALK_BIN="$RUNNER_TEMP/bin/crosstalk" LIVE_LOGS="$RUNNER_TEMP/live-logs" scripts/harness-compat-live.sh live-linux "$home"
+          CROSSTALK_BIN="$RUNNER_TEMP/bin/crosstalk" LIVE_LOGS="$RUNNER_TEMP/live-logs" scripts/harness-compat-live.sh leg cross "$home"
       - name: Upload logs
         if: always() && steps.gate.outputs.ran == 'true'
         uses: actions/upload-artifact@v7
         with:
-          name: live-linux-logs
+          name: logs-cross
           path: ${{ runner.temp }}/live-logs
           if-no-files-found: ignore
+
+  report:
+    needs: [detect, harness, cross]
+    if: always() && needs.detect.outputs.changed != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      results: ${{ steps.report.outputs.results }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v8
+        continue-on-error: true
+        with:
+          pattern: result-*
+          path: results
+      - id: report
+        env:
+          LEGS: ${{ needs.detect.outputs.legs }}
+          CROSS: ${{ needs.cross.result }}
+        run: |
+          set -eu
+          results="$(scripts/harness-compat.sh report results "$LEGS" "$CROSS")"
+          echo "results=$results" >> "$GITHUB_OUTPUT"
+          printf '%s' "$results" | jq -r 'to_entries[] | if .key == "cross" then "cross: \(.value)" else "\(.key) \(.value.version): \(if .value.pass then "PASS" else "FAIL" end) (\(.value.legs | to_entries | map("\(.key)=\(.value)") | join(", ")))" end' | tee -a "$GITHUB_STEP_SUMMARY"
