@@ -551,10 +551,10 @@ func (r *Receiver) sweep() []route {
 		return false
 	})
 	open := slices.Clone(r.routes)
-	r.mu.Unlock()
 	for _, rt := range gone {
 		r.j.Append(rt.record(journal.StateClosed))
 	}
+	r.mu.Unlock()
 	return open
 }
 
