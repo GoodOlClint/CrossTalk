@@ -175,3 +175,31 @@ func TestPinStillRejectsWrongCertAtRightName(t *testing.T) {
 		t.Fatalf("wrong certificate at a resolvable name: %v, want %s", err, ReasonPinMismatch)
 	}
 }
+
+func TestValidHostKeepsFinalDot(t *testing.T) {
+	if h, err := ValidHost("Box.Example.com."); err != nil || h != "box.example.com." {
+		t.Fatalf("%q %v", h, err)
+	}
+	if _, err := ValidHost("."); err == nil {
+		t.Error("accepted .")
+	}
+}
+
+func TestDialPeerSkipsStalledAddress(t *testing.T) {
+	ln, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	_, port, _ := net.SplitHostPort(ln.Addr().String())
+	old := LookupHost
+	LookupHost = func(context.Context, string) ([]string, error) { return []string{"192.0.2.1", "127.0.0.1"}, nil }
+	t.Cleanup(func() { LookupHost = old })
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	c, err := DialPeer(ctx, "tcp", net.JoinHostPort("peer.local", port))
+	if err != nil {
+		t.Fatalf("a stalled first address hid the reachable second: %v", err)
+	}
+	c.Close()
+}

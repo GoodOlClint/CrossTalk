@@ -365,7 +365,7 @@ func ValidHost(s string) (string, error) {
 		return a.String(), nil
 	}
 	h := strings.TrimSuffix(s, ".")
-	if h == "" || len(h) > 253 {
+	if h == "" || s == "." || len(h) > 253 {
 		return "", fmt.Errorf("%q is not an IP address or a DNS name", s)
 	}
 	for _, l := range strings.Split(h, ".") {
@@ -373,7 +373,7 @@ func ValidHost(s string) (string, error) {
 			return "", fmt.Errorf("%q is not an IP address or a DNS name", s)
 		}
 	}
-	return strings.ToLower(h), nil
+	return strings.ToLower(s), nil
 }
 
 // LookupHost resolves a peer's DNS name at connect time; tests replace it.
@@ -395,8 +395,13 @@ func DialPeer(ctx context.Context, network, addr string) (net.Conn, error) {
 		return nil, err
 	}
 	var last error = fmt.Errorf("no address for %s", host)
-	for _, ip := range ips {
-		c, err := d.DialContext(ctx, network, net.JoinHostPort(ip, port))
+	for i, ip := range ips {
+		actx, cancel := ctx, context.CancelFunc(func() {})
+		if dl, ok := ctx.Deadline(); ok {
+			actx, cancel = context.WithTimeout(ctx, time.Until(dl)/time.Duration(len(ips)-i))
+		}
+		c, err := d.DialContext(actx, network, net.JoinHostPort(ip, port))
+		cancel()
 		if err == nil {
 			return c, nil
 		}
