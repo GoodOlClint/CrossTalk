@@ -722,6 +722,28 @@ func TestLoadedThreadsHidesSubAgentHelpers(t *testing.T) {
 	}
 }
 
+// The helper shape is from run 44855913184 (Codex 0.171.0): a sibling thread
+// started a moment after the real one, ephemeral, idle, source vscode, no
+// parent thread.
+func TestLoadedThreadsHidesEphemeralUnboundHelpers(t *testing.T) {
+	s := appservertest.New(t)
+	s.AddThread(&appservertest.Thread{ID: thread, Cwd: "/work", Loaded: true, Source: `"vscode"`})
+	s.AddThread(&appservertest.Thread{ID: "helper-ephemeral", Cwd: "/work", Loaded: true, Source: `"vscode"`, Ephemeral: true})
+	s.AddThread(&appservertest.Thread{ID: "bound-ephemeral", Cwd: "/work", Loaded: true, Source: `"vscode"`, Ephemeral: true})
+	s.AddThread(&appservertest.Thread{ID: "active-ephemeral", Cwd: "/work", Loaded: true, Source: `"vscode"`, Ephemeral: true, Turns: []appserver.Turn{{ID: "t1", Status: appserver.TurnInProgress}}})
+	s.AddThread(&appservertest.Thread{ID: "plain", Cwd: "/work", Loaded: true, Source: `"cli"`})
+	dir := dirFake{{Harness: "codex", SessionRef: "bound-ephemeral"}}
+	a := &codex.Adapter{ControlSocket: s.Endpoint(), Directory: dir}
+	var ids []string
+	for _, lt := range a.LoadedThreads(ctx(t)) {
+		ids = append(ids, lt.ID)
+	}
+	slices.Sort(ids)
+	if want := []string{thread, "active-ephemeral", "bound-ephemeral", "plain"}; !slices.Equal(ids, want) {
+		t.Fatalf("LoadedThreads ids = %v, want %v", ids, want)
+	}
+}
+
 func TestRenderVerifiedNonAgentFailsClosed(t *testing.T) {
 	out := codex.Render(message("hi"), true, "", "", msg.NoticeInfo)
 	if strings.Contains(out, "teammate") || !strings.Contains(out, "not an identified agent session") {

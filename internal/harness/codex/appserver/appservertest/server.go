@@ -47,6 +47,8 @@ type Thread struct {
 	// empty, like an older server.
 	Source         string
 	ParentThreadID string
+	// Ephemeral is thread/read's ephemeral flag; it is omitted when false.
+	Ephemeral bool
 	// Turns, oldest first.
 	Turns []appserver.Turn
 	// NotSteerable, when "review" or "compact", makes steer and start fail
@@ -468,6 +470,9 @@ func (s *Server) handle(method string, raw json.RawMessage) (any, *appserver.RPC
 		}
 		if t.ParentThreadID != "" {
 			th["parentThreadId"] = t.ParentThreadID
+		}
+		if t.Ephemeral {
+			th["ephemeral"] = true
 		}
 		if t.CanAcceptDirectInput != nil {
 			th["canAcceptDirectInput"] = *t.CanAcceptDirectInput
