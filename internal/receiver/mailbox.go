@@ -34,6 +34,10 @@ type Entry struct {
 	Message    *msg.Message `json:"message,omitempty"`
 	// PossiblySeen marks a delivered entry returned again: an earlier pull may not have reached the model.
 	PossiblySeen bool `json:"possibly_seen,omitempty"`
+	// InboxCopy marks a watcher's copy of a role inbox message.
+	InboxCopy bool `json:"inbox_copy,omitempty"`
+	// Sender is the dedupe key of an inbound entry: the transport-proven sender, unlike From.
+	Sender string `json:"-"`
 }
 
 // MailboxStates are the states receive_message returns by default (§8);
@@ -69,6 +73,7 @@ type entryState struct {
 	latest  journal.Record
 	binding journal.Binding
 	message json.RawMessage
+	copy    bool
 }
 
 func dedupeEntries(rs []journal.Record) ([]dedupeKey, map[dedupeKey]*entryState) {
@@ -86,6 +91,7 @@ func dedupeEntries(rs []journal.Record) ([]dedupeKey, map[dedupeKey]*entryState)
 			order = append(order, k)
 		}
 		e.latest = rec
+		e.copy = e.copy || rec.Copy
 		if len(rec.Message) > 0 {
 			e.message = rec.Message
 		}
@@ -252,7 +258,7 @@ func (r *Receiver) pull(after string, limit int) ([]Entry, bool, error) {
 		if !inMailbox(e.latest.State) {
 			continue
 		}
-		en := Entry{Direction: DirectionInbound, MessageID: k.id, From: k.sender, State: e.latest.State, InstanceID: e.binding.InstanceID, SessionRef: e.binding.SessionRef}
+		en := Entry{Direction: DirectionInbound, MessageID: k.id, From: k.sender, Sender: k.sender, InboxCopy: e.copy, State: e.latest.State, InstanceID: e.binding.InstanceID, SessionRef: e.binding.SessionRef}
 		if len(e.message) > 0 {
 			var m msg.Message
 			if json.Unmarshal(e.message, &m) == nil {

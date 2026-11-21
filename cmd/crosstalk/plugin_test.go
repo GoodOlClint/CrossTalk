@@ -10,8 +10,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/GoodOlClint/crosstalk/internal/harness/claude"
 	"github.com/GoodOlClint/crosstalk/internal/mcpserver"
+	"github.com/GoodOlClint/crosstalk/internal/msg"
 )
 
 const pluginDir = "../../plugins/crosstalk"
@@ -29,24 +29,34 @@ func readJSON(t *testing.T, path string) map[string]any {
 	return m
 }
 
-func TestEvalFixtureNoticesMatchConst(t *testing.T) {
+func TestEvalFixtureNoticesMatchPeerNotice(t *testing.T) {
 	files, _ := filepath.Glob(filepath.Join(pluginDir, "evals", "*", "prompt.md"))
-	re := regexp.MustCompile(`notice="([^"]*)"`)
+	noticeRE := regexp.MustCompile(`notice="([^"]*)"`)
+	harnessRE := regexp.MustCompile(`from-harness="([^"]*)"`)
 	seen := 0
 	for _, f := range files {
 		b, err := os.ReadFile(f)
 		if err != nil {
 			t.Fatal(err)
 		}
-		for _, m := range re.FindAllStringSubmatch(string(b), -1) {
+		for _, env := range regexp.MustCompile(`(?s)<cross-session-message [^>]*>`).FindAllString(string(b), -1) {
 			seen++
-			if m[1] != claude.Notice {
-				t.Errorf("%s: notice differs from claude.Notice: %q", f, m[1])
+			class := msg.NoticeTeammate
+			if strings.Contains(env, ` inbox-copy="true"`) {
+				class = msg.NoticeCopy
+			}
+			from := ""
+			if m := harnessRE.FindStringSubmatch(env); m != nil {
+				from = m[1]
+			}
+			m := noticeRE.FindStringSubmatch(env)
+			if m == nil || m[1] != msg.PeerNotice(class, from) {
+				t.Errorf("%s: notice differs from msg.PeerNotice(%s, %q): %v", f, class, from, m)
 			}
 		}
 	}
 	if seen < 5 {
-		t.Errorf("found %d fixture notices, want at least 5", seen)
+		t.Errorf("found %d fixture envelopes, want at least 5", seen)
 	}
 }
 

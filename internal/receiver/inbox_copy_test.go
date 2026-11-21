@@ -123,3 +123,43 @@ func TestDeliveryCarriesInboxCopyFlag(t *testing.T) {
 		}
 	}
 }
+
+func TestDeliveryNoticeClassBySender(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		sender Sender
+		copied bool
+		want   msg.NoticeClass
+	}{
+		{"registered local agent", alice, false, msg.NoticeTeammate},
+		{"unverified", unverified, false, msg.NoticeInfo},
+		{"local-user principal", localUser, false, msg.NoticeInfo},
+		{"remote agent", remoteAl, false, msg.NoticeInfo},
+		{"inbox copy", alice, true, msg.NoticeCopy},
+	} {
+		e := newEnv(t)
+		kind := msg.Inform
+		if res := e.recvIn(tc.sender, newMsg(kind, "x"), "", tc.copied); res.State != adapter.Accepted {
+			t.Fatalf("%s: %+v", tc.name, res)
+		}
+		if w := e.fake.Writes(); len(w) != 1 || w[0].Delivery.Notice != tc.want {
+			t.Errorf("%s: want %q, writes %+v", tc.name, tc.want, w)
+		}
+	}
+}
+
+func TestPullCarriesInboxCopyAndSenderKey(t *testing.T) {
+	e := newMailboxEnv(t)
+	plain := newMsg(msg.Inform, "plain")
+	if res := e.recvIn(alice, plain, "", false); res.State != adapter.Mailboxed {
+		t.Fatalf("%+v", res)
+	}
+	copied := newMsg(msg.Inform, "copied")
+	if res := e.recvIn(alice, copied, "coord", true); res.State != adapter.Mailboxed {
+		t.Fatalf("%+v", res)
+	}
+	es, _ := e.pull("", 0)
+	if len(es) != 2 || es[0].InboxCopy || !es[1].InboxCopy || es[0].Sender != alice.AgentID || es[1].Sender != alice.AgentID {
+		t.Fatalf("pull %+v", es)
+	}
+}

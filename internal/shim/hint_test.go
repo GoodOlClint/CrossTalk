@@ -17,6 +17,7 @@ import (
 	"github.com/GoodOlClint/crosstalk/internal/harness/codex"
 	"github.com/GoodOlClint/crosstalk/internal/harness/codex/appserver/appservertest"
 	"github.com/GoodOlClint/crosstalk/internal/identity"
+	"github.com/GoodOlClint/crosstalk/internal/msg"
 	"github.com/GoodOlClint/crosstalk/internal/prebind"
 	"github.com/GoodOlClint/crosstalk/internal/receiver"
 )
@@ -290,7 +291,7 @@ func TestPulledMessageCarriesHarnessNotice(t *testing.T) {
 		t.Fatalf("mailbox %v", es)
 	}
 	e := es[0].(map[string]any)
-	if e["notice"] != codex.Preamble || !strings.Contains(e["text"].(string), "README") {
+	if e["notice"] != codex.Preamble(msg.NoticeTeammate, "") || !strings.Contains(e["text"].(string), "README") {
 		t.Fatalf("entry %v", e)
 	}
 }

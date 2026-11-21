@@ -87,6 +87,18 @@ func (s Sender) registered() bool { return s.Verified && s.AgentID != "" && !s.r
 // agent or an agent on a paired host.
 func (s Sender) routable() bool { return s.Verified && s.AgentID != "" }
 
+// NoticeClass is the notice class for a message from s: the teammate class
+// only for a verified registered agent of this host.
+func (s Sender) NoticeClass(inboxCopy bool) msg.NoticeClass {
+	switch {
+	case inboxCopy:
+		return msg.NoticeCopy
+	case s.registered():
+		return msg.NoticeTeammate
+	}
+	return msg.NoticeInfo
+}
+
 func (s Sender) key() string {
 	switch {
 	case !s.Verified:
@@ -350,7 +362,7 @@ func (r *Receiver) receive(ctx context.Context, in Inbound, resume bool) Result 
 			return reject(ReasonJournal)
 		}
 	}
-	delivery := adapter.Delivery{Mode: m.Delivery, Target: self.Binding, VerifiedSender: in.Sender.Verified, SenderRemote: in.Sender.remote(), SenderHarness: in.Sender.Harness, Inbox: in.Inbox, InboxCopy: in.InboxCopy}
+	delivery := adapter.Delivery{Mode: m.Delivery, Target: self.Binding, VerifiedSender: in.Sender.Verified, SenderRemote: in.Sender.remote(), SenderHarness: in.Sender.Harness, Inbox: in.Inbox, InboxCopy: in.InboxCopy, Notice: in.Sender.NoticeClass(in.InboxCopy)}
 	st, err := r.ad.Inject(ctx, m, delivery)
 	if !st.Injectable() {
 		st = adapter.Unknown
