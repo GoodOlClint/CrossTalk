@@ -81,10 +81,14 @@ key-usage)
 	hdr="$(mktemp)"
 	chmod 600 "$hdr"
 	printf 'Authorization: Bearer %s\n' "$OPENROUTER_API_KEY" >"$hdr"
-	if curl -fsS -H "@$hdr" https://openrouter.ai/api/v1/key | jq -c '.data | {usage, limit, limit_remaining}' >"$dir/key-$label.json" 2>"$dir/key-$label.err"; then
-		echo "openrouter key $label: $(cat "$dir/key-$label.json")"
+	rm -f "$dir/key-$label.json"
+	if body="$(curl -fsS --max-time 20 -H "@$hdr" https://openrouter.ai/api/v1/key 2>"$dir/key-$label.err")" &&
+		snap="$(printf '%s' "$body" | jq -ce '.data | select((.usage | type) == "number") | {usage, limit, limit_remaining}' 2>>"$dir/key-$label.err")" &&
+		[ -n "$snap" ]; then
+		printf '%s\n' "$snap" >"$dir/key-$label.json"
+		echo "openrouter key $label: $snap"
 	else
-		echo "openrouter key $label: lookup failed (see key-$label.err)"
+		echo "openrouter key $label: unavailable (see key-$label.err)"
 	fi
 	rm -f "$hdr"
 	;;
@@ -116,14 +120,16 @@ live-linux)
 		cp -R "$state/agents" "$state/journal" "$logs/state/" 2>/dev/null || true
 		cp "$home/.codex/config.toml" "$logs/codex-config.toml" 2>/dev/null || true
 		[ -d "$home/.codex/sessions" ] && cp -R "$home/.codex/sessions" "$logs/codex-sessions" 2>/dev/null || true
-		"$0" key-usage after "$logs"
+		"$0" key-usage after "$logs" || true
 		if [ -s "$logs/key-before.json" ] && [ -s "$logs/key-after.json" ]; then
 			echo "openrouter spend this run: $(jq -rn --slurpfile b "$logs/key-before.json" --slurpfile a "$logs/key-after.json" '($a[0].usage - $b[0].usage)') USD"
+		else
+			echo "openrouter spend this run: unavailable"
 		fi
 		"$0" stage-logs "$logs" "$out" || true
 	}
 	trap finish EXIT
-	"$0" key-usage before "$logs"
+	"$0" key-usage before "$logs" || true
 
 	"$0" write-codex-config "$home" "$CODEX_MODEL"
 	"$xt" install claude --yes </dev/null >"$logs/install-claude.log" 2>&1

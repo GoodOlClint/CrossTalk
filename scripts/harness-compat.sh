@@ -83,7 +83,7 @@ tier0-claude)
 			s="$(jq -r --argjson pid "$pid" 'select((.pid == $pid) and (.sessionId | type == "string" and length > 0) and (.kind | type == "string" and length > 0) and (.messagingSocketPath | type == "string" and length > 0)) | .messagingSocketPath' "$f" 2>/dev/null || true)"
 			case "$s" in
 			"") why="session file lacks the fields the adapter reads: $f" ;;
-			/*/cc-socks/"$pid".sock) { [ -S "$s" ] && [ -n "$(find "$s" -maxdepth 0 -user "$(id -u)")" ]; } || why="socket missing or not owned by this user: $s" ;;
+			/*/cc-socks/"$pid".sock) [ -n "$(find "$s" -maxdepth 0 -type s -user "$(id -u)" 2>/dev/null)" ] || why="socket missing or not owned by this user: $s" ;;
 			*) why="socket path is not an absolute .../cc-socks/<pid>.sock for pid $pid: $s" ;;
 			esac
 		fi
