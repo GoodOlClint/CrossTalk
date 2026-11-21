@@ -1615,7 +1615,7 @@ func TestHarnessCompatBumpAndIssueKeyOnReportResults(t *testing.T) {
 		}
 	}
 	bump := jobs["bump"]
-	for _, want := range []string{"environment: harness-compat-bump\n", "actions/create-github-app-token@v3", "land-bump", "persist-credentials: false"} {
+	for _, want := range []string{"environment: harness-compat-bump\n", "actions/create-github-app-token@v3", "land-bump", "persist-credentials: false", `"$h" "$v" "$GITHUB_SHA"`} {
 		if !strings.Contains(bump, want) {
 			t.Errorf("bump lacks %q", want)
 		}
@@ -1815,5 +1815,10 @@ func TestHarnessCompatTestedCodeAllowsOnlyRecordChanges(t *testing.T) {
 	git(dir, "commit", "-qam", "adapter change")
 	if err := check(); err == nil {
 		t.Fatal("main moved on code after the tested revision: the bump must be refused")
+	}
+	c := exec.Command(filepath.Join(releaseRepoRoot(t), "scripts", "harness-compat.sh"), "tested-code", "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef", "main", ".github/harness-compat.json")
+	c.Dir = dir
+	if out, err := c.CombinedOutput(); err == nil || !strings.Contains(string(out), "failed") {
+		t.Fatalf("a git diff error must fail the check, got err=%v\n%s", err, out)
 	}
 }

@@ -418,10 +418,10 @@ esac
 case "$1 $2" in
 "pr list") cat "$FAKE_DIR/open" 2>/dev/null ;;
 "pr create") echo "https://example.test/pr/7" ;;
-"pr merge") ;;
+"pr merge") case "$*" in *--auto*) ;; *) touch "$FAKE_DIR/merged" ;; esac ;;
 "pr view")
 	case "$*" in
-	*mergeStateStatus*) echo "MERGED CLEAN" ;;
+	*mergeStateStatus*) if [ -e "$FAKE_DIR/merged" ]; then echo "MERGED CLEAN"; else echo "OPEN CLEAN"; fi ;;
 	*) cat "$FAKE_DIR/view_$3" ;;
 	esac
 	;;
@@ -433,6 +433,7 @@ const fakeBumpGit = `#!/bin/sh
 echo "git $*" >> "$FAKE_DIR/log"
 case "$1" in
 rev-parse) echo "abc123" ;;
+diff) cat "$FAKE_DIR/diff" 2>/dev/null ;;
 ls-remote) [ -e "$FAKE_DIR/remote" ] && printf '%s\trefs/heads/b\n' "$(cat "$FAKE_DIR/remote")" ;;
 esac
 exit 0
@@ -470,11 +471,11 @@ func TestLandBump(t *testing.T) {
 		lacks []string
 	}{
 		{"new PR is verified and merged with the head guard", map[string]string{"main_record": unrecorded, "branch_record": bumped, "view_7": good}, true, "merged",
-			[]string{"git push origin HEAD:refs/heads/b", "pr create", "pr merge --auto --squash --match-head-commit abc123"}, nil},
+			[]string{"git push origin HEAD:refs/heads/b", "pr create", "pr merge --squash --match-head-commit abc123"}, nil},
 		{"main already holds the version", map[string]string{"main_record": `{"codex":{"tested":"0.172.0"}}`}, true, "already recorded",
 			nil, []string{"git push", "pr create", "pr merge"}},
 		{"fork PR with the same branch name is skipped, ours is made", map[string]string{"main_record": unrecorded, "branch_record": bumped, "open": "3\n", "view_3": bumpView("abc123", "Evil", "Repo", "main", true, rec), "view_7": good}, true, "skipping #3",
-			[]string{"pr create", "pr merge --auto --squash --match-head-commit abc123 --repo Owner/Repo 7"}, []string{"pr merge --auto --squash --match-head-commit abc123 --repo Owner/Repo 3"}},
+			[]string{"pr create", "pr merge --squash --match-head-commit abc123 --repo Owner/Repo 7"}, []string{"pr merge --squash --match-head-commit abc123 --repo Owner/Repo 3"}},
 		{"fork PR created as the only match is never merged", map[string]string{"main_record": unrecorded, "branch_record": bumped, "view_7": bumpView("abc123", "Evil", "Repo", "main", true, rec)}, false, "refusing to merge #7",
 			nil, []string{"pr merge"}},
 		{"diff touching a non-record file is refused", map[string]string{"main_record": unrecorded, "branch_record": bumped, "view_7": bumpView("abc123", "Owner", "Repo", "main", false, rec, ".github/workflows/ci.yml")}, false, "refusing to merge",
@@ -489,8 +490,12 @@ func TestLandBump(t *testing.T) {
 			nil, []string{"pr merge"}},
 		{"branch that also changes the other harness entry is refused", map[string]string{"main_record": unrecorded, "branch_record": otherEntry, "view_7": good}, false, "refusing b",
 			nil, []string{"pr merge"}},
+		{"main moved on code before the merge: refused after the PR is clean", map[string]string{"main_record": unrecorded, "branch_record": bumped, "view_7": good, "diff": "internal/shim/shim.go\n"}, false, "changed since the tested revision",
+			[]string{"git fetch -q origin main", "git diff --name-only runsha FETCH_HEAD"}, []string{"pr merge"}},
+		{"main moved only the record: merged without --auto", map[string]string{"main_record": unrecorded, "branch_record": bumped, "view_7": good, "diff": ".github/harness-compat.json\n"}, true, "merged",
+			[]string{"git diff --name-only runsha FETCH_HEAD", "pr merge --squash --match-head-commit abc123"}, []string{"--auto"}},
 		{"rerun reuses a verified open PR for the existing branch", map[string]string{"main_record": unrecorded, "branch_record": bumped, "remote": "abc123\n", "open": "5\n", "view_5": good}, true, "reusing #5",
-			[]string{"pr merge --auto --squash --match-head-commit abc123 --repo Owner/Repo 5"}, []string{"git push", "pr create"}},
+			[]string{"pr merge --squash --match-head-commit abc123 --repo Owner/Repo 5"}, []string{"git push", "pr create"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -506,7 +511,7 @@ func TestLandBump(t *testing.T) {
 				}
 			}
 			env := []string{"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"), "FAKE_DIR=" + fake, "LAND_PR_POLL=1", "LAND_PR_TIMEOUT=3"}
-			out, err := releaseScript(t, env, "land-bump", "Owner/Repo", "b", "the title", rec, "codex", "0.172.0")
+			out, err := releaseScript(t, env, "land-bump", "Owner/Repo", "b", "the title", rec, "codex", "0.172.0", "runsha")
 			if (err == nil) != c.ok {
 				t.Fatalf("err = %v, want ok=%v\n%s", err, c.ok, out)
 			}

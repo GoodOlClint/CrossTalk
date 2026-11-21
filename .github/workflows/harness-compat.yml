@@ -295,7 +295,7 @@ jobs:
             fi
             git -c user.name='crosstalk-release[bot]' -c user.email='crosstalk-release[bot]@users.noreply.github.com' \
               commit -q -m "harness-compat: record $h $v as tested" .github/harness-compat.json
-            scripts/release-build.sh land-bump "$GITHUB_REPOSITORY" "$branch" "harness-compat: record $h $v as tested" .github/harness-compat.json "$h" "$v"
+            scripts/release-build.sh land-bump "$GITHUB_REPOSITORY" "$branch" "harness-compat: record $h $v as tested" .github/harness-compat.json "$h" "$v" "$GITHUB_SHA"
           done
 
   issue:

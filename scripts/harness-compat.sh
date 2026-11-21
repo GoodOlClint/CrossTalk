@@ -172,7 +172,11 @@ failed-steps)
 	;;
 tested-code)
 	usage="usage: harness-compat.sh tested-code RUN_SHA BASE_REF RECORD"
-	extra="$(git diff --name-only "${2:?$usage}" "${3:?$usage}" | grep -vxF "${4:?$usage}" || true)"
+	changed="$(git diff --name-only "${2:?$usage}" "${3:?$usage}")" || {
+		echo "git diff $2 $3 failed" >&2
+		exit 1
+	}
+	extra="$(printf '%s\n' "$changed" | grep -vxF "${4:?$usage}" || true)"
 	[ -z "$extra" ] || {
 		echo "$3 changed since the tested revision $2; rerun to test it: $extra" >&2
 		exit 1
