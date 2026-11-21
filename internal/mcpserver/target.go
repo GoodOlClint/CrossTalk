@@ -25,6 +25,11 @@ type Target struct {
 	Inbox *InboxTarget
 	// Rejection is the refusal for an inbox address that cannot be sent to.
 	Rejection *Error
+	// Candidates holds the display names of several live sessions a slug
+	// matched; nothing else is set, so no session is picked.
+	Candidates []string
+	// Closest is the live display name nearest to a value that matched nothing.
+	Closest string
 }
 
 // InboxTarget is a role inbox and its live members, responder first.
@@ -146,12 +151,101 @@ func resolveLocal(ctx context.Context, reg *registry.Registry, discover func(con
 		}
 	}
 	if len(native) == 1 && !id {
-		nid := identity.AgentID(string(native[0].Harness), native[0].SessionRef)
-		for _, d := range ds {
-			if d.AgentID == nid {
-				return Target{Desc: d, Registered: true}, nil
-			}
+		if d, ok := registeredAs(ds, native[0]); ok {
+			return Target{Desc: d, Registered: true}, nil
 		}
 	}
-	return Target{Native: native}, nil
+	if len(native) > 0 || id || strings.Contains(to, "@") {
+		return Target{Native: native}, nil
+	}
+	return slugTarget(ds, ss, to), nil
+}
+
+func registeredAs(ds []registry.Descriptor, s Session) (registry.Descriptor, bool) {
+	nid := identity.AgentID(string(s.Harness), s.SessionRef)
+	for _, d := range ds {
+		if d.AgentID == nid {
+			return d, true
+		}
+	}
+	return registry.Descriptor{}, false
+}
+
+// slugKey folds case and treats spaces and hyphens alike.
+func slugKey(s string) string {
+	return strings.ReplaceAll(strings.ToLower(s), " ", "-")
+}
+
+// slugTarget matches to against live display names by slugKey when no exact
+// name matched: one live session resolves, several resolve to none and are
+// listed as Candidates, none leaves the closest name for the hint.
+func slugTarget(ds []registry.Descriptor, ss []Session, to string) Target {
+	want := slugKey(to)
+	type live struct {
+		name string
+		d    *registry.Descriptor
+		s    *Session
+	}
+	var all []live
+	seen := map[string]bool{}
+	for i := range ds {
+		seen[ds[i].AgentID] = true
+		all = append(all, live{name: ds[i].Name, d: &ds[i]})
+	}
+	for i := range ss {
+		if seen[identity.AgentID(string(ss[i].Harness), ss[i].SessionRef)] {
+			continue
+		}
+		all = append(all, live{name: ss[i].Name, s: &ss[i]})
+	}
+	var hits []live
+	for _, l := range all {
+		if l.name != "" && slugKey(l.name) == want {
+			hits = append(hits, l)
+		}
+	}
+	switch len(hits) {
+	case 1:
+		if hits[0].d != nil {
+			return Target{Desc: *hits[0].d, Registered: true}
+		}
+		return Target{Native: []Session{*hits[0].s}}
+	case 0:
+		best, bestDist := "", 1<<30
+		for _, l := range all {
+			if dist := editDistance(slugKey(l.name), want); l.name != "" && dist < bestDist {
+				best, bestDist = l.name, dist
+			}
+		}
+		if bestDist <= max(2, len(want)/4) {
+			return Target{Closest: best}
+		}
+		return Target{}
+	}
+	var names []string
+	for _, l := range hits {
+		names = append(names, l.name)
+	}
+	return Target{Candidates: names}
+}
+
+func editDistance(a, b string) int {
+	ra, rb := []rune(a), []rune(b)
+	prev := make([]int, len(rb)+1)
+	for j := range prev {
+		prev[j] = j
+	}
+	for i := 1; i <= len(ra); i++ {
+		cur := make([]int, len(rb)+1)
+		cur[0] = i
+		for j := 1; j <= len(rb); j++ {
+			c := 1
+			if ra[i-1] == rb[j-1] {
+				c = 0
+			}
+			cur[j] = min(prev[j]+1, cur[j-1]+1, prev[j-1]+c)
+		}
+		prev = cur
+	}
+	return prev[len(rb)]
 }

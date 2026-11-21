@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/GoodOlClint/crosstalk/internal/adapter"
@@ -51,6 +52,8 @@ const (
 	hintCodexBackendDown        = "That Codex session's app-server cannot reach its OpenAI backend right now. The message is in the thread, but the session may not act on it or reply until the network returns. Do not resend. Tell your user; restarting the Codex app-server (codex app-server daemon restart) may fix it, and it interrupts running Codex work."
 	hintCodexBackendDownUnknown = "Delivery to that Codex session is unconfirmed, and its app-server also cannot reach its OpenAI backend right now. Do not resend blind: check receive_message for this message_id later. Tell your user; restarting the Codex app-server (codex app-server daemon restart) may fix it, and it interrupts running Codex work."
 	hintMailboxed               = "The message is in that session's mailbox, not yet delivered: the session sees it at its next receive_message. Where the harness offers a wake, an immediate message from you may also start one turn, best effort, only once the session is idle, so it is not a deadline. Do not resend."
+	hintClosestName             = "Did you mean %q? Send to that exact name, or copy a name or agent_id from list_agents."
+	hintAmbiguousSlug           = "%q matches several live sessions: %s. Nothing was sent. Address one by agent_id from list_agents."
 	hintAmbiguousName           = "Several sessions carry this name. Find the one you mean in list_agents and address it by agent_id."
 )
 
@@ -269,6 +272,7 @@ func (st *AgentState) viaTransport(ctx context.Context, to registry.Descriptor, 
 // Every outbound is journaled before and after the attempt.
 func (st *AgentState) deliver(ctx context.Context, m msg.Message) mcpserver.Result {
 	res := mcpserver.Result{MessageID: m.MessageID}
+	closest := ""
 	finish := func(to string, state adapter.State, reason string) mcpserver.Result {
 		st.outbound(m, to, state, reason, false)
 		res.State, res.Reason = state, reason
@@ -277,6 +281,9 @@ func (st *AgentState) deliver(ctx context.Context, m msg.Message) mcpserver.Resu
 			res.Hint = hintAmbiguousName
 		case ReasonNoSuchAgent:
 			res.Hint = st.bareNameHint(ctx, m.To)
+			if closest != "" {
+				res.Hint = joinHint(res.Hint, fmt.Sprintf(hintClosestName, closest))
+			}
 		}
 		return res
 	}
@@ -294,6 +301,12 @@ func (st *AgentState) deliver(ctx context.Context, m msg.Message) mcpserver.Resu
 	if err != nil {
 		return finish(m.To, adapter.Unreachable, err.Error())
 	}
+	if len(tgt.Candidates) > 0 {
+		res := finish(m.To, adapter.Rejected, ReasonAmbiguousName)
+		res.Hint = fmt.Sprintf(hintAmbiguousSlug, m.To, strings.Join(tgt.Candidates, ", "))
+		return res
+	}
+	closest = tgt.Closest
 	if r := tgt.Rejection; r != nil {
 		res := finish(m.To, adapter.Rejected, r.Reason)
 		res.Hint = r.Hint
