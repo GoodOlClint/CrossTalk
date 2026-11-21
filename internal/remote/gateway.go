@@ -532,7 +532,7 @@ func (l chanListener) Accept() (net.Conn, error) {
 	}
 }
 func (l chanListener) Close() error   { return nil }
-func (l chanListener) Addr() net.Addr { return l.g.addr }
+func (l chanListener) Addr() net.Addr { return l.g.Addr() }
 
 func (g *Gateway) tlsConfig(info *connInfo) *tls.Config {
 	c := g.base.Clone()
