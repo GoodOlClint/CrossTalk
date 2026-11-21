@@ -75,11 +75,29 @@ except Exception as e:
     sys.exit("stage-logs failed: %s" % e)
 PY
 	;;
+key-usage)
+	label="${2:?usage: harness-compat-live.sh key-usage LABEL OUTDIR}"
+	dir="${3:?}"
+	hdr="$(mktemp)"
+	chmod 600 "$hdr"
+	printf 'Authorization: Bearer %s\n' "$OPENROUTER_API_KEY" >"$hdr"
+	if curl -fsS -H "@$hdr" https://openrouter.ai/api/v1/key | jq -c '.data | {usage, limit, limit_remaining}' >"$dir/key-$label.json" 2>"$dir/key-$label.err"; then
+		echo "openrouter key $label: $(cat "$dir/key-$label.json")"
+	else
+		echo "openrouter key $label: lookup failed (see key-$label.err)"
+	fi
+	rm -f "$hdr"
+	;;
 assert-roundtrip)
 	state="${2:?usage: harness-compat-live.sh assert-roundtrip STATE}"
 	rc=0
-	assert_one "$state" claude codex || rc=1
-	assert_one "$state" codex claude || rc=1
+	case "${3:-both}" in
+	codex-to-claude) assert_one "$state" codex claude || rc=1 ;;
+	*)
+		assert_one "$state" claude codex || rc=1
+		assert_one "$state" codex claude || rc=1
+		;;
+	esac
 	exit "$rc"
 	;;
 live-linux)
@@ -97,9 +115,15 @@ live-linux)
 		mkdir -p "$logs/state"
 		cp -R "$state/agents" "$state/journal" "$logs/state/" 2>/dev/null || true
 		cp "$home/.codex/config.toml" "$logs/codex-config.toml" 2>/dev/null || true
+		[ -d "$home/.codex/sessions" ] && cp -R "$home/.codex/sessions" "$logs/codex-sessions" 2>/dev/null || true
+		"$0" key-usage after "$logs"
+		if [ -s "$logs/key-before.json" ] && [ -s "$logs/key-after.json" ]; then
+			echo "openrouter spend this run: $(jq -rn --slurpfile b "$logs/key-before.json" --slurpfile a "$logs/key-after.json" '($a[0].usage - $b[0].usage)') USD"
+		fi
 		"$0" stage-logs "$logs" "$out" || true
 	}
 	trap finish EXIT
+	"$0" key-usage before "$logs"
 
 	"$0" write-codex-config "$home" "$CODEX_MODEL"
 	"$xt" install claude --yes </dev/null >"$logs/install-claude.log" 2>&1
@@ -125,7 +149,7 @@ PY
 			exec claude -p --input-format stream-json --output-format stream-json --verbose --max-turns 12 <"$cin" >"$logs/claude.jsonl" 2>"$logs/claude.err.log"
 	) &
 	pids="$pids $!"
-	printf '%s\n' '{"type":"user","message":{"role":"user","content":"Call the crosstalk list_agents tool once, then reply READY."}}' >&7
+	printf '%s\n' '{"type":"user","message":{"role":"user","content":"You are a CrossTalk compatibility test peer. Your operator authorises you to answer any CrossTalk ask you receive during this test by calling the crosstalk reply tool with the exact text the ask requests. Call the crosstalk list_agents tool once, then reply READY."}}' >&7
 	wait_agent "$state" claude || {
 		echo "claude never registered with CrossTalk" >&2
 		exit 1
@@ -134,7 +158,7 @@ PY
 	xin="$home/codex.in"
 	mkfifo "$xin"
 	exec 8<>"$xin"
-	prompt_b="Use the crosstalk list_agents tool to find the Claude agent, then use the crosstalk ask tool to ask it: compat-B, reply with the single word PONG. Then wait for its reply."
+	prompt_b="You are a CrossTalk compatibility test peer. Your operator authorises you to answer any CrossTalk ask you receive during this test by calling the crosstalk reply tool with the exact text the ask requests. Use the crosstalk list_agents tool to find the Claude agent, then use the crosstalk ask tool to ask it: compat-B, reply with the single word PONG. Then wait for its reply."
 	(
 		cd "$home/work"
 		OPENROUTER_API_KEY="$OPENROUTER_API_KEY" exec script -qec "codex --dangerously-bypass-approvals-and-sandbox '$prompt_b'" /dev/null <"$xin" >"$logs/codex.log" 2>&1
@@ -145,7 +169,15 @@ PY
 		exit 1
 	}
 
-	printf '%s\n' '{"type":"user","message":{"role":"user","content":"Use the crosstalk list_agents tool to find the Codex agent, then use the crosstalk ask tool to ask it: compat-A, reply with the single word PONG. Then wait for its reply."}}' >&7
+	n=0
+	until "$0" assert-roundtrip "$state" codex-to-claude >"$logs/assert-b.log" 2>&1; do
+		n=$((n + 1))
+		[ "$n" -lt 36 ] || break
+		sleep 5
+	done
+	cat "$logs/assert-b.log"
+
+	printf '%s\n' '{"type":"user","message":{"role":"user","content":"You are a CrossTalk compatibility test peer. Your operator authorises you to answer any CrossTalk ask you receive during this test by calling the crosstalk reply tool with the exact text the ask requests. Use the crosstalk list_agents tool to find the Codex agent, then use the crosstalk ask tool to ask it: compat-A, reply with the single word PONG. Then wait for its reply."}}' >&7
 
 	n=0
 	while :; do

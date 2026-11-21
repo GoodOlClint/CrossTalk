@@ -68,7 +68,6 @@ pair)
 tier0-claude)
 	usage="usage: harness-compat.sh tier0-claude HOME"
 	home="${2:?$usage}"
-	sock=/tmp/cc-socks
 	port="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')"
 	HOME="$home" ANTHROPIC_BASE_URL="http://127.0.0.1:$port" ANTHROPIC_AUTH_TOKEN=dummy ANTHROPIC_API_KEY='' \
 		claude -p hi >/dev/null 2>&1 &
@@ -84,13 +83,13 @@ tier0-claude)
 			s="$(jq -r --argjson pid "$pid" 'select((.pid == $pid) and (.sessionId | type == "string" and length > 0) and (.kind | type == "string" and length > 0) and (.messagingSocketPath | type == "string" and length > 0)) | .messagingSocketPath' "$f" 2>/dev/null || true)"
 			case "$s" in
 			"") why="session file lacks the fields the adapter reads: $f" ;;
-			"$sock"/*) [ -S "$s" ] || why="socket missing: $s" ;;
-			*) why="socket outside $sock: $s" ;;
+			/*/cc-socks/"$pid".sock) { [ -S "$s" ] && [ -n "$(find "$s" -maxdepth 0 -user "$(id -u)")" ]; } || why="socket missing or not owned by this user: $s" ;;
+			*) why="socket path is not an absolute .../cc-socks/<pid>.sock for pid $pid: $s" ;;
 			esac
 		fi
 		[ -z "$why" ] && break
 		n=$((n + 1))
-		[ "$n" -lt 40 ] || {
+		[ "$n" -lt "${COMPAT_WAIT_TRIES:-40}" ] || {
 			echo "$why" >&2
 			exit 1
 		}
