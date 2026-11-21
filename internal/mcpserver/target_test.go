@@ -141,10 +141,29 @@ func TestResolveTargetAgentIDUnaffectedBySlug(t *testing.T) {
 
 func TestResolveTargetAddressWithAtNeverSlugs(t *testing.T) {
 	reg := registry.New(t.TempDir())
-	slugRegister(t, reg, "t1", "Build Bot")
+	slugRegister(t, reg, "t1", "Build Bot@lab")
 	tg, err := ResolveTarget(context.Background(), reg, noDiscover, nil, "build-bot@lab")
-	if err != nil || tg.Registered {
+	if err != nil || tg.Registered || len(tg.Candidates) != 0 {
 		t.Fatalf("%+v %v", tg, err)
+	}
+}
+
+func TestResolveTargetSlugSkippedWhenDiscoveryFailed(t *testing.T) {
+	reg := registry.New(t.TempDir())
+	slugRegister(t, reg, "t1", "Build Bot")
+	failed := func(context.Context) ([]Session, error) { return nil, context.DeadlineExceeded }
+	tg, err := ResolveTarget(context.Background(), reg, failed, nil, "build-bot")
+	if err != nil || tg.Registered {
+		t.Fatalf("slug routed on a failed discovery: %+v %v", tg, err)
+	}
+}
+
+func TestResolveTargetSlugSkipsIDShapedNames(t *testing.T) {
+	reg := registry.New(t.TempDir())
+	s := Session{Harness: "claude", SessionRef: "n1", Name: "abcdef0123456789"}
+	tg, _ := ResolveTarget(context.Background(), reg, func(context.Context) ([]Session, error) { return []Session{s}, nil }, nil, "ABCDEF0123456789")
+	if len(tg.Native) != 0 {
+		t.Fatalf("id-shaped name reached by slug: %+v", tg)
 	}
 }
 

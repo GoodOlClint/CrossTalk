@@ -143,7 +143,7 @@ func resolveLocal(ctx context.Context, reg *registry.Registry, discover func(con
 			return Target{Desc: d, Registered: true}, nil
 		}
 	}
-	ss, _ := discover(ctx)
+	ss, derr := discover(ctx)
 	var native []Session
 	for _, s := range ss {
 		if id && identity.AgentID(string(s.Harness), s.SessionRef) == to || !id && s.Name == to {
@@ -155,7 +155,7 @@ func resolveLocal(ctx context.Context, reg *registry.Registry, discover func(con
 			return Target{Desc: d, Registered: true}, nil
 		}
 	}
-	if len(native) > 0 || id || strings.Contains(to, "@") {
+	if len(native) > 0 || id || derr != nil || strings.Contains(to, "@") {
 		return Target{Native: native}, nil
 	}
 	return slugTarget(ds, ss, to), nil
@@ -200,7 +200,7 @@ func slugTarget(ds []registry.Descriptor, ss []Session, to string) Target {
 	}
 	var hits []live
 	for _, l := range all {
-		if l.name != "" && slugKey(l.name) == want {
+		if l.name != "" && !IsAgentID(l.name) && slugKey(l.name) == want {
 			hits = append(hits, l)
 		}
 	}
@@ -212,12 +212,17 @@ func slugTarget(ds []registry.Descriptor, ss []Session, to string) Target {
 		return Target{Native: []Session{*hits[0].s}}
 	case 0:
 		best, bestDist := "", 1<<30
+		limit := max(2, len(want)/4)
 		for _, l := range all {
-			if dist := editDistance(slugKey(l.name), want); l.name != "" && dist < bestDist {
+			k := slugKey(l.name)
+			if l.name == "" || IsAgentID(l.name) || len(k)-len(want) > limit || len(want)-len(k) > limit || len(want) > 256 {
+				continue
+			}
+			if dist := editDistance(k, want); dist < bestDist {
 				best, bestDist = l.name, dist
 			}
 		}
-		if bestDist <= max(2, len(want)/4) {
+		if bestDist <= limit {
 			return Target{Closest: best}
 		}
 		return Target{}
