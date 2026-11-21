@@ -1,0 +1,97 @@
+name: harness-compat
+
+on:
+  workflow_dispatch:
+    inputs:
+      harness:
+        description: harness to check (all, codex or claude-code)
+        default: all
+      version:
+        description: force this x.y.z instead of the npm latest (one harness only)
+        default: ""
+      force:
+        description: run even if the version equals the record
+        type: boolean
+        default: false
+      recorded:
+        description: treat this as the recorded version (a test aid)
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: harness-compat
+  cancel-in-progress: false
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      changed: ${{ steps.detect.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - id: detect
+        env:
+          HARNESS: ${{ inputs.harness }}
+          VERSION: ${{ inputs.version }}
+          FORCE: ${{ inputs.force }}
+          RECORDED: ${{ inputs.recorded }}
+        run: |
+          set -eu
+          changed="$(scripts/harness-compat.sh detect .github/harness-compat.json "$HARNESS" "$VERSION" "$FORCE" "$RECORDED")"
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
+          echo "changed: $changed"
+
+  tier0:
+    needs: detect
+    if: needs.detect.outputs.changed != '[]'
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.detect.outputs.changed) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Install the harness at the exact version
+        env:
+          HARNESS: ${{ matrix.harness }}
+          VERSION: ${{ matrix.version }}
+        run: |
+          set -eu
+          case "$HARNESS" in codex) pkg=@openai/codex ;; claude-code) pkg=@anthropic-ai/claude-code ;; *) exit 1 ;; esac
+          npm install -g "$pkg@$VERSION"
+      - name: Build crosstalk
+        run: go build -o "$RUNNER_TEMP/bin/crosstalk" ./cmd/crosstalk
+      - name: Install into a scratch HOME and check
+        env:
+          HARNESS: ${{ matrix.harness }}
+        run: |
+          set -eu
+          home="$(mktemp -d)"
+          echo "SCRATCH_HOME=$home" >> "$GITHUB_ENV"
+          name=claude; [ "$HARNESS" = codex ] && name=codex
+          HOME="$home" "$RUNNER_TEMP/bin/crosstalk" install "$name" --yes </dev/null
+          HOME="$home" "$home/.local/bin/crosstalk" install "$name" --check </dev/null
+      - name: Harness probes
+        env:
+          HARNESS: ${{ matrix.harness }}
+        run: |
+          set -eu
+          if [ "$HARNESS" = codex ]; then
+            q="$(scripts/harness-compat.sh tier0-codex "$SCRATCH_HOME")"
+            test -f "$q"
+            CROSSTALK_COMPAT_QUEUE_DB="$q" go test ./internal/harness/codex -run TestInstalledCodexQueueSchema -count=1 -v
+          else
+            scripts/harness-compat.sh tier0-claude "$SCRATCH_HOME"
+          fi
