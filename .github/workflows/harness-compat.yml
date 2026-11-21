@@ -16,6 +16,9 @@ on:
       recorded:
         description: treat this as the recorded version (a test aid)
         default: ""
+      queue_codex_version:
+        description: Codex version for the macOS queue-wake leg (the queue gate allows 0.167.x only); empty tests the candidate version itself
+        default: "0.167.0"
 
 permissions:
   contents: read
@@ -42,13 +45,14 @@ jobs:
           VERSION: ${{ inputs.version }}
           FORCE: ${{ inputs.force }}
           RECORDED: ${{ inputs.recorded }}
+          QUEUE_VERSION: ${{ inputs.queue_codex_version }}
         run: |
           set -eu
           changed="$(scripts/harness-compat.sh detect .github/harness-compat.json "$HARNESS" "$VERSION" "$FORCE" "$RECORDED")"
           echo "changed=$changed" >> "$GITHUB_OUTPUT"
           echo "changed: $changed"
           echo "pair=$(scripts/harness-compat.sh pair "$changed")" >> "$GITHUB_OUTPUT"
-          echo "legs=$(scripts/harness-compat.sh legs "$changed")" >> "$GITHUB_OUTPUT"
+          echo "legs=$(scripts/harness-compat.sh legs "$changed" "$QUEUE_VERSION")" >> "$GITHUB_OUTPUT"
 
   tier0:
     name: tier0-${{ matrix.harness }}
@@ -83,7 +87,7 @@ jobs:
           HARNESS: ${{ matrix.harness }}
         run: |
           set -eu
-          home="$(mktemp -d)"
+          home="$(mktemp -d /tmp/ct.XXXXXX)"
           echo "SCRATCH_HOME=$home" >> "$GITHUB_ENV"
           name=claude; [ "$HARNESS" = codex ] && name=codex
           HOME="$home" "$RUNNER_TEMP/bin/crosstalk" install "$name" --yes </dev/null
@@ -104,7 +108,10 @@ jobs:
   build:
     needs: detect
     if: needs.detect.outputs.changed != '[]'
-    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
@@ -118,11 +125,13 @@ jobs:
           mkdir -p "$RUNNER_TEMP/out"
           go build -o "$RUNNER_TEMP/out/crosstalk" ./cmd/crosstalk
           go build -o "$RUNNER_TEMP/out/threaddump" ./scripts/threaddump
-      - run: go vet ./...
-      - run: go test ./cmd/crosstalk -run TestHarnessCompat -count=1
+      - if: matrix.os == 'ubuntu-latest'
+        run: go vet ./...
+      - if: matrix.os == 'ubuntu-latest'
+        run: go test ./cmd/crosstalk -run TestHarnessCompat -count=1
       - uses: actions/upload-artifact@v7
         with:
-          name: crosstalk-bin
+          name: crosstalk-bin-${{ matrix.os }}
           path: ${{ runner.temp }}/out
           if-no-files-found: error
 
@@ -179,7 +188,7 @@ jobs:
       fail-fast: false
       matrix:
         include: ${{ fromJSON(needs.detect.outputs.legs) }}
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     environment: harness-compat
     env:
@@ -222,18 +231,20 @@ jobs:
       - if: steps.gate.outputs.ran == 'true'
         uses: actions/download-artifact@v8
         with:
-          name: crosstalk-bin
+          name: crosstalk-bin-${{ matrix.runner }}
           path: ${{ runner.temp }}/bin
       - name: Install the harness for this leg
         if: steps.gate.outputs.ran == 'true'
         env:
           LEG: ${{ matrix.leg }}
           VERSION: ${{ matrix.version }}
+          PAIR: ${{ needs.detect.outputs.pair }}
         run: |
           set -eu
           case "$LEG" in
             claude) npm install -g "@anthropic-ai/claude-code@$VERSION"; claude --version ;;
             codex-linux) npm install -g "@openai/codex@$VERSION"; codex --version ;;
+            codex-macos) npm install -g "@openai/codex@$VERSION" "@anthropic-ai/claude-code@$(printf '%s' "$PAIR" | jq -r '.["claude-code"]')"; codex --version; claude --version ;;
             *) echo "unknown leg: $LEG" >&2; exit 1 ;;
           esac
       - name: Run the leg
@@ -244,7 +255,7 @@ jobs:
         run: |
           set -eu
           chmod +x "$RUNNER_TEMP/bin/crosstalk" "$RUNNER_TEMP/bin/threaddump"
-          home="$(mktemp -d)"
+          home="$(mktemp -d /tmp/ct.XXXXXX)"
           CROSSTALK_BIN="$RUNNER_TEMP/bin/crosstalk" THREADDUMP_BIN="$RUNNER_TEMP/bin/threaddump" LIVE_LOGS="$RUNNER_TEMP/live-logs" scripts/harness-compat-live.sh leg "$LEG" "$home"
       - name: Upload logs
         if: always() && steps.gate.outputs.ran == 'true'
@@ -302,7 +313,7 @@ jobs:
       - if: steps.gate.outputs.ran == 'true'
         uses: actions/download-artifact@v8
         with:
-          name: crosstalk-bin
+          name: crosstalk-bin-ubuntu-latest
           path: ${{ runner.temp }}/bin
       - name: Install both harnesses
         if: steps.gate.outputs.ran == 'true'
@@ -321,7 +332,7 @@ jobs:
         run: |
           set -eu
           chmod +x "$RUNNER_TEMP/bin/crosstalk" "$RUNNER_TEMP/bin/threaddump"
-          home="$(mktemp -d)"
+          home="$(mktemp -d /tmp/ct.XXXXXX)"
           CROSSTALK_BIN="$RUNNER_TEMP/bin/crosstalk" THREADDUMP_BIN="$RUNNER_TEMP/bin/threaddump" LIVE_LOGS="$RUNNER_TEMP/live-logs" scripts/harness-compat-live.sh leg cross "$home"
       - name: Upload logs
         if: always() && steps.gate.outputs.ran == 'true'

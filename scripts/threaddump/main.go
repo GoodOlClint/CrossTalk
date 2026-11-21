@@ -10,7 +10,19 @@ import (
 	"github.com/GoodOlClint/crosstalk/internal/harness/codex/appserver"
 )
 
-var keep = []string{"id", "ephemeral", "parentThreadId", "sessionId"}
+var idFields = []string{"id", "parentThreadId", "sessionId"}
+
+func isID(s string) bool {
+	if len(s) == 0 || len(s) > 64 {
+		return false
+	}
+	for _, r := range s {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_') {
+			return false
+		}
+	}
+	return true
+}
 
 // kinds reduces a thread source to a category and a helper subtype. Names, paths and free text inside the source are dropped.
 func kinds(raw json.RawMessage) (kind, sub string) {
@@ -56,10 +68,15 @@ func word(s string) string {
 
 func pick(thread map[string]json.RawMessage) map[string]any {
 	out := map[string]any{}
-	for _, k := range keep {
-		if v, ok := thread[k]; ok {
-			out[k] = v
+	for _, k := range idFields {
+		var id string
+		if json.Unmarshal(thread[k], &id) == nil && isID(id) {
+			out[k] = id
 		}
+	}
+	var eph bool
+	if json.Unmarshal(thread["ephemeral"], &eph) == nil {
+		out["ephemeral"] = eph
 	}
 	if raw, ok := thread["source"]; ok {
 		out["sourceKind"], out["subAgentKind"] = kinds(raw)
