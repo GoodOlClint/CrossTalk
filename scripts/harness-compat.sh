@@ -50,12 +50,27 @@ detect)
 	done
 	printf '%s\n' "$out"
 	;;
+pair)
+	usage="usage: harness-compat.sh pair CHANGED_JSON"
+	changed="${2:?$usage}"
+	out="{}"
+	for h in codex claude-code; do
+		v="$(printf '%s' "$changed" | jq -r --arg h "$h" '[.[] | select(.harness == $h) | .version][0] // empty')"
+		[ -n "$v" ] || v="$(npm view "$(pkg "$h")" version)"
+		semver "$v" || {
+			echo "not a version for $h: $v" >&2
+			exit 1
+		}
+		out="$(printf '%s' "$out" | jq -c --arg h "$h" --arg v "$v" '. + {($h): $v}')"
+	done
+	printf '%s\n' "$out"
+	;;
 tier0-claude)
 	usage="usage: harness-compat.sh tier0-claude HOME"
 	home="${2:?$usage}"
 	sock=/tmp/cc-socks
 	port="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')"
-	HOME="$home" ANTHROPIC_BASE_URL="http://127.0.0.1:$port" ANTHROPIC_AUTH_TOKEN=dummy ANTHROPIC_API_KEY= \
+	HOME="$home" ANTHROPIC_BASE_URL="http://127.0.0.1:$port" ANTHROPIC_AUTH_TOKEN=dummy ANTHROPIC_API_KEY='' \
 		claude -p hi >/dev/null 2>&1 &
 	pid=$!
 	trap 'kill "$pid" 2>/dev/null || true' EXIT
@@ -106,7 +121,7 @@ tier0-codex)
 	echo "$q"
 	;;
 *)
-	echo "usage: harness-compat.sh detect|tier0-claude|tier0-codex ..." >&2
+	echo "usage: harness-compat.sh detect|pair|tier0-claude|tier0-codex ..." >&2
 	exit 2
 	;;
 esac

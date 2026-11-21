@@ -30,6 +30,7 @@ jobs:
     timeout-minutes: 5
     outputs:
       changed: ${{ steps.detect.outputs.changed }}
+      pair: ${{ steps.detect.outputs.pair }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -45,6 +46,7 @@ jobs:
           changed="$(scripts/harness-compat.sh detect .github/harness-compat.json "$HARNESS" "$VERSION" "$FORCE" "$RECORDED")"
           echo "changed=$changed" >> "$GITHUB_OUTPUT"
           echo "changed: $changed"
+          echo "pair=$(scripts/harness-compat.sh pair "$changed")" >> "$GITHUB_OUTPUT"
 
   tier0:
     needs: detect
@@ -95,3 +97,65 @@ jobs:
           else
             scripts/harness-compat.sh tier0-claude "$SCRATCH_HOME"
           fi
+
+  live-linux:
+    needs: [detect, tier0]
+    if: needs.detect.outputs.changed != '[]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: harness-compat
+    outputs:
+      ran: ${{ steps.gate.outputs.ran }}
+    env:
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      CLAUDE_MODEL: ${{ vars.HARNESS_COMPAT_CLAUDE_MODEL }}
+      CODEX_MODEL: ${{ vars.HARNESS_COMPAT_CODEX_MODEL }}
+    steps:
+      - id: gate
+        run: |
+          if [ -z "$OPENROUTER_API_KEY" ]; then
+            echo "ran=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::live-linux skipped: OPENROUTER_API_KEY is not set"
+          elif [ -z "$CLAUDE_MODEL" ] || [ -z "$CODEX_MODEL" ]; then
+            echo "::error::HARNESS_COMPAT_CLAUDE_MODEL and HARNESS_COMPAT_CODEX_MODEL must both be set when OPENROUTER_API_KEY is"
+            exit 1
+          else
+            echo "ran=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.gate.outputs.ran == 'true'
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - if: steps.gate.outputs.ran == 'true'
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+      - name: Install both harnesses
+        if: steps.gate.outputs.ran == 'true'
+        env:
+          PAIR: ${{ needs.detect.outputs.pair }}
+        run: |
+          set -eu
+          codex="$(printf '%s' "$PAIR" | jq -r '.codex')"
+          claude="$(printf '%s' "$PAIR" | jq -r '.["claude-code"]')"
+          npm install -g "@openai/codex@$codex" "@anthropic-ai/claude-code@$claude"
+          codex --version
+          claude --version
+      - name: Build crosstalk
+        if: steps.gate.outputs.ran == 'true'
+        run: go build -o "$RUNNER_TEMP/bin/crosstalk" ./cmd/crosstalk
+      - name: Ask each way through CrossTalk
+        if: steps.gate.outputs.ran == 'true'
+        timeout-minutes: 20
+        run: |
+          set -eu
+          home="$(mktemp -d)"
+          CROSSTALK_BIN="$RUNNER_TEMP/bin/crosstalk" LIVE_LOGS="$RUNNER_TEMP/live-logs" scripts/harness-compat-live.sh live-linux "$home"
+      - name: Upload logs
+        if: always() && steps.gate.outputs.ran == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: live-linux-logs
+          path: ${{ runner.temp }}/live-logs
+          if-no-files-found: ignore
