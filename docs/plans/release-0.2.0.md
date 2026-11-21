@@ -242,7 +242,7 @@ Reply, bob calls `reply(message_id, text)`:
 | This host's bind address vanished | Outbound still works | `remote serve` retries the bind every 10 s; `status` shows `service running, port not bound` | Rejoin the network; a new address means `remote config --bind` and pairing again |
 | Port 7745 taken by another program | — | `serve` exits 1 after 60 s; the unit restarts it | `remote config --port` |
 | Host key deleted or `--purge` | Peers refuse this host (`tls_pin_mismatch` on their side) | — | Pair again with every peer; `uninstall --purge` prints the list |
-| Target name is a native session on the peer | `rejected/remote_native_unsupported`, with a hint that the session has no CrossTalk and cannot be messaged from another host (the peer's listing marks it `messageable: false`) | Nothing injected | Start CrossTalk in that session (its first CrossTalk tool call binds it) |
+| Target name is a native session on the peer | `rejected/remote_native_unsupported`, with a hint that the session has no CrossTalk and cannot be messaged from another host (the peer's listing marks it `messageable: false`) | Nothing injected | Start CrossTalk in that session (a Claude session registers when its shim starts, ADR 0006; a Codex session binds on its first CrossTalk tool call) |
 | Alias renamed on one side | Routes unaffected (keyed by fingerprint) | — | Nothing |
 
 ## 10. Spikes before production code

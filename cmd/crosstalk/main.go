@@ -81,7 +81,7 @@ func isTerminal(f *os.File) bool {
 // harnesses is every supported harness in trust order: an explicit
 // _meta.threadId outranks the parent pid.
 func harnesses(stateDir string) ([]harness.Harness, error) {
-	cl, err := claude.NewHarness(claude.HarnessOptions{Ingress: udsingress.NewIngress, Directory: registry.New(stateDir)})
+	cl, err := claude.NewHarness(claude.HarnessOptions{Ingress: udsingress.NewIngress, Directory: registry.New(stateDir), StateDir: stateDir})
 	if err != nil {
 		return nil, err
 	}
