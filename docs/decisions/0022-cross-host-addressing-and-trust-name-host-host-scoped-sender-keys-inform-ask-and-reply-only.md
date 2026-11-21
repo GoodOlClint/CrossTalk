@@ -30,7 +30,8 @@ With a gateway per host ([ADR 0021](0021-remote-transport-and-enrollment-a-user-
 
 ## Consequences
 
-- Prompt-injection reach: a stolen host key or a compromised paired host can put text into every CrossTalk session on every peer. The peer-text notice and each harness's own permissions stay the defence; `unpair` limits it.
+- Prompt-injection reach: a stolen host key or a compromised paired host can put text into every CrossTalk session on every peer. Each harness's own permissions are the defence, and the information notice tells the model not to act on a remote sender's text; `unpair` limits it.
+- A remote sender's message gets the information notice (do not act on it, tell the user), not the teammate notice, until the v0.2.0 gateway ships and is reviewed (operator ruling 2026-11-21); `command`, `claim` and `release` from a remote sender stay refused.
 - `list_agents` may take up to 1.5 s longer when a peer is asleep or slow.
 - The model-facing surface changes: `to` grammar, a `host` field on rows, a `hosts` list, new reasons (`remote_kind`, `remote_native_unsupported`, `remote_reply_pending`, `unpaired`, `gateway_not_running`) and a `messageable` row field. Design §3, §4, §7 and §8 change in the implementing slices.
 - ADR 0003 (hosts from pairing, remote agents live), ADR 0004 (new principal, host-scoped key) and ADR 0011 (remote rows from the gateway, no cwd) are amended.

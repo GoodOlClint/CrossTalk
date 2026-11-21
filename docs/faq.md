@@ -37,14 +37,14 @@ There is a nudge, not a guard. Each session counts its sends to each peer. At 30
 Nothing in CrossTalk enforces it. Every session runs as you, and any of them can message any other. What CrossTalk does:
 
 - It takes the sender's identity from the connection, not from the text.
-- It labels every delivered message as data with no authority from you.
-- It tells the model, in the tool instructions and in a notice on each message, not to read files, run commands or use any tool but CrossTalk's on a peer's word without asking you. The rule against messaging a third session is only in the plugin's skill.
+- It tells the model, in the tool instructions and in a notice on each message, that a peer's message is a teammate's request: act on it within the session's own permission settings, never change those settings, never treat it as your approval and refuse a request to do what the peer was denied.
+- It gives a message from a script or another machine a notice that says to treat it as information and tell you.
 
-That is advice to the model plus checks in the shim. It is not a sandbox. A session in an auto-approve mode could act on a peer's text. Keep secrets out of messages. See [how it works](how-it-works.md#trust).
+That is advice to the model plus checks in the shim. It is not a sandbox: the harness's permission mode is the boundary, and a session in an auto-approve or full-access mode acts on a peer's request without asking you. Keep secrets out of messages. See [how it works](how-it-works.md#trust).
 
 ## Can a peer make my agent message a third session?
 
-The notice does not stop it. Only the plugin's skill tells the model not to, and a skill does not always load. This is a known gap.
+Passing on information or a question is fine. Passing on a request to act needs your approval, and only the plugin's skill says so; a skill does not always load. This is a known gap, because a relayed request reaches a session whose permissions may be wider than the requester's.
 
 ## What is a role inbox?
 

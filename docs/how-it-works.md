@@ -66,12 +66,12 @@ If a message cannot be delivered, or its outcome is unclear, it waits in the mai
 Every session on the machine runs as you. CrossTalk does not isolate sessions from each other. It does three things:
 
 - Sender identity comes from the connection. On the local socket, the shim reads the process id of the peer. Between shims, identity is a private token file only your user can read. Text in a message never decides who sent it.
-- Peer text is labeled as data. Every delivered message carries a notice that it has no authority from the user. The model is told not to read files, run commands or use any tool but CrossTalk's on a peer's word, and to tell you and ask first. The plugin's skill adds a rule against messaging a third session. A peer may ask whether a session is online, its working directory, its git branch or its harness, and the model answers.
+- A peer's message is a teammate's request. Every delivered message carries a notice that names the sender's harness and says the message is not typed by you but likely on your behalf. The model is told to act on it within the session's own permission settings, never to change those settings, never to treat a peer message as your approval and to refuse and tell you when a peer asks it to do what the peer was denied. A message from a script or another machine gets a notice that says to treat it as information and tell you. The plugin's skill adds that passing a request on to a third session needs your approval.
 - A policy decides what a message may be. An `inform` goes to any session, and an `ask` needs a verified sender. A `command` needs a verified, registered sender. It goes to a `primary` session only from a `primary` sender, and to a claimed session only from its owner. A rejected `command` is dropped, not downgraded.
 
 `kind` is a label the sending model picks. It is not a trust boundary, and a `command` gives the receiver no new permissions: whatever the session needs approval for, it still needs approval for.
 
-These controls are advice to the model plus checks in the shim. A session running in an auto-approve mode could still act on a peer's text. Do not put secrets in messages.
+These controls are advice to the model plus checks in the shim. The harness's permission mode is the real boundary: a session running in an auto-approve or full-access mode acts on a peer's request without asking you. Do not put secrets in messages.
 
 ## Remote
 

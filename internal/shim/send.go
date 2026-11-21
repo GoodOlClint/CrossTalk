@@ -353,7 +353,7 @@ func (st *AgentState) deliver(ctx context.Context, m msg.Message) mcpserver.Resu
 		res.State, res.Reason = adapter.Unreachable, receiver.ReasonJournal
 		return res
 	}
-	state, err = ad.Inject(ctx, m, adapter.Delivery{Mode: m.Delivery, Target: b, VerifiedSender: true, SenderHarness: string(st.agent.Harness()), SenderAgentID: st.agent.ID()})
+	state, err = ad.Inject(ctx, m, adapter.Delivery{Mode: m.Delivery, Target: b, VerifiedSender: true, Notice: msg.NoticeTeammate, SenderHarness: string(st.agent.Harness()), SenderAgentID: st.agent.ID()})
 	if !state.Injectable() {
 		state = adapter.Unknown
 	}
@@ -904,6 +904,23 @@ func (st *AgentState) retryObligations() {
 	}
 }
 
+// entryNoticeClass picks the notice for a pulled entry from what the journal
+// proved, never from the From text: only an agent_id sender is a teammate.
+func entryNoticeClass(e receiver.Entry) msg.NoticeClass {
+	switch {
+	case e.Direction == receiver.DirectionOutbound, e.State == string(adapter.Bounced):
+		return msg.NoticeOutbound
+	case e.InboxCopy:
+		return msg.NoticeCopy
+	case mcpserver.IsAgentID(e.Sender):
+		if e.PossiblySeen || e.State == string(adapter.Unknown) {
+			return msg.NoticeTeammateAgain
+		}
+		return msg.NoticeTeammate
+	}
+	return msg.NoticeInfo
+}
+
 func (s *Shim) Mailbox(ctx context.Context, of *mcpserver.Agent, after string, limit int) ([]mcpserver.MailboxEntry, bool, error) {
 	st, err := s.state(of)
 	if err != nil {
@@ -918,11 +935,11 @@ func (s *Shim) Mailbox(ctx context.Context, of *mcpserver.Agent, after string, l
 	}
 	out := make([]mcpserver.MailboxEntry, 0, len(es))
 	for _, e := range es {
-		me := mcpserver.MailboxEntry{Direction: e.Direction, MessageID: e.MessageID, TaskID: e.TaskID, InReplyTo: e.InReplyTo, From: e.From, To: e.To, Reason: e.Reason, State: adapter.State(e.State), InstanceID: e.InstanceID, SessionRef: e.SessionRef, PossiblySeen: e.PossiblySeen}
+		me := mcpserver.MailboxEntry{Direction: e.Direction, MessageID: e.MessageID, TaskID: e.TaskID, InReplyTo: e.InReplyTo, From: e.From, To: e.To, Reason: e.Reason, State: adapter.State(e.State), InstanceID: e.InstanceID, SessionRef: e.SessionRef, PossiblySeen: e.PossiblySeen, InboxCopy: e.InboxCopy}
 		if e.Message != nil {
 			me.Text = e.Message.Text()
 			if n, ok := st.harness.(harness.Noticer); ok {
-				me.Notice = n.Notice()
+				me.Notice = n.Notice(entryNoticeClass(e), "")
 			}
 		}
 		out = append(out, me)

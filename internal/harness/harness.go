@@ -82,6 +82,8 @@ type Identity struct {
 	Harness  string
 	Address  string
 	Verified bool
+	// Notice is the notice class for the message; "" reads as info.
+	Notice msg.NoticeClass
 }
 
 type Harness interface {
@@ -104,10 +106,10 @@ type Harness interface {
 }
 
 // Noticer is implemented by a harness whose model is told, with every
-// delivered peer message, how little authority that text has. Mailbox entries
-// pulled with receive_message carry the same text.
+// delivered peer message, how to treat that text. Mailbox entries pulled with
+// receive_message carry the same text; fromHarness is "" when unknown.
 type Noticer interface {
-	Notice() string
+	Notice(c msg.NoticeClass, fromHarness string) string
 }
 
 // IngressConfig is what the shim gives a native ingress for one agent.

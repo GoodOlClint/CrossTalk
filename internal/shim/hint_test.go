@@ -17,6 +17,7 @@ import (
 	"github.com/GoodOlClint/crosstalk/internal/harness/codex"
 	"github.com/GoodOlClint/crosstalk/internal/harness/codex/appserver/appservertest"
 	"github.com/GoodOlClint/crosstalk/internal/identity"
+	"github.com/GoodOlClint/crosstalk/internal/msg"
 	"github.com/GoodOlClint/crosstalk/internal/prebind"
 	"github.com/GoodOlClint/crosstalk/internal/receiver"
 )
@@ -206,6 +207,25 @@ func TestAcceptedNativeSendWarnsOneWay(t *testing.T) {
 	}
 }
 
+func TestFirstContactInformCarriesTeammateNotice(t *testing.T) {
+	w := newWorld(t)
+	alice := w.claude(4001, "sess-alice", "alice")
+	w.codex.addThread("T-bob", "bob")
+	na := w.node(alice.pid, w.lb, nil)
+	na.ok(nil, "send_message", send("bob", "fyi"))
+	writes := w.codex.Writes()
+	if len(writes) != 1 {
+		t.Fatalf("writes %+v", writes)
+	}
+	d := writes[0].Delivery
+	if d.Notice != msg.NoticeTeammate || d.SenderHarness != "claude" {
+		t.Fatalf("delivery notice %q harness %q", d.Notice, d.SenderHarness)
+	}
+	if got := codex.Preamble(d.Notice, d.SenderHarness); !strings.Contains(got, "another Claude Code session") || !strings.Contains(got, "teammate's request") {
+		t.Fatalf("rendered notice %q", got)
+	}
+}
+
 func TestNativeSendWritesPreBindEntryOnlyForAcceptedOrQueuedInform(t *testing.T) {
 	w := newWorld(t)
 	alice := w.claude(4001, "sess-alice", "alice")
@@ -290,7 +310,7 @@ func TestPulledMessageCarriesHarnessNotice(t *testing.T) {
 		t.Fatalf("mailbox %v", es)
 	}
 	e := es[0].(map[string]any)
-	if e["notice"] != codex.Preamble || !strings.Contains(e["text"].(string), "README") {
+	if e["notice"] != codex.Preamble(msg.NoticeTeammate, "") || !strings.Contains(e["text"].(string), "README") {
 		t.Fatalf("entry %v", e)
 	}
 }
