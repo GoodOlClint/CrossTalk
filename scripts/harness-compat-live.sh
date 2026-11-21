@@ -285,7 +285,11 @@ assert-discovery)
 leg)
 	leg="${2:?usage: harness-compat-live.sh leg claude-linux|claude-macos|codex-linux|codex-macos HOME}"
 	home="${3:?usage: harness-compat-live.sh leg LEG HOME}"
-	: "${OPENROUTER_API_KEY:?}" "${CLAUDE_MODEL:?}" "${CODEX_MODEL:?}"
+	: "${OPENROUTER_API_KEY:?}"
+	case "$leg" in
+	claude-*) : "${CLAUDE_MODEL:?}" ;;
+	*) : "${CODEX_MODEL:?}" ;;
+	esac
 	if [ "$leg" = codex-macos ]; then
 		# The queue phase of this leg runs Codex with hook trust bypassed: refuse before creating, copying or installing anything unless the home is a fresh, empty directory under /tmp.
 		real="$(cd "$home" 2>/dev/null && pwd -P)" || real=
@@ -364,7 +368,7 @@ leg)
 		eval "exec $2<>\"\$fifo\""
 		(
 			cd "$home/work"
-			exec python3 "${PTYRUN:?}" "$logs/codex-$1.log" "$fifo" codex --no-daemon --dangerously-bypass-hook-trust --dangerously-bypass-approvals-and-sandbox "$3"
+			exec env PTYRUN_ANSWER_HOOKS=1 python3 "${PTYRUN:?}" "$logs/codex-$1.log" "$fifo" codex --no-daemon --dangerously-bypass-hook-trust --dangerously-bypass-approvals-and-sandbox "$3"
 		) &
 		pids="$pids $!"
 	}

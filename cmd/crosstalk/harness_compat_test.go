@@ -94,7 +94,7 @@ func TestHarnessCompatWorkflowSafe(t *testing.T) {
 		}
 	}
 	body := jobs["harness"]
-	for _, want := range []string{"environment: harness-compat\n", "secrets.OPENROUTER_API_KEY", "must both be set", "fail-fast: false"} {
+	for _, want := range []string{"environment: harness-compat\n", "secrets.OPENROUTER_API_KEY", "HARNESS_COMPAT_CODEX_MODEL", "HARNESS_COMPAT_CLAUDE_MODEL", "fail-fast: false"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("harness lacks %q", want)
 		}
@@ -648,7 +648,7 @@ func TestHarnessCompatPtyrun(t *testing.T) {
 				env = append(env, kv)
 			}
 		}
-		cmd.Env = append(append(env, "HOME="+home), extraEnv...)
+		cmd.Env = append(append(env, "HOME="+home, "PTYRUN_ANSWER_HOOKS=1"), extraEnv...)
 		cmd.Dir = cwd
 		if err := cmd.Start(); err != nil {
 			t.Fatal(err)
@@ -686,6 +686,7 @@ func TestHarnessCompatPtyrun(t *testing.T) {
 			t.Errorf("%s: nothing may be answered:\n%s", name, out)
 		}
 	}
+	refused("answering is opt-in (daemon legs never set PTYRUN_ANSWER_HOOKS)", good, good, "CODEX_HOME="+filepath.Join(good, ".codex"), "PTYRUN_ANSWER_HOOKS=0")
 	// Each case below is refused by exactly one rule: the cwd and the other variables are set so every other rule would pass.
 	h := tmpHome()
 	refused("CODEX_HOME outside the scratch home", h, h, "CODEX_HOME=/Users/someone/.codex")
@@ -1298,5 +1299,50 @@ func TestHarnessCompatAssertHomeDescriptor(t *testing.T) {
 	}
 	if err := run("codex"); err != nil {
 		t.Fatalf("a codex descriptor under the scratch state must pass: %v", err)
+	}
+}
+
+func TestHarnessCompatOnlyTheQueuePhaseAnswersHookDialogs(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join(releaseRepoRoot(t), "scripts", "harness-compat-live.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(b)
+	fn := func(name string) string {
+		i := strings.Index(src, "\t"+name+"() {")
+		if i < 0 {
+			t.Fatalf("no %s", name)
+		}
+		body := src[i:]
+		return body[:strings.Index(body, "\n\t}")]
+	}
+	if strings.Contains(fn("start_codex"), "PTYRUN_ANSWER_HOOKS") {
+		t.Error("the daemon launcher must leave the hook-review dialog unanswered")
+	}
+	if !strings.Contains(fn("start_codex_nd"), "PTYRUN_ANSWER_HOOKS=1") {
+		t.Error("the no-daemon queue launcher opts in to answering the hook-review dialog")
+	}
+}
+
+func TestHarnessCompatLegNeedsOnlyItsOwnHarnessModel(t *testing.T) {
+	script := filepath.Join(releaseRepoRoot(t), "scripts", "harness-compat-live.sh")
+	for leg, c := range map[string]struct{ set, unset string }{
+		"claude-linux": {"CLAUDE_MODEL", "CODEX_MODEL"},
+		"claude-macos": {"CLAUDE_MODEL", "CODEX_MODEL"},
+		"codex-linux":  {"CODEX_MODEL", "CLAUDE_MODEL"},
+		"codex-macos":  {"CODEX_MODEL", "CLAUDE_MODEL"},
+	} {
+		cmd := exec.Command(script, "leg", leg, t.TempDir())
+		var env []string
+		for _, kv := range os.Environ() {
+			if !strings.HasPrefix(kv, "CLAUDE_MODEL=") && !strings.HasPrefix(kv, "CODEX_MODEL=") && !strings.HasPrefix(kv, "CROSSTALK_BIN=") && !strings.HasPrefix(kv, "LIVE_LOGS=") {
+				env = append(env, kv)
+			}
+		}
+		cmd.Env = append(env, "OPENROUTER_API_KEY=k", c.set+"=m")
+		out, _ := cmd.CombinedOutput()
+		if strings.Contains(string(out), c.unset) {
+			t.Errorf("%s must not need %s:\n%s", leg, c.unset, out)
+		}
 	}
 }

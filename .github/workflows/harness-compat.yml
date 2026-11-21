@@ -162,6 +162,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           COMPARE: compare-${{ matrix.leg }}
+          HARNESS: ${{ matrix.harness }}
         run: |
           set -eu
           gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs" --paginate --jq '.jobs[]' > "$RUNNER_TEMP/jobs.json"
@@ -171,10 +172,11 @@ jobs:
             exit 1
           fi
           [ -n "$OPENROUTER_API_KEY" ] || { echo "::error::OPENROUTER_API_KEY is not set"; exit 1; }
-          if [ -z "$CLAUDE_MODEL" ] || [ -z "$CODEX_MODEL" ]; then
-            echo "::error::HARNESS_COMPAT_CLAUDE_MODEL and HARNESS_COMPAT_CODEX_MODEL must both be set"
-            exit 1
-          fi
+          case "$HARNESS" in
+            claude-code) model="$CLAUDE_MODEL"; var=HARNESS_COMPAT_CLAUDE_MODEL ;;
+            *) model="$CODEX_MODEL"; var=HARNESS_COMPAT_CODEX_MODEL ;;
+          esac
+          [ -n "$model" ] || { echo "::error::$var is not set"; exit 1; }
       - uses: actions/download-artifact@v8
         with:
           name: crosstalk-bin-${{ matrix.runner }}
