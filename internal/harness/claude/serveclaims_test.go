@@ -338,8 +338,45 @@ func TestServeClaimsReadWarningResetsAfterGoodRead(t *testing.T) {
 	go func() { defer close(done); h.ServeClaims(ctx, &fakeReg{dir: dir, sessions: sessions}) }()
 	defer func() { cancel(); <-done }()
 	eventually(t, "first warning", func() bool { return lb.count(readWarn) == 1 })
-	writeClaimSession(t, sessions, 4100, "sess-a", "bob")
+	good, _ := json.Marshal(map[string]any{"pid": 4100, "sessionId": "sess-a", "name": "bob", "cwd": "/w"})
+	replace(t, path, string(good))
 	eventually(t, "good read registers", func() bool { return dir.count("sess-a") == 1 })
-	os.WriteFile(path, []byte("{nope"), 0o600)
+	replace(t, path, "{nope")
 	eventually(t, "second warning after recovery", func() bool { return lb.count(readWarn) == 2 })
+}
+
+func replace(t *testing.T, path, body string) {
+	t.Helper()
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Two different errors alternating with no good read between are each logged
+// once, not on every change.
+func TestServeClaimsAlternatingReadErrorsLoggedOncePerError(t *testing.T) {
+	sessions := t.TempDir()
+	path := filepath.Join(sessions, "4100.json")
+	lb := &logBuf{}
+	old := slog.Default()
+	slog.SetDefault(slog.New(lb))
+	t.Cleanup(func() { slog.SetDefault(old) })
+	dir := &fakeDir{regName: "bob", calls: map[string]int{}}
+	h, _ := NewHarness(HarnessOptions{SessionsDir: sessions, PPID: 4100, PollInterval: time.Millisecond, Directory: dir})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { defer close(done); h.ServeClaims(ctx, &fakeReg{dir: dir, sessions: sessions}) }()
+	defer func() { cancel(); <-done }()
+	for i, body := range []string{"{nope", `{"pid":1,"sessionId":"s"}`, "{nope", `{"pid":1,"sessionId":"s"}`, "{nope"} {
+		replace(t, path, body)
+		time.Sleep(15 * time.Millisecond)
+		_ = i
+	}
+	if n := lb.count(readWarn); n != 2 {
+		t.Fatalf("%d warnings for 2 distinct errors, want 2", n)
+	}
 }

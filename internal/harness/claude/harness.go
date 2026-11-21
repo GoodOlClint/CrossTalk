@@ -106,16 +106,17 @@ func NewHarness(opt HarnessOptions) (*Harness, error) {
 func (h *Harness) ServeClaims(ctx context.Context, r harness.SessionRegistrar) error {
 	tick := time.NewTicker(h.interval)
 	defer tick.Stop()
-	var failed, readFailed string
+	var failed string
+	readFailed := map[string]bool{}
 	for {
 		s, err := h.a.readSession(h.ppid)
 		if err != nil && !errors.Is(err, ErrNoSession) {
-			if e := err.Error(); e != readFailed && ctx.Err() == nil {
-				readFailed = e
+			if e := err.Error(); !readFailed[e] && len(readFailed) < 8 && ctx.Err() == nil {
+				readFailed[e] = true
 				slog.Warn("claude: reading session file", "ppid", h.ppid, "err", err)
 			}
 		} else if err == nil {
-			readFailed = ""
+			clear(readFailed)
 		}
 		if err == nil && !h.held(s) {
 			if err := r.RegisterSession(ctx, harness.RequestContext{ParentPID: h.ppid}, s.Cwd); err != nil {
