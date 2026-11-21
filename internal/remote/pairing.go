@@ -88,7 +88,7 @@ func ParsePairToken(s string) (PairToken, error) {
 		return PairToken{}, errors.New("pairing token has a bad port")
 	}
 	t.Port = port
-	if _, err := checkBindClass(t.Address); err != nil {
+	if _, err := ValidHost(t.Address); err != nil {
 		return PairToken{}, fmt.Errorf("pairing token address: %w", err)
 	}
 	if !fingerprintRE.MatchString(t.Fingerprint) {
@@ -234,7 +234,7 @@ func validPeerAddress(s string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	a, err := checkBindClass(host)
+	host, err = ValidHost(host)
 	if err != nil {
 		return "", err
 	}
@@ -242,7 +242,7 @@ func validPeerAddress(s string) (string, error) {
 	if err != nil || n < 1 || n > 65535 {
 		return "", fmt.Errorf("bad port %q", port)
 	}
-	return net.JoinHostPort(a.String(), port), nil
+	return net.JoinHostPort(host, port), nil
 }
 
 // redeemPairing runs under pending.lock from the read of pending.json to the
@@ -407,12 +407,13 @@ func JoinGateway(ctx context.Context, o JoinOptions) (Peer, error) {
 	}
 	tr := &http.Transport{
 		DisableKeepAlives:   true,
+		DialContext:         DialPeer,
 		TLSHandshakeTimeout: hsTimeout,
 		TLSClientConfig:     pinnedTLSConfig(o.Host, Peer{Fingerprint: t.Fingerprint}, nil),
 	}
 	defer tr.CloseIdleConnections()
 	body, err := json.Marshal(pairRequest{
-		ID: t.ID, Alias: o.Config.Alias, Address: net.JoinHostPort(o.Config.Bind, strconv.Itoa(o.Config.Port)),
+		ID: t.ID, Alias: o.Config.Alias, Address: net.JoinHostPort(o.Config.AdvertiseAddr(), strconv.Itoa(o.Config.Port)),
 		MAC: base64.RawURLEncoding.EncodeToString(computePairMAC(secret, o.Host.Fingerprint, t.Fingerprint)),
 	})
 	if err != nil {

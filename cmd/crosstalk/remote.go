@@ -23,7 +23,7 @@ import (
 const remoteUsage = `usage: crosstalk remote <command>
 
 commands:
-  config [--bind IP] [--port N] [--alias NAME] [--force] [--yes]
+  config [--bind IP] [--advertise ADDR] [--port N] [--alias NAME] [--force] [--yes]
              print this host's remote config, or write it
   serve      run the gateway in the foreground until SIGINT or SIGTERM
   pair [--alias NAME]
@@ -232,7 +232,7 @@ func runRemotePair(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "crosstalk remote pair: %v\n", err)
 		return 1
 	}
-	fmt.Fprintln(stdout, remote.PairToken{Address: cfg.Bind, Port: cfg.Port, Fingerprint: host.Fingerprint, ID: entry.ID, Secret: entry.Secret})
+	fmt.Fprintln(stdout, remote.PairToken{Address: cfg.AdvertiseAddr(), Port: cfg.Port, Fingerprint: host.Fingerprint, ID: entry.ID, Secret: entry.Secret})
 	fmt.Fprintf(stderr, "run crosstalk remote join on the other host and paste this token; it works once and expires in %d minutes (Ctrl-C cancels)\n", int(remote.PairTTL/time.Minute))
 	fmt.Fprintf(stderr, "pair waits up to %d minutes; if crosstalk remote join on the other host reports a handshake timeout, check firewalls or network filters on this host\n", int(remote.PairTTL/time.Minute))
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -294,6 +294,7 @@ func runRemoteConfig(args []string, in io.Reader, tty bool, stdout, stderr io.Wr
 	fs := flag.NewFlagSet("remote config", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	bind := fs.String("bind", "", "")
+	advertise := fs.String("advertise", "", "")
 	port := fs.Int("port", 0, "")
 	alias := fs.String("alias", "", "")
 	force := fs.Bool("force", false, "")
@@ -318,11 +319,11 @@ func runRemoteConfig(args []string, in io.Reader, tty bool, stdout, stderr io.Wr
 		fmt.Fprintf(stderr, "crosstalk remote config: %v\n", err)
 		return 1
 	}
-	if !set["bind"] && !set["port"] && !set["alias"] {
+	if !set["bind"] && !set["advertise"] && !set["port"] && !set["alias"] {
 		return remoteShowConfig(dir, old, configured, stdout, stderr)
 	}
 
-	f := cfgFlags{bind: *bind, port: *port, alias: *alias, force: *force, set: set}
+	f := cfgFlags{bind: *bind, advertise: *advertise, port: *port, alias: *alias, force: *force, set: set}
 	next, err := f.apply(old, configured)
 	if err != nil {
 		return remoteFail(err, stderr)
@@ -333,7 +334,7 @@ func runRemoteConfig(args []string, in io.Reader, tty bool, stdout, stderr io.Wr
 		return 1
 	}
 
-	fmt.Fprintf(stdout, "will write %s:\n  alias %s\n  bind  %s\n  port  %d\n", filepath.Join(dir, "remote.json"), next.Alias, next.Bind, next.Port)
+	fmt.Fprintf(stdout, "will write %s:\n  alias     %s\n  bind      %s\n  advertise %s\n  port      %d\n", filepath.Join(dir, "remote.json"), next.Alias, next.Bind, next.AdvertiseAddr(), next.Port)
 	if _, err := remote.LoadHost(dir); errors.Is(err, remote.ErrNotConfigured) {
 		fmt.Fprintf(stdout, "will create %s and %s\n", filepath.Join(dir, "host.key"), filepath.Join(dir, "host.crt"))
 	}
@@ -358,10 +359,10 @@ func runRemoteConfig(args []string, in io.Reader, tty bool, stdout, stderr io.Wr
 
 // cfgFlags are the remote config flags that were given; set names them.
 type cfgFlags struct {
-	bind, alias string
-	port        int
-	force       bool
-	set         map[string]bool
+	bind, advertise, alias string
+	port                   int
+	force                  bool
+	set                    map[string]bool
 }
 
 func (f cfgFlags) apply(cur remote.Config, have bool) (remote.Config, error) {
@@ -379,6 +380,13 @@ func (f cfgFlags) apply(cur remote.Config, have bool) (remote.Config, error) {
 		}
 		next.Bind = b
 	}
+	if f.set["advertise"] {
+		a, err := remote.ValidHost(f.advertise)
+		if err != nil {
+			return next, errUsage("--advertise: " + err.Error())
+		}
+		next.Advertise = a
+	}
 	if f.set["port"] {
 		if f.port < 1 || f.port > 65535 {
 			return next, errUsage(fmt.Sprintf("--port %d is outside 1-65535", f.port))
@@ -394,9 +402,9 @@ func (f cfgFlags) apply(cur remote.Config, have bool) (remote.Config, error) {
 	return next, nil
 }
 
-// rePairAliases are the peers that still hold the old bind address or port.
+// rePairAliases are the peers that still hold the old advertised address or port.
 func rePairAliases(dir string, old, next remote.Config, configured bool) ([]string, error) {
-	if !configured || (next.Bind == old.Bind && next.Port == old.Port) {
+	if !configured || (next.AdvertiseAddr() == old.AdvertiseAddr() && next.Port == old.Port) {
 		return nil, nil
 	}
 	ps, err := remote.NewPeers(dir).List()
@@ -453,6 +461,6 @@ func remoteShowConfig(dir string, c remote.Config, configured bool, stdout, stde
 }
 
 func printConfig(w io.Writer, dir string, c remote.Config, fp string) {
-	fmt.Fprintf(w, "alias:       %s\nbind:        %s\nport:        %d\nfingerprint: %s\nconfig:      %s\n",
-		c.Alias, c.Bind, c.Port, fp, filepath.Join(dir, "remote.json"))
+	fmt.Fprintf(w, "alias:       %s\nbind:        %s\nadvertise:   %s\nport:        %d\nfingerprint: %s\nconfig:      %s\n",
+		c.Alias, c.Bind, c.AdvertiseAddr(), c.Port, fp, filepath.Join(dir, "remote.json"))
 }

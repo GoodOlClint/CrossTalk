@@ -345,3 +345,32 @@ func TestRegisteredA2AURL(t *testing.T) {
 		}
 	}
 }
+
+func TestRemoteConfigAdvertiseCLI(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	code, out, errs := remoteRun(t, false, "config", "--bind", "127.0.0.1", "--yes")
+	if code != 0 || !strings.Contains(out, "advertise:   127.0.0.1") {
+		t.Fatalf("single-address default: %d %q %q", code, out, errs)
+	}
+	for _, bad := range []string{"0.0.0.0", "::", "*", "a b", "https://box.local"} {
+		if code, _, errs := remoteRun(t, false, "config", "--advertise", bad, "--yes"); code != 2 || !strings.Contains(errs, "--advertise") {
+			t.Errorf("--advertise %q: exit %d %q, want 2", bad, code, errs)
+		}
+	}
+	dir := filepath.Join(home, ".config", "crosstalk")
+	if err := remote.NewPeers(dir).Upsert(remote.Peer{Alias: "lap", Address: "10.0.0.2:7745", Fingerprint: strings.Repeat("e", 64)}); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errs = remoteRun(t, false, "config", "--advertise", "Desk.Tail1234.ts.net", "--yes")
+	if code != 0 || !strings.Contains(out, "advertise:   desk.tail1234.ts.net") || !strings.Contains(out, "pair again with lap") {
+		t.Fatalf("advertise a name: %d %q %q", code, out, errs)
+	}
+	if code, out, _ = remoteRun(t, false, "config"); code != 0 || !strings.Contains(out, "bind:        127.0.0.1") || !strings.Contains(out, "advertise:   desk.tail1234.ts.net") {
+		t.Fatalf("read: %d %q", code, out)
+	}
+	if code, _, errs := remoteRun(t, false, "config", "--bind", "0.0.0.0", "--force", "--yes"); code != 2 {
+		t.Fatalf("wildcard bind still refused: %d %q", code, errs)
+	}
+}

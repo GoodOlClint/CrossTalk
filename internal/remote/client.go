@@ -107,6 +107,7 @@ func (c *Client) httpClient() (*http.Client, *http.Transport) {
 	tr := &http.Transport{
 		Proxy:               nil,
 		DisableKeepAlives:   true,
+		DialContext:         DialPeer,
 		TLSHandshakeTimeout: c.Timeout,
 		TLSClientConfig:     pinnedTLSConfig(c.host, c.peer, nil),
 	}
