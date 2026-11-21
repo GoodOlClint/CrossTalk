@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/GoodOlClint/crosstalk/internal/adapter"
 	"github.com/GoodOlClint/crosstalk/internal/harness"
 	"github.com/GoodOlClint/crosstalk/internal/harness/claude"
 	"github.com/GoodOlClint/crosstalk/internal/harness/codex"
@@ -27,6 +28,11 @@ func TestPulledEntryNoticeClassByProvenance(t *testing.T) {
 		{"inbound local-user", entry(receiver.DirectionInbound, receiver.PrincipalLocalUser, false), msg.NoticeInfo},
 		{"inbound remote", entry(receiver.DirectionInbound, remote, false), msg.NoticeInfo},
 		{"inbound inbox copy", entry(receiver.DirectionInbound, agentID, true), msg.NoticeCopy},
+		{"bounced native reply under own agent id", func() receiver.Entry {
+			e := entry(receiver.DirectionInbound, agentID, false)
+			e.State = string(adapter.Bounced)
+			return e
+		}(), msg.NoticeOutbound},
 		{"outbound unknown", entry(receiver.DirectionOutbound, "", false), msg.NoticeOutbound},
 		{"inbound claiming an agent id in From only", func() receiver.Entry {
 			e := entry(receiver.DirectionInbound, "unverified", false)
