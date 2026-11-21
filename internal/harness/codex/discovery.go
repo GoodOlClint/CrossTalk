@@ -30,6 +30,7 @@ type LoadedThread struct {
 func (a *Adapter) LoadedThreads(ctx context.Context, extra ...string) []LoadedThread {
 	var out []LoadedThread
 	idx := map[string]int{}
+	bound := a.boundThreads()
 	type span struct {
 		first, end int
 		p          *probeCall
@@ -56,6 +57,9 @@ func (a *Adapter) LoadedThreads(ctx context.Context, extra ...string) []LoadedTh
 			}
 			lt := LoadedThread{Endpoint: ep, ID: id}
 			if th, err := c.ReadThread(ctx, id); err == nil {
+				if th.IsSubAgent() && !bound[id] {
+					continue
+				}
 				lt.Cwd, lt.Status, lt.Session, lt.provider = th.Cwd, th.Status.Type, statusOf(th), th.ModelProvider
 				if th.Name != nil {
 					lt.Name = *th.Name
@@ -73,6 +77,24 @@ func (a *Adapter) LoadedThreads(ctx context.Context, extra ...string) []LoadedTh
 			if !out[i].dup && out[i].provider == openaiProvider {
 				out[i].Backend = state
 			}
+		}
+	}
+	return out
+}
+
+// boundThreads is the set of thread ids a Codex descriptor binds.
+func (a *Adapter) boundThreads() map[string]bool {
+	out := map[string]bool{}
+	if a.Directory == nil {
+		return out
+	}
+	ds, err := a.Directory.List()
+	if err != nil {
+		return out
+	}
+	for _, d := range ds {
+		if d.Harness == string(adapter.Codex) && d.SessionRef != "" {
+			out[d.SessionRef] = true
 		}
 	}
 	return out
