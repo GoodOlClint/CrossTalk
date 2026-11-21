@@ -995,6 +995,114 @@ func TestHarnessCompatMacosLegHelpers(t *testing.T) {
 		}
 	})
 
+	t.Run("assert-own-delivery-mode reads the tab's own list_agents result in its own rollout", func(t *testing.T) {
+		if _, err := exec.LookPath("python3"); err != nil {
+			t.Skip("python3 not on PATH")
+		}
+		// Shape from a live Codex 0.167.0 rollout: an item_completed McpToolCall whose result carries the agents as text and structured content.
+		listing := func(rows ...map[string]any) string {
+			text, _ := json.Marshal(map[string]any{"agents": rows})
+			b, _ := json.Marshal(map[string]any{"payload": map[string]any{"type": "item_completed", "item": map[string]any{"type": "McpToolCall", "server": "crosstalk", "tool": "list_agents", "status": "completed",
+				"result": map[string]any{"content": []map[string]any{{"type": "text", "text": string(text)}}, "structuredContent": map[string]any{"agents": rows}}}}})
+			return string(b) + "\n"
+		}
+		self := func(mode string) map[string]any {
+			r := map[string]any{"agent_id": "me", "harness": "codex", "crosstalk": true, "reachable": false, "status": ""}
+			if mode != "" {
+				r["delivery_mode"] = mode
+			}
+			return r
+		}
+		cases := map[string]struct {
+			files map[string]string
+			ok    bool
+		}{
+			"the tab's own row shows queue-wake (reachable false, status empty)": {map[string]string{"th1": listing(self("queue-wake (experimental)"))}, true},
+			"the row has no delivery_mode":                                       {map[string]string{"th1": listing(self(""))}, false},
+			"another mode":                                                       {map[string]string{"th1": listing(self("tool-output"))}, false},
+			"queue-wake on some other agent's row":                               {map[string]string{"th1": listing(self(""), map[string]any{"agent_id": "other", "delivery_mode": "queue-wake (experimental)"})}, false},
+			"another session's rollout shows it":                                 {map[string]string{"th1": "", "other": listing(self("queue-wake (experimental)"))}, false},
+		}
+		for name, c := range cases {
+			dir := filepath.Join(t.TempDir(), "2026", "11", "21")
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			for ref, body := range c.files {
+				if err := os.WriteFile(filepath.Join(dir, "rollout-2026-11-21T01-00-00-"+ref+".jsonl"), []byte(body), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			err := exec.Command(script, "assert-own-delivery-mode", filepath.Dir(filepath.Dir(filepath.Dir(dir))), "th1", "me").Run()
+			if (err == nil) != c.ok {
+				t.Errorf("%s: err = %v, want ok=%v", name, err, c.ok)
+			}
+		}
+	})
+
+	t.Run("check-staged needs the wake and claim records of the tested thread", func(t *testing.T) {
+		mk := func(wake, claim string) string {
+			d := t.TempDir()
+			for _, dir := range []string{"codex-wakes", "codex-claims"} {
+				if err := os.MkdirAll(filepath.Join(d, dir), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if wake != "" {
+				if err := os.WriteFile(filepath.Join(d, "codex-wakes", wake+".json"), []byte("{}"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if claim != "" {
+				if err := os.WriteFile(filepath.Join(d, "codex-claims", "123-456-"+claim+".json"), []byte("{}"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			return d
+		}
+		for name, c := range map[string]struct {
+			dir string
+			ok  bool
+		}{
+			"both records for the thread": {mk("th1", "th1"), true},
+			"no wake record":              {mk("", "th1"), false},
+			"no claim record":             {mk("th1", ""), false},
+			"records of another thread":   {mk("other", "other"), false},
+		} {
+			err := exec.Command(script, "check-staged", c.dir, "th1").Run()
+			if (err == nil) != c.ok {
+				t.Errorf("%s: err = %v, want ok=%v", name, err, c.ok)
+			}
+		}
+	})
+
+	t.Run("a successful macOS leg fails if its staged artifact lacks the records, and asks the tab for a fresh listing when needed", func(t *testing.T) {
+		b, err := os.ReadFile(script)
+		if err != nil {
+			t.Fatal(err)
+		}
+		src := string(b)
+		for _, want := range []string{`check-staged "$logs/state" "$tab_ref"`, `[ "$staged" -eq 0 ] || exit 1`, `Call the crosstalk list_agents tool once more." >&8`} {
+			if !strings.Contains(src, want) {
+				t.Errorf("script lacks %q", want)
+			}
+		}
+	})
+
+	t.Run("the macOS leg asserts the mode from the tab's own view and stages the wake and claim records", func(t *testing.T) {
+		b, err := os.ReadFile(script)
+		if err != nil {
+			t.Fatal(err)
+		}
+		src := string(b)
+		if !strings.Contains(src, `assert-own-delivery-mode "$home/.codex/sessions"`) {
+			t.Error("the macOS leg must assert delivery_mode from the tab's own rollout")
+		}
+		if !strings.Contains(src, `"$state/codex-wakes" "$state/codex-claims"`) {
+			t.Error("the artifact must carry the wake generation and claim records")
+		}
+	})
+
 	t.Run("workflow ships a binary per runner OS and gives the macOS leg a short home", func(t *testing.T) {
 		b, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "harness-compat.yml"))
 		if err != nil {
