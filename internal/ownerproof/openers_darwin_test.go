@@ -71,3 +71,23 @@ func TestOpeners_FDInfoDeniedEPERM_ExpectFDSkippedNoError(t *testing.T) {
 }
 
 func nonDumpable() error { return errors.ErrUnsupported }
+
+func TestOpeners_FDInfoENOENTRevokedFD_ExpectFDSkippedNoError(t *testing.T) {
+	path := lockFile(t)
+	h := startHelper(t, "read", lockFile(t))
+	failFDInfo(t, h.pid, unix.ENOENT)
+	if got, err := OpenersAmong(path, []int{h.pid}); err != nil || len(got) != 0 {
+		t.Fatalf("openers %v err %v: a revoked fd in an unrelated process must not fail the proof", got, err)
+	}
+}
+
+func TestOpeners_RealOpenerBesideRevokedFD_ExpectOpenerStillFound(t *testing.T) {
+	path := lockFile(t)
+	revoked := startHelper(t, "read", lockFile(t))
+	opener := startHelper(t, "read", path)
+	failFDInfo(t, revoked.pid, unix.ENOENT)
+	got, err := OpenersAmong(path, []int{revoked.pid, opener.pid})
+	if err != nil || !slices.Equal(got, []int{opener.pid}) {
+		t.Fatalf("openers %v err %v, want only %d", got, err, opener.pid)
+	}
+}

@@ -167,8 +167,9 @@ func opensFile(pid int, st *unix.Stat_t, vbuf []byte) (bool, error) {
 		// (measured: 1 to 34 vnode fds each in 8 agents on one host), so failing
 		// closed here would fail every proof. Such an fd is skipped: an opener
 		// whose only fd on the lock is one the kernel will not describe is not
-		// seen. Whole-process denial still fails closed above.
-		if errors.Is(err, unix.EBADF) || errors.Is(err, unix.EPERM) {
+		// seen. ENOENT is the same for a revoked fd (measured: a daemon helper's
+		// fd 10). Whole-process denial still fails closed above.
+		if errors.Is(err, unix.EBADF) || errors.Is(err, unix.EPERM) || errors.Is(err, unix.ENOENT) {
 			continue
 		}
 		if err != nil {
