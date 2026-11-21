@@ -48,6 +48,64 @@ sha_of() {
 	echo "$h"
 }
 
+merge_and_wait() {
+	repo="$1"
+	pr="$2"
+	timeout="$3"
+	poll="$4"
+	guard="$5"
+	noauto="${6-}"
+	precheck="${7-}"
+	direct=
+	refused=
+	if [ -n "$noauto" ]; then
+		direct=1
+	else
+		gh pr merge --auto --squash ${guard:+--match-head-commit "$guard"} --repo "$repo" "$pr" || {
+			direct=1
+			refused=1
+			echo "auto-merge refused: enable \"Allow auto-merge\" in $repo Settings > General > Pull Requests; merging directly once required checks pass" >&2
+		}
+	fi
+	waited=0
+	while :; do
+		status="$(gh pr view "$pr" --repo "$repo" --json state,mergeStateStatus --jq '.state + " " + .mergeStateStatus')"
+		state="${status%% *}"
+		case "$state" in
+		MERGED)
+			echo "merged: $pr"
+			exit 0
+			;;
+		CLOSED)
+			echo "closed without merging: $pr" >&2
+			exit 1
+			;;
+		esac
+		if [ -n "$direct" ]; then
+			if [ "${status#* }" = CLEAN ]; then
+				[ -z "$precheck" ] || "$precheck" || exit 1
+				gh pr merge --squash ${guard:+--match-head-commit "$guard"} --repo "$repo" "$pr" || {
+					echo "direct merge failed: $pr" >&2
+					exit 1
+				}
+				echo "merged: $pr"
+				exit 0
+			fi
+			failed="$(gh pr checks --required --repo "$repo" "$pr" --json bucket --jq '[.[] | select(.bucket == "fail")] | length' 2>/dev/null || true)"
+			if [ "${failed:-0}" -gt 0 ] 2>/dev/null; then
+				echo "required checks failed: $pr ${refused:+(auto-merge was refused; enable \"Allow auto-merge\" in $repo)}" >&2
+				exit 1
+			fi
+		fi
+		if [ "$waited" -ge "$timeout" ]; then
+			echo "not merged after ${timeout}s: $pr (state $state, mergeStateStatus ${status#* })${refused:+; auto-merge was refused, enable \"Allow auto-merge\" in $repo}" >&2
+			exit 1
+		fi
+		sleep "$poll"
+		waited=$((waited + poll))
+	done
+}
+
 case "${1:-}" in
 check-tag)
 	check_tag "${2:?usage: release-build.sh check-tag TAG}"
@@ -181,47 +239,78 @@ land-pr)
 		pr="$(gh pr create --repo "$repo" --head "$branch" --title "$title" --body "Opened by release-build.sh land-pr.")"
 		echo "opened $pr"
 	fi
-	direct=
-	gh pr merge --auto --squash --repo "$repo" "$pr" || {
-		direct=1
-		echo "auto-merge refused: enable \"Allow auto-merge\" in $repo Settings > General > Pull Requests; merging directly once required checks pass" >&2
+	merge_and_wait "$repo" "$pr" "$timeout" "$poll" ""
+	;;
+land-bump)
+	usage="usage: release-build.sh land-bump REPO BRANCH TITLE FILE HARNESS VERSION RUN_SHA"
+	repo="${2:?$usage}"
+	branch="${3:?$usage}"
+	title="${4:?$usage}"
+	file="${5:?$usage}"
+	harness="${6:?$usage}"
+	version="${7:?$usage}"
+	run_sha="${8:?$usage}"
+	timeout="${LAND_PR_TIMEOUT:-2400}"
+	poll="${LAND_PR_POLL:-30}"
+	main_record="$(gh api -H 'Accept: application/vnd.github.raw' "repos/$repo/contents/$file?ref=main")" || {
+		echo "cannot read $file on main" >&2
+		exit 1
 	}
-	waited=0
-	while :; do
-		status="$(gh pr view "$pr" --repo "$repo" --json state,mergeStateStatus --jq '.state + " " + .mergeStateStatus')"
-		state="${status%% *}"
-		case "$state" in
-		MERGED)
-			echo "merged: $pr"
-			exit 0
-			;;
-		CLOSED)
-			echo "closed without merging: $pr" >&2
-			exit 1
-			;;
-		esac
-		if [ -n "$direct" ]; then
-			if [ "${status#* }" = CLEAN ]; then
-				gh pr merge --squash --repo "$repo" "$pr" || {
-					echo "direct merge failed: $pr" >&2
-					exit 1
-				}
-				echo "merged: $pr"
-				exit 0
-			fi
-			failed="$(gh pr checks --required --repo "$repo" "$pr" --json bucket --jq '[.[] | select(.bucket == "fail")] | length' 2>/dev/null || true)"
-			if [ "${failed:-0}" -gt 0 ] 2>/dev/null; then
-				echo "required checks failed: $pr (auto-merge was refused; enable \"Allow auto-merge\" in $repo)" >&2
-				exit 1
-			fi
+	on_main="$(printf '%s' "$main_record" | jq -r --arg h "$harness" '.[$h].tested // empty')"
+	if [ "$on_main" = "$version" ]; then
+		echo "already recorded on main: $harness $version"
+		exit 0
+	fi
+	remote="$(git ls-remote --heads origin "refs/heads/$branch" 2>/dev/null | awk 'NR == 1 { print $1 }')" || remote=
+	if [ -n "$remote" ]; then
+		sha="$remote"
+	else
+		sha="$(git rev-parse HEAD)"
+		git push origin "HEAD:refs/heads/$branch"
+	fi
+	pushed_record="$(gh api -H 'Accept: application/vnd.github.raw' "repos/$repo/contents/$file?ref=$sha")" || {
+		echo "cannot read $file at $sha" >&2
+		exit 1
+	}
+	printf '%s' "$pushed_record" | jq -e --argjson m "$main_record" --arg h "$harness" --arg v "$version" '
+		.[$h].tested == $v and (del(.[$h]) == ($m | del(.[$h])))' >/dev/null || {
+		echo "refusing $branch at $sha: $file is not main's record with only $harness set to $version" >&2
+		exit 1
+	}
+	verify_pr() {
+		gh pr view "$1" --repo "$repo" --json state,baseRefName,headRefOid,isCrossRepository,headRepository,headRepositoryOwner,files |
+			jq -e --arg repo "$repo" --arg sha "$sha" --arg file "$file" '
+				.state == "OPEN" and .baseRefName == "main" and .isCrossRepository == false
+				and ((.headRepositoryOwner.login + "/" + .headRepository.name) | ascii_downcase) == ($repo | ascii_downcase)
+				and .headRefOid == $sha
+				and ([.files[].path] == [$file])' >/dev/null
+	}
+	pr=
+	for n in $(gh pr list --repo "$repo" --head "$branch" --state open --json number --jq '.[].number'); do
+		if verify_pr "$n"; then
+			pr="$n"
+			echo "reusing #$n"
+			break
 		fi
-		if [ "$waited" -ge "$timeout" ]; then
-			echo "not merged after ${timeout}s: $pr (state $state, mergeStateStatus ${status#* })${direct:+; auto-merge was refused, enable \"Allow auto-merge\" in $repo}" >&2
-			exit 1
-		fi
-		sleep "$poll"
-		waited=$((waited + poll))
+		echo "skipping #$n: not a same-repo PR to main at $sha changing only $file" >&2
 	done
+	if [ -z "$pr" ]; then
+		url="$(gh pr create --repo "$repo" --head "$branch" --base main --title "$title" --body "Opened by release-build.sh land-bump.")"
+		pr="${url##*/}"
+		echo "opened $url"
+		verify_pr "$pr" || {
+			echo "refusing to merge #$pr: not a same-repo PR to main at $sha changing only $file" >&2
+			exit 1
+		}
+	fi
+	bump_recheck() {
+		git fetch -q origin main || {
+			echo "cannot fetch main to recheck the tested revision" >&2
+			return 1
+		}
+		"$(dirname "$0")/harness-compat.sh" tested-code "$run_sha" FETCH_HEAD "$file"
+	}
+	merge_and_wait "$repo" "$pr" "$timeout" "$poll" "$sha" 1 bump_recheck
 	;;
 bump-marketplaces)
 	tag="${2:?usage: release-build.sh bump-marketplaces TAG}"
@@ -321,7 +410,7 @@ package-linux)
 	done
 	;;
 *)
-	echo "usage: release-build.sh check-tag TAG | ci-scope BASE HEAD | is-final TAG | formula TAG DIST DIST_LINUX | land-pr REPO BRANCH TITLE | bump-marketplaces TAG | check-identity KEYCHAIN | build OUTDIR | package OUTDIR TAG | build-linux OUTDIR | package-linux OUTDIR TAG" >&2
+	echo "usage: release-build.sh check-tag TAG | ci-scope BASE HEAD | is-final TAG | formula TAG DIST DIST_LINUX | land-pr REPO BRANCH TITLE | land-bump REPO BRANCH TITLE FILE HARNESS VERSION RUN_SHA | bump-marketplaces TAG | check-identity KEYCHAIN | build OUTDIR | package OUTDIR TAG | build-linux OUTDIR | package-linux OUTDIR TAG" >&2
 	exit 2
 	;;
 esac

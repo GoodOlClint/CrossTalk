@@ -133,8 +133,108 @@ compare-codex)
 	}
 	echo "$q"
 	;;
+passing | failing)
+	usage="usage: harness-compat.sh $1 RESULTS_JSON"
+	want=true
+	[ "$1" = failing ] && want=false
+	printf '%s' "${2:?$usage}" | jq -r --argjson want "$want" 'to_entries[] | select((.value.pass == true) == $want) | .key + " " + .value.version'
+	;;
+bump-record)
+	usage="usage: harness-compat.sh bump-record RECORD HARNESS VERSION DATE"
+	record="${2:?$usage}"
+	h="${3:?$usage}"
+	v="${4:?$usage}"
+	d="${5:?$usage}"
+	pkg "$h" >/dev/null
+	semver "$v" || {
+		echo "version must be x.y.z: $v" >&2
+		exit 1
+	}
+	printf '%s\n' "$d" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' || {
+		echo "date must be YYYY-MM-DD: $d" >&2
+		exit 1
+	}
+	out="$(jq -r --arg h "$h" --arg v "$v" --arg d "$d" '
+		.[$h] = {tested: $v, checked: $d}
+		| "{\n" + (to_entries | map("  \(.key | @json): {\"tested\": \(.value.tested | @json), \"checked\": \(.value.checked | @json)}") | join(",\n")) + "\n}"' "$record")"
+	printf '%s\n' "$out" >"$record"
+	;;
+failed-steps)
+	usage="usage: harness-compat.sh failed-steps JOBS_FILE HARNESS"
+	case "${3:?$usage}" in claude-code) other=codex ;; codex) other=claude ;; *)
+		echo "unknown harness: $3" >&2
+		exit 1
+		;;
+	esac
+	jq -rs --arg o "$other" '
+		map(select(.conclusion == "failure" and ((.name | contains($o)) | not)))
+		| map(.name as $j | ([.steps[]? | select(.conclusion == "failure") | .name] | if length == 0 then ["(no step recorded)"] else . end) | map($j + ": " + .)) | add // [] | .[]' "${2:?$usage}"
+	;;
+tested-code)
+	usage="usage: harness-compat.sh tested-code RUN_SHA BASE_REF RECORD"
+	changed="$(git diff --name-only "${2:?$usage}" "${3:?$usage}")" || {
+		echo "git diff $2 $3 failed" >&2
+		exit 1
+	}
+	extra="$(printf '%s\n' "$changed" | grep -vxF "${4:?$usage}" || true)"
+	[ -z "$extra" ] || {
+		echo "$3 changed since the tested revision $2; rerun to test it: $extra" >&2
+		exit 1
+	}
+	;;
+issue-title)
+	usage="usage: harness-compat.sh issue-title HARNESS VERSION"
+	echo "harness-compat: ${2:?$usage} ${3:?$usage} did not pass"
+	;;
+issue-body)
+	usage="usage: harness-compat.sh issue-body VERSION RUN_URL [FAILED_STEP...]"
+	v="${2:?$usage}"
+	url="${3:?$usage}"
+	shift 3
+	printf 'The scheduled harness-compat run did not pass for version %s.\n\nFailing steps:\n' "$v"
+	if [ "$#" -eq 0 ]; then echo "- none recorded (a job was skipped or cancelled)"; fi
+	for s in "$@"; do printf -- '- %s\n' "$s"; done
+	printf '\nRun: %s\n' "$url"
+	;;
+file-issue)
+	usage="usage: harness-compat.sh file-issue REPO HARNESS VERSION RUN_URL JOBS_FILE"
+	repo="${2:?$usage}"
+	h="${3:?$usage}"
+	v="${4:?$usage}"
+	url="${5:?$usage}"
+	jobs="${6:?$usage}"
+	pkg "$h" >/dev/null
+	semver "$v" || {
+		echo "version must be x.y.z: $v" >&2
+		exit 1
+	}
+	title="$("$0" issue-title "$h" "$v")"
+	listed="$(gh issue list --repo "$repo" --state open --search "\"$title\" in:title" --json number,title)" || {
+		echo "cannot list issues; not filing a possible duplicate" >&2
+		exit 1
+	}
+	open="$(printf '%s' "$listed" | jq -r --arg t "$title" '[.[] | select(.title == $t)] | .[0].number // empty')"
+	if [ -n "$open" ]; then
+		echo "reusing issue #$open for $h $v"
+		exit 0
+	fi
+	steps="$("$0" failed-steps "$jobs" "$h")"
+	body="$(
+		IFS='
+'
+		set -f
+		# shellcheck disable=SC2086
+		set -- $steps
+		"$0" issue-body "$v" "$url" "$@"
+	)"
+	gh issue create --repo "$repo" --title "$title" --label harness-compat --body "$body" ||
+		{
+			echo "label harness-compat is missing; filing without it" >&2
+			gh issue create --repo "$repo" --title "$title" --body "$body"
+		}
+	;;
 *)
-	echo "usage: harness-compat.sh check-updates|legs|step-status|report|compare-claude|compare-codex ..." >&2
+	echo "usage: harness-compat.sh check-updates|legs|step-status|report|compare-claude|compare-codex|passing|failing|bump-record|tested-code|failed-steps|issue-title|issue-body|file-issue ..." >&2
 	exit 2
 	;;
 esac

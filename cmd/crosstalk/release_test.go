@@ -405,6 +405,135 @@ func TestLandPR(t *testing.T) {
 	}
 }
 
+const fakeBumpGH = `#!/bin/sh
+echo "gh $*" >> "$FAKE_DIR/log"
+case "$1" in
+api)
+	case "$*" in
+	*ref=main) cat "$FAKE_DIR/main_record" ;;
+	*) cat "$FAKE_DIR/branch_record" ;;
+	esac
+	;;
+esac
+case "$1 $2" in
+"pr list") cat "$FAKE_DIR/open" 2>/dev/null ;;
+"pr create") echo "https://example.test/pr/7" ;;
+"pr merge") case "$*" in *--auto*) ;; *) touch "$FAKE_DIR/merged" ;; esac ;;
+"pr view")
+	case "$*" in
+	*mergeStateStatus*) if [ -e "$FAKE_DIR/merged" ]; then echo "MERGED CLEAN"; else echo "OPEN CLEAN"; fi ;;
+	*) cat "$FAKE_DIR/view_$3" ;;
+	esac
+	;;
+esac
+exit 0
+`
+
+const fakeBumpGit = `#!/bin/sh
+echo "git $*" >> "$FAKE_DIR/log"
+case "$1" in
+rev-parse) echo "abc123" ;;
+diff) cat "$FAKE_DIR/diff" 2>/dev/null ;;
+ls-remote) [ -e "$FAKE_DIR/remote" ] && printf '%s\trefs/heads/b\n' "$(cat "$FAKE_DIR/remote")" ;;
+esac
+exit 0
+`
+
+func bumpView(head, owner, repo, base string, cross bool, files ...string) string {
+	var fs []string
+	for _, f := range files {
+		fs = append(fs, `{"path":"`+f+`"}`)
+	}
+	c := "false"
+	if cross {
+		c = "true"
+	}
+	return `{"state":"OPEN","baseRefName":"` + base + `","headRefOid":"` + head + `","isCrossRepository":` + c +
+		`,"headRepository":{"name":"` + repo + `"},"headRepositoryOwner":{"login":"` + owner + `"},"files":[` + strings.Join(fs, ",") + `]}`
+}
+
+func TestLandBump(t *testing.T) {
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not on PATH")
+	}
+	const rec = ".github/harness-compat.json"
+	good := bumpView("abc123", "Owner", "Repo", "main", false, rec)
+	unrecorded := `{"codex":{"tested":"unverified","checked":"2026-11-20"},"claude-code":{"tested":"2.1.329","checked":"2026-11-20"}}`
+	bumped := `{"codex":{"tested":"0.172.0","checked":"2026-11-21"},"claude-code":{"tested":"2.1.329","checked":"2026-11-20"}}`
+	wrongVersion := `{"codex":{"tested":"9.9.9","checked":"2026-11-21"},"claude-code":{"tested":"2.1.329","checked":"2026-11-20"}}`
+	otherEntry := `{"codex":{"tested":"0.172.0","checked":"2026-11-21"},"claude-code":{"tested":"9.9.9","checked":"2026-11-20"}}`
+	cases := []struct {
+		name  string
+		files map[string]string
+		ok    bool
+		out   string
+		has   []string
+		lacks []string
+	}{
+		{"new PR is verified and merged with the head guard", map[string]string{"main_record": unrecorded, "branch_record": bumped, "view_7": good}, true, "merged",
+			[]string{"git push origin HEAD:refs/heads/b", "pr create", "pr merge --squash --match-head-commit abc123"}, nil},
+		{"main already holds the version", map[string]string{"main_record": `{"codex":{"tested":"0.172.0"}}`}, true, "already recorded",
+			nil, []string{"git push", "pr create", "pr merge"}},
+		{"fork PR with the same branch name is skipped, ours is made", map[string]string{"main_record": unrecorded, "branch_record": bumped, "open": "3\n", "view_3": bumpView("abc123", "Evil", "Repo", "main", true, rec), "view_7": good}, true, "skipping #3",
+			[]string{"pr create", "pr merge --squash --match-head-commit abc123 --repo Owner/Repo 7"}, []string{"pr merge --squash --match-head-commit abc123 --repo Owner/Repo 3"}},
+		{"fork PR created as the only match is never merged", map[string]string{"main_record": unrecorded, "branch_record": bumped, "view_7": bumpView("abc123", "Evil", "Repo", "main", true, rec)}, false, "refusing to merge #7",
+			nil, []string{"pr merge"}},
+		{"diff touching a non-record file is refused", map[string]string{"main_record": unrecorded, "branch_record": bumped, "view_7": bumpView("abc123", "Owner", "Repo", "main", false, rec, ".github/workflows/ci.yml")}, false, "refusing to merge",
+			nil, []string{"pr merge"}},
+		{"only a non-record file is refused", map[string]string{"main_record": unrecorded, "branch_record": bumped, "view_7": bumpView("abc123", "Owner", "Repo", "main", false, "scripts/release-build.sh")}, false, "refusing to merge",
+			nil, []string{"pr merge"}},
+		{"head commit that is not the pushed one is refused", map[string]string{"main_record": unrecorded, "branch_record": bumped, "view_7": bumpView("deadbeef", "Owner", "Repo", "main", false, rec)}, false, "refusing to merge",
+			nil, []string{"pr merge"}},
+		{"base other than main is refused", map[string]string{"main_record": unrecorded, "branch_record": bumped, "view_7": bumpView("abc123", "Owner", "Repo", "release", false, rec)}, false, "refusing to merge",
+			nil, []string{"pr merge"}},
+		{"branch with the right file but the wrong version is refused", map[string]string{"main_record": unrecorded, "branch_record": wrongVersion, "remote": "abc123\n", "open": "5\n", "view_5": good}, false, "refusing b",
+			nil, []string{"pr merge"}},
+		{"branch that also changes the other harness entry is refused", map[string]string{"main_record": unrecorded, "branch_record": otherEntry, "view_7": good}, false, "refusing b",
+			nil, []string{"pr merge"}},
+		{"main moved on code before the merge: refused after the PR is clean", map[string]string{"main_record": unrecorded, "branch_record": bumped, "view_7": good, "diff": "internal/shim/shim.go\n"}, false, "changed since the tested revision",
+			[]string{"git fetch -q origin main", "git diff --name-only runsha FETCH_HEAD"}, []string{"pr merge"}},
+		{"main moved only the record: merged without --auto", map[string]string{"main_record": unrecorded, "branch_record": bumped, "view_7": good, "diff": ".github/harness-compat.json\n"}, true, "merged",
+			[]string{"git diff --name-only runsha FETCH_HEAD", "pr merge --squash --match-head-commit abc123"}, []string{"--auto"}},
+		{"rerun reuses a verified open PR for the existing branch", map[string]string{"main_record": unrecorded, "branch_record": bumped, "remote": "abc123\n", "open": "5\n", "view_5": good}, true, "reusing #5",
+			[]string{"pr merge --squash --match-head-commit abc123 --repo Owner/Repo 5"}, []string{"git push", "pr create"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			fake, bin := t.TempDir(), t.TempDir()
+			for name, body := range map[string]string{"gh": fakeBumpGH, "git": fakeBumpGit} {
+				if err := os.WriteFile(filepath.Join(bin, name), []byte(body), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			for name, body := range c.files {
+				if err := os.WriteFile(filepath.Join(fake, name), []byte(body), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			env := []string{"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"), "FAKE_DIR=" + fake, "LAND_PR_POLL=1", "LAND_PR_TIMEOUT=3"}
+			out, err := releaseScript(t, env, "land-bump", "Owner/Repo", "b", "the title", rec, "codex", "0.172.0", "runsha")
+			if (err == nil) != c.ok {
+				t.Fatalf("err = %v, want ok=%v\n%s", err, c.ok, out)
+			}
+			if !strings.Contains(out, c.out) {
+				t.Errorf("output lacks %q\n%s", c.out, out)
+			}
+			logb, _ := os.ReadFile(filepath.Join(fake, "log"))
+			log := string(logb)
+			for _, w := range c.has {
+				if !strings.Contains(log, w) {
+					t.Errorf("log lacks %q\n%s", w, log)
+				}
+			}
+			for _, w := range c.lacks {
+				if strings.Contains(log, w) {
+					t.Errorf("log has %q\n%s", w, log)
+				}
+			}
+		})
+	}
+}
+
 func TestBumpMarketplaces(t *testing.T) {
 	refRE := regexp.MustCompile(`("ref": ")[^"]*(")`)
 	setup := func(t *testing.T, ref string) (env []string, files []string) {
