@@ -88,8 +88,8 @@ for f in glob.glob(root + "/**/rollout-*.jsonl", recursive=True):
 print(n["task_started"], n["task_complete"], n["turn_aborted"])
 PY
 	;;
-triggers)
-	python3 -I - "${2:?usage: harness-compat-live.sh triggers ROLLOUT_DIR SESSION_REF}" "${3:?}" <<'PY'
+events)
+	python3 -I - "${2:?usage: harness-compat-live.sh events ROLLOUT_DIR SESSION_REF}" "${3:?}" <<'PY'
 import glob, json, sys
 root, ref = sys.argv[1], sys.argv[2]
 for f in glob.glob(root + "/**/rollout-*.jsonl", recursive=True):
@@ -100,8 +100,13 @@ for f in glob.glob(root + "/**/rollout-*.jsonl", recursive=True):
             p = json.loads(line).get("payload", {})
         except ValueError:
             continue
-        if p.get("type") == "task_started":
+        kind = p.get("type")
+        if kind == "task_started":
             print("queue" if (p.get("turn_attribution") or {}).get("turn_trigger") == "queue" else "user")
+        elif kind == "task_complete":
+            print("done")
+        elif kind == "turn_aborted":
+            print("abort")
 PY
 	;;
 wake-state)
@@ -464,9 +469,19 @@ leg)
 			sleep 5
 		done
 	}
+	type_line() { # fd text: the TUI treats an Enter that arrives with the text as a pasted newline, so Enter is its own write
+		printf '%s' "$2" >&"$1"
+		sleep 1
+		printf '\r' >&"$1"
+	}
 	interrupted_case() { # tab_ref codex_id: plan 3 b probe 3, fds 8 (tab) and 9 (sender) are the queue phase's pty tabs
 		iref="$1" icid="$2"
-		fail() { echo "FAIL interrupted: $1"; return 1; }
+		fail() {
+			echo "FAIL interrupted: $1"
+			echo "tab rollout events (last 12):"
+			find "$home/.codex/sessions" -name "rollout-*-$iref.jsonl" -exec grep -ho '"type":"[A-Za-z_]*"' {} + 2>/dev/null | tail -n 12 | paste -sd' ' -
+			return 1
+		}
 		w=0
 		while :; do
 			read -r s c _ <<EOF
@@ -480,7 +495,7 @@ EOF
 		read -r s0 c0 _ <<EOF
 $("$0" turns "$home/.codex/sessions" "$iref")
 EOF
-		printf '%s\r' "Run the shell command: sleep 120. Then say DONE." >&8
+		type_line 8 "Run the shell command: sleep 120. Then say DONE."
 		w=0
 		while :; do
 			read -r s c _ <<EOF
@@ -491,7 +506,7 @@ EOF
 			[ "$w" -lt 60 ] || fail "the tab never started a long turn (started $s, completed $c)" || return 1
 			sleep 2
 		done
-		printf '%s\r' "Use the crosstalk send_message tool to send an inform to the agent whose agent_id is $icid with the text: compat-W2, please fetch your mail. Then say SENT." >&9
+		type_line 9 "Use the crosstalk send_message tool to send an inform to the agent whose agent_id is $icid with the text: compat-W2, please fetch your mail. Then say SENT."
 		w=0
 		until [ "$("$0" wake-state "$state" "$iref")" = queued ]; do
 			w=$((w + 1))
@@ -525,15 +540,15 @@ EOF
 			[ "$rows" -ge 1 ] || fail "the wake row $wake_id was consumed while the thread was interrupted" || return 1
 		done
 		echo "PASS interrupted: after Esc the turn aborted, and for 45 s no turn started, the wake generation stayed queued and the queue row stayed"
-		printf '%s\r' "Say one word." >&8
+		type_line 8 "Say one word."
 		w=0
 		while :; do
 			read -r s3 _ _ <<EOF
 $("$0" turns "$home/.codex/sessions" "$iref")
 EOF
 			if [ "$s3" -ge $((s + 2)) ] && [ "$("$0" wake-state "$state" "$iref")" = collected ]; then
-				order="$("$0" triggers "$home/.codex/sessions" "$iref" | tail -n 2 | paste -sd' ' -)"
-				[ "$order" = "user queue" ] || fail "the wake did not dispatch after the operator's prompt (last two turn triggers: $order)" || return 1
+				order="$("$0" events "$home/.codex/sessions" "$iref" | awk '/^abort$/ { n = 0; next } { n++; a[n] = $0 } END { print a[1], a[2], a[3] }')"
+				[ "$order" = "user done queue" ] || fail "the wake did not dispatch after the operator's turn finished (events since the last abort: $order)" || return 1
 				break
 			fi
 			w=$((w + 1))
@@ -629,7 +644,7 @@ PY
 		cat "$logs/assert-mailbox.log"
 		if ! "$0" assert-own-delivery-mode "$home/.codex/sessions" "$tab_ref" "$codex_id" >"$logs/assert-mode.log" 2>&1; then
 			# The tab's startup listing can precede the claim being accepted; ask for a fresh one by typing into the tab.
-			printf '%s\r' "Call the crosstalk list_agents tool once more." >&8
+			type_line 8 "Call the crosstalk list_agents tool once more."
 			w=0
 			until "$0" assert-own-delivery-mode "$home/.codex/sessions" "$tab_ref" "$codex_id" >"$logs/assert-mode.log" 2>&1; do
 				w=$((w + 1))
