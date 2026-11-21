@@ -225,3 +225,14 @@ One Codex adversarial review of the plan (verdict: needs-attention, five finding
 | 5 | Pulled outbound `unknown` entries would read as incoming work | Fixed: `outbound` notice class selected by `direction`; mailbox test (8). Confirmed `Shim.Mailbox` attaches the notice to any entry with a body (`internal/shim/send.go:921-926`). On main this already tells a sender its own outbound text has no operator authority, which is harmless; under the new wording it would not be, hence the class. |
 
 None rejected.
+
+### Codex branch review
+
+One Codex adversarial review of the branch found four defects; each was checked against the code.
+
+| # | Severity | Finding | Disposition |
+|---|---|---|---|
+| 1 | high | A bounced native reply is journaled under the session's own agent id, so a mailbox pull gave it the teammate notice | Fixed: `entryNoticeClass` checks the `bounced` state first and returns `outbound`; test case in `TestPulledEntryNoticeClassByProvenance`. |
+| 2 | high | A retried or possibly seen teammate entry told the model to act again | Fixed: class `teammate_again` appends a check-first sentence; used for `unknown` or `possibly_seen` entries; `TestTeammateAgainNoticeAddsCheckSentence`. |
+| 3 | high | The instructions dropped `claim` from the named-inbox rule | Fixed: "Attach or claim an inbox only if your user or brief names it; grant only a session they name." (654 bytes); pinned in `TestInitializeCarriesInstructions`. |
+| 4 | medium | A first-contact inject into an unbound session left `Delivery.Notice` empty and rendered the info notice | Fixed: the native send path sets `NoticeTeammate`; `TestFirstContactInformCarriesTeammateNotice`. |
