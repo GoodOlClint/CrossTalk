@@ -728,11 +728,15 @@ func TestHarnessCompatPtyrun(t *testing.T) {
 			t.Errorf("ptyrun matches %q, which the captured Codex dialog does not contain", m[1])
 		}
 	}
-	prog := filepath.Join(t.TempDir(), "dialog.sh")
-	script := "#!/bin/sh\ncat '" + filepath.Join(root, "scripts", "testdata", "codex-hooks-dialog.txt") + "'\nread -r answer\necho \"ANSWER=$answer\"\nread -r more\necho \"MORE=$more\"\n"
-	if err := os.WriteFile(prog, []byte(script), 0o755); err != nil {
+	// The fake program is Python, not a shell script: dash's read builtin did not return for a second line typed on a pty.
+	prog := filepath.Join(t.TempDir(), "dialog.py")
+	script := "import sys\nsys.stdout.write(open(sys.argv[1]).read())\nsys.stdout.flush()\n" +
+		"a = sys.stdin.readline().strip()\nprint('ANSWER=' + a, flush=True)\n" +
+		"m = sys.stdin.readline().strip()\nprint('MORE=' + m, flush=True)\n"
+	if err := os.WriteFile(prog, []byte(script), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	fixtureTxt := filepath.Join(root, "scripts", "testdata", "codex-hooks-dialog.txt")
 	run := func(home, cwd string, extraEnv ...string) string {
 		dir := t.TempDir()
 		fifo := filepath.Join(dir, "in")
@@ -740,7 +744,7 @@ func TestHarnessCompatPtyrun(t *testing.T) {
 			t.Fatal(err)
 		}
 		logf := filepath.Join(dir, "log")
-		cmd := exec.Command(filepath.Join(root, "scripts", "ptyrun.py"), logf, fifo, prog)
+		cmd := exec.Command(filepath.Join(root, "scripts", "ptyrun.py"), logf, fifo, "python3", prog, fixtureTxt)
 		var env []string
 		for _, kv := range os.Environ() {
 			if !strings.HasPrefix(kv, "CODEX_HOME=") && !strings.HasPrefix(kv, "RUNNER_TEMP=") && !strings.HasPrefix(kv, "HOME=") {
