@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/GoodOlClint/crosstalk/internal/adapter"
+	"github.com/GoodOlClint/crosstalk/internal/journal"
 	"github.com/GoodOlClint/crosstalk/internal/msg"
 )
 
@@ -124,5 +125,47 @@ func TestPull_WatcherCopyAfterWindow_ExpectNoRoute(t *testing.T) {
 	e.pull("", 0)
 	if e.r.RouteOpen(m.MessageID) || e.r.CloseRoute(m.MessageID) {
 		t.Fatal("watcher copy has a reply route after its pull")
+	}
+}
+
+func TestPull_AskAppendsNoRouteRecord(t *testing.T) {
+	e, _ := newMailboxClockEnv(t)
+	m := newMsg(msg.Ask, "q")
+	e.recv(A2A, alice, m)
+	before := len(routeRecords(t, e, m.MessageID))
+	e.pull("", 0)
+	if n := len(routeRecords(t, e, m.MessageID)); n != before {
+		t.Fatalf("pull appended %d route records for an ask", n-before)
+	}
+}
+
+func TestPull_RouteReopenAppendFails_ExpectOldRouteKeptAndEntryMailboxed(t *testing.T) {
+	e := newMailboxEnv(t)
+	var arm bool
+	l := &appendLog{fail: func(r journal.Record) bool { return arm && r.Type == journal.TypeRoute && r.State == journal.StateOpen }}
+	e.openLogged(l)
+	m := e.mailboxed("fyi")
+	arm = true
+	if _, _, err := e.r.Pull("", 0); err == nil {
+		t.Fatal("pull succeeded though the route reopen failed")
+	}
+	if !e.r.RouteOpen(m.MessageID) || e.dedupe(m) != "mailboxed" {
+		t.Fatalf("route open %v, state %q", e.r.RouteOpen(m.MessageID), e.dedupe(m))
+	}
+}
+
+func TestPull_EntryFromOtherConversation_ExpectRouteStaysClosed(t *testing.T) {
+	e := newMailboxEnv(t)
+	m := e.mailboxed("fyi")
+	e.j.Close()
+	other := selfBinding
+	other.HarnessEndpoint = "/tmp/cc-socks/2.sock"
+	rp := e.open(other, "inst-2")
+	if err := e.r.Recover(rp); err != nil {
+		t.Fatal(err)
+	}
+	e.pull("", 0)
+	if e.r.RouteOpen(m.MessageID) {
+		t.Fatal("pull reopened a route that recovery closed for another conversation")
 	}
 }

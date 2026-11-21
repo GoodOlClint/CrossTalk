@@ -219,6 +219,8 @@ func (r *Receiver) pull(after string, limit int) ([]Entry, bool, error) {
 		}
 	}
 	self := r.self().Name
+	sb := r.self().Binding
+	cur := journal.Binding{HarnessEndpoint: sb.HarnessEndpoint, SessionRef: sb.SessionRef}
 	start := 0
 	if after != "" {
 		start = -1
@@ -297,7 +299,7 @@ func (r *Receiver) pull(after string, limit int) ([]Entry, bool, error) {
 		next := journal.StateDelivered
 		if out[i].PossiblySeen {
 			next = journal.StateConfirmed
-		} else if rt, ok := routes[out[i].MessageID]; ok && msg.Kind(rt.Kind) != msg.Ask {
+		} else if rt, ok := routes[out[i].MessageID]; ok && msg.Kind(rt.Kind) != msg.Ask && idx[keys[i]].binding.SameConversation(cur) {
 			if err := r.restartRoute(rt); err != nil {
 				if i == 0 {
 					return nil, false, err
@@ -317,12 +319,23 @@ func (r *Receiver) pull(after string, limit int) ([]Entry, bool, error) {
 }
 
 // restartRoute reopens the reply route a pulled inform's journal record names,
-// with OpenedAt now.
+// with OpenedAt now. The old route stays in place until the new open record is
+// durable, and the append runs under r.mu so a concurrent sweep's close cannot
+// land after it.
 func (r *Receiver) restartRoute(rec journal.Record) error {
+	r.sweep()
+	at := r.now().UTC()
+	rt := route{Session: rec.Session, MessageID: rec.MessageID, Sender: rec.Sender, Name: rec.To, Kind: msg.Kind(rec.Kind), OpenedAt: at}
+	open := rt.record(journal.StateOpen)
+	open.At = at
 	r.mu.Lock()
-	r.routes = slices.DeleteFunc(r.routes, func(o route) bool { return o.Session == rec.Session && o.MessageID == rec.MessageID })
-	r.mu.Unlock()
-	return r.openRoute(route{Session: rec.Session, MessageID: rec.MessageID, Sender: rec.Sender, Name: rec.To, Kind: msg.Kind(rec.Kind)})
+	defer r.mu.Unlock()
+	if err := r.j.Append(open); err != nil {
+		return err
+	}
+	r.routes = slices.DeleteFunc(r.routes, func(o route) bool { return o.Session == rt.Session && o.MessageID == rt.MessageID })
+	r.routes = append(r.routes, rt)
+	return nil
 }
 
 // Recover applies the §5 replay rules after journal.Open: an unresolved
