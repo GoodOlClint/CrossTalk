@@ -35,9 +35,18 @@ func TestSetupDocCoversGapsRemote(t *testing.T) {
 		"~/Library/LaunchAgents/dev.getcrosstalk.remote.plist", "~/.config/systemd/user/crosstalk-remote.service", "~/Library/Logs/crosstalk-remote.log",
 		"service running, port not bound", "unit_sha256", "a gateway is running (pid N)", "loginctl enable-linger", "unpair this host on:",
 		"Local Network",
+		"### Choose an address", "### When a host changes networks",
+		"--bind all needs --advertise, the address or name peers dial", "crosstalk remote config --bind all --advertise",
+		"service running, waiting for address", "peers still dial the old address: pair again with",
+		"fingerprint pin is the only trust", "### Restart after changing the bind", "--bind 100.64.1.2 --advertise host.example.ts.net", "Avahi", "MagicDNS", "100.64.0.0/10", "never waits for an address",
 	} {
 		if !strings.Contains(doc, want) {
 			t.Errorf("setup.md lacks %q", want)
+		}
+	}
+	for _, stale := range []string{"Each host binds one fixed IP address", "If a host's address changes, pair again."} {
+		if strings.Contains(doc, stale) {
+			t.Errorf("setup.md still says %q", stale)
 		}
 	}
 	if strings.Contains(doc, "draft, not in 0.1.x") {
