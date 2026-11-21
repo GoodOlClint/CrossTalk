@@ -491,3 +491,19 @@ func TestInboxAddressRejectionsAreRejected(t *testing.T) {
 		t.Fatalf("empty inbox %v", res)
 	}
 }
+
+func TestNoSuchAgentHintNamesClosestAndAmbiguousListsCandidates(t *testing.T) {
+	w := newWorld(t)
+	alice := w.claude(4001, "sess-alice", "alice")
+	w.claude(4002, "sess-bob1", "Build Bot")
+	w.claude(4003, "sess-bob2", "build-bot")
+	na := w.node(alice.pid, nil, nil)
+	res := na.ok(nil, "send_message", send("build-bit", "x"))
+	if h, _ := res["hint"].(string); res["reason"] != ReasonNoSuchAgent || !strings.Contains(h, "Did you mean") {
+		t.Fatalf("closest %v", res)
+	}
+	res = na.ok(nil, "send_message", send("BUILD BOT", "x"))
+	if h, _ := res["hint"].(string); res["state"] != "rejected" || res["reason"] != ReasonAmbiguousName || !strings.Contains(h, "Build Bot") || !strings.Contains(h, "build-bot") {
+		t.Fatalf("ambiguous %v", res)
+	}
+}

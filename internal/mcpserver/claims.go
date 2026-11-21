@@ -3,6 +3,7 @@ package mcpserver
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -44,6 +45,9 @@ func (s *Server) claimTarget(ctx context.Context, a *Agent, name string) (regist
 	}
 	if r.Remote != nil && !r.Registered {
 		return registry.Descriptor{}, &Error{Code: CodeRejected, Reason: "remote_kind", Hint: HintRemoteKind}
+	}
+	if len(r.Candidates) > 0 {
+		return registry.Descriptor{}, &Error{Code: CodeRejected, Reason: "ambiguous_name", Hint: fmt.Sprintf("%q matches several live sessions: %s. Nothing was claimed or released. Name one by agent_id from list_agents.", name, strings.Join(r.Candidates, ", "))}
 	}
 	if !r.Registered {
 		return registry.Descriptor{}, rejected("no_such_agent")

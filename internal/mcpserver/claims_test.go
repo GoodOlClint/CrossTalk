@@ -154,3 +154,14 @@ func TestClaimInformErrorCarriesHint(t *testing.T) {
 		t.Fatalf("inform_error %v", out)
 	}
 }
+
+func TestClaimAmbiguousSlugIsAmbiguousName(t *testing.T) {
+	e := claimEnv(t)
+	e.fb.SetSessions(
+		Session{Harness: "codex", SessionRef: "A", Name: "a", Cwd: "/w"},
+		Session{Harness: "codex", SessionRef: "X", Name: "Build Bot", Cwd: "/w"},
+		Session{Harness: "codex", SessionRef: "Y", Name: "build-bot", Cwd: "/w"},
+	)
+	e.mustErr(thread("A"), "claim", map[string]any{"name": "BUILD BOT"}, CodeRejected, "ambiguous_name")
+	e.mustErr(thread("A"), "release", map[string]any{"name": "BUILD BOT"}, CodeRejected, "ambiguous_name")
+}
