@@ -224,7 +224,7 @@ func runInstall(mode string, args []string, in io.Reader, tty bool, stdout, stde
 			return 1
 		}
 		if _, _, present, owned, _ := unitOwnership(home, cfgDir); held && present && owned {
-			if installKeep(all, targets, env, false) == "" {
+			if unitKeep(all, targets, env) == "" {
 				stopFirst, held = true, false
 			} else {
 				held = false
@@ -262,7 +262,7 @@ func runInstall(mode string, args []string, in io.Reader, tty bool, stdout, stde
 				if _, _, _, owned, _ := unitOwnership(home, cfgDir); !owned {
 					return errors.New(gatewayRunningMsg(stateDir) + "; the login unit changed meanwhile and is not CrossTalk's to stop")
 				}
-				if why := installKeep(all, targets, env, false); why != "" {
+				if why := unitKeep(all, targets, env); why != "" {
 					return fmt.Errorf("%s; the login unit stays because %s", gatewayRunningMsg(stateDir), why)
 				}
 				unitStop(ctx)
@@ -397,12 +397,26 @@ func installKeep(all, targets []installTarget, env harness.InstallEnv, setUp boo
 	return ""
 }
 
+// unitKeep is installKeep for the login unit: it also asks about the binary
+// the unit runs when that is not env.Bin.
+func unitKeep(all, targets []installTarget, env harness.InstallEnv) string {
+	if why := installKeep(all, targets, env, false); why != "" {
+		return why
+	}
+	_, content, _, _, _ := unitOwnership(env.Home, filepath.Join(env.Home, ".config", "crosstalk"))
+	if bin := unitBinary(content); bin != "" && bin != env.Bin {
+		env.Bin = bin
+		return installKeep(all, targets, env, false)
+	}
+	return ""
+}
+
 // installRemoveSteps delete the binary and, with --purge, the state dir,
 // each only when no other harness still runs the binary.
 func installRemoveSteps(o installOpts, all, targets []installTarget, env harness.InstallEnv, stateDir string, w io.Writer) []harness.Step {
 	cfgDir := filepath.Join(env.Home, ".config", "crosstalk")
 	var steps []harness.Step
-	if u, ok := unitUninstallStep(env.Home, cfgDir, func() string { return installKeep(all, targets, env, false) }, w); ok {
+	if u, ok := unitUninstallStep(env.Home, cfgDir, func() string { return unitKeep(all, targets, env) }, w); ok {
 		steps = append(steps, u)
 	}
 	steps = append(steps, harness.Step{

@@ -10,11 +10,13 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"html"
 	"io"
 	"net/netip"
 	"os"
 	"os/user"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"strconv"
@@ -106,6 +108,26 @@ func unitContent(goos, bin, home string) []byte {
 		return fmt.Appendf(nil, plistTemplate, xmlEscape(bin), log)
 	}
 	return fmt.Appendf(nil, serviceTemplate, systemdArg(bin))
+}
+
+var (
+	plistBinRe   = regexp.MustCompile(`<key>ProgramArguments</key>\s*<array>\s*<string>([^<]*)</string>`)
+	systemdBinRe = regexp.MustCompile(`(?m)^ExecStart=(?:"((?:[^"\\]|\\.)*)"|(\S+)) remote serve$`)
+)
+
+// unitBinary is the binary the login unit file content runs, or "".
+func unitBinary(content []byte) string {
+	if m := plistBinRe.FindSubmatch(content); m != nil {
+		return html.UnescapeString(string(m[1]))
+	}
+	if m := systemdBinRe.FindSubmatch(content); m != nil {
+		s := string(m[2])
+		if m[1] != nil {
+			s = strings.NewReplacer(`\\`, `\`, `\"`, `"`).Replace(string(m[1]))
+		}
+		return strings.NewReplacer("%%", "%", "$$", "$").Replace(s)
+	}
+	return ""
 }
 
 func sha256Hex(b []byte) string {
