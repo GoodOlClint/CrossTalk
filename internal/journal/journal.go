@@ -667,3 +667,18 @@ func (j *Journal) Close() error {
 	j.f = nil
 	return err
 }
+
+// PinnedName is the name the agent last set with rename, or "". It reads the
+// file without the agent lock; a partial trailing line is ignored.
+func PinnedName(stateDir, agentID string) string {
+	rs, _, err := readAll(Path(stateDir, agentID))
+	if err != nil {
+		return ""
+	}
+	for i := len(rs) - 1; i >= 0; i-- {
+		if rs[i].Type == TypeName && rs[i].Name != "" {
+			return rs[i].Name
+		}
+	}
+	return ""
+}

@@ -13,6 +13,7 @@ import (
 	"github.com/GoodOlClint/crosstalk/internal/adapter"
 	"github.com/GoodOlClint/crosstalk/internal/harness"
 	"github.com/GoodOlClint/crosstalk/internal/identity"
+	"github.com/GoodOlClint/crosstalk/internal/journal"
 	"github.com/GoodOlClint/crosstalk/internal/msg"
 	"github.com/GoodOlClint/crosstalk/internal/registry"
 )
@@ -38,6 +39,9 @@ type HarnessOptions struct {
 	Directory interface {
 		List() ([]registry.Descriptor, error)
 	}
+	// StateDir is the state directory holding the journals; "" means a
+	// renamed session's pin is not read.
+	StateDir string
 }
 
 const DefaultPollInterval = 2 * time.Second
@@ -53,6 +57,17 @@ type Harness struct {
 	dir      interface {
 		List() ([]registry.Descriptor, error)
 	}
+	stateDir string
+	pin      pinCache
+}
+
+// pinCache holds the pin read from one journal file, re-read only when the
+// file's size or modification time changes.
+type pinCache struct {
+	path string
+	size int64
+	mod  time.Time
+	name string
 }
 
 var (
@@ -76,7 +91,7 @@ func NewHarness(opt HarnessOptions) (*Harness, error) {
 	if opt.PollInterval <= 0 {
 		opt.PollInterval = DefaultPollInterval
 	}
-	return &Harness{a: Adapter{SessionsDir: opt.SessionsDir, Alive: opt.Alive}, ingress: opt.Ingress, ppid: opt.PPID, interval: opt.PollInterval, dir: opt.Directory}, nil
+	return &Harness{a: Adapter{SessionsDir: opt.SessionsDir, Alive: opt.Alive}, ingress: opt.Ingress, ppid: opt.PPID, interval: opt.PollInterval, dir: opt.Directory, stateDir: opt.StateDir}, nil
 }
 
 // ServeClaims registers the session named in the parent's session file
@@ -109,7 +124,7 @@ func (h *Harness) ServeClaims(ctx context.Context, r harness.SessionRegistrar) e
 }
 
 // held reports that a live descriptor, this shim's or another's, holds s
-// under its harness name.
+// under its harness name or under the name its journal pins.
 func (h *Harness) held(s Session) bool {
 	if h.dir == nil {
 		return false
@@ -121,10 +136,30 @@ func (h *Harness) held(s Session) bool {
 	id := identity.AgentID(string(adapter.Claude), s.SessionID)
 	for _, d := range ds {
 		if d.AgentID == id {
+			if p := h.pinnedName(id); p != "" {
+				return d.Name == p
+			}
 			return s.Name == "" || d.Name == s.Name
 		}
 	}
 	return false
+}
+
+// pinnedName is the name the session set with rename (ADR 0027), or "". A
+// saved pin outranks the harness name: the session is held only under it.
+func (h *Harness) pinnedName(agentID string) string {
+	if h.stateDir == "" {
+		return ""
+	}
+	path := journal.Path(h.stateDir, agentID)
+	fi, err := os.Stat(path)
+	if err != nil {
+		return ""
+	}
+	if c := h.pin; c.path != path || c.size != fi.Size() || !c.mod.Equal(fi.ModTime()) {
+		h.pin = pinCache{path, fi.Size(), fi.ModTime(), journal.PinnedName(h.stateDir, agentID)}
+	}
+	return h.pin.name
 }
 
 func (h *Harness) Name() adapter.Harness { return adapter.Claude }

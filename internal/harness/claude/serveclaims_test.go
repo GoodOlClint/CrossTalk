@@ -13,6 +13,7 @@ import (
 	"github.com/GoodOlClint/crosstalk/internal/adapter"
 	"github.com/GoodOlClint/crosstalk/internal/harness"
 	"github.com/GoodOlClint/crosstalk/internal/identity"
+	"github.com/GoodOlClint/crosstalk/internal/journal"
 	"github.com/GoodOlClint/crosstalk/internal/registry"
 )
 
@@ -161,4 +162,75 @@ func TestServeClaimsSkipsSessionHeldElsewhere(t *testing.T) {
 	if n := dir.count("sess-a"); n != 0 {
 		t.Fatalf("%d registrations of a session another shim holds", n)
 	}
+}
+
+func pinName(t *testing.T, stateDir, sid, name string) {
+	t.Helper()
+	j, _, err := journal.Open(stateDir, identity.AgentID(string(adapter.Claude), sid), journal.Binding{}, journal.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer j.Close()
+	if err := j.Append(journal.Record{Type: journal.TypeName, Name: name}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func serveClaimsPinned(t *testing.T, stateDir, sid, harnessName, regName string) *fakeDir {
+	t.Helper()
+	sessions := t.TempDir()
+	writeClaimSession(t, sessions, 4100, sid, harnessName)
+	dir := &fakeDir{regName: regName, calls: map[string]int{}}
+	h, err := NewHarness(HarnessOptions{SessionsDir: sessions, PPID: 4100, PollInterval: time.Millisecond, Directory: dir, StateDir: stateDir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		h.ServeClaims(ctx, &fakeReg{dir: dir, sessions: sessions})
+	}()
+	t.Cleanup(func() { cancel(); <-done })
+	return dir
+}
+
+// A session renamed with the rename tool (ADR 0027) holds its pinned name,
+// not its harness name; the poll registers it once, not every tick.
+func TestServeClaimsPinnedNameIsHeld(t *testing.T) {
+	stateDir := t.TempDir()
+	pinName(t, stateDir, "sess-a", "alice")
+	dir := serveClaimsPinned(t, stateDir, "sess-a", "bob", "alice")
+	eventually(t, "first registration", func() bool { return dir.count("sess-a") == 1 })
+	time.Sleep(50 * time.Millisecond)
+	if n := dir.count("sess-a"); n != 1 {
+		t.Fatalf("%d registrations of a session held under its pinned name, want 1", n)
+	}
+}
+
+// A saved pin outranks the harness name: a restart that got the harness name
+// because another agent held the pin keeps retrying until the pin is taken.
+func TestServeClaimsRetriesUntilPinTaken(t *testing.T) {
+	stateDir := t.TempDir()
+	pinName(t, stateDir, "sess-a", "alice")
+	dir := serveClaimsPinned(t, stateDir, "sess-a", "bob", "bob")
+	eventually(t, "retries under the harness name", func() bool { return dir.count("sess-a") >= 3 })
+	dir.setRegName("alice")
+	eventually(t, "pin taken", func() bool {
+		ds, _ := dir.List()
+		return len(ds) == 1 && ds[0].Name == "alice"
+	})
+	n := dir.count("sess-a")
+	time.Sleep(20 * time.Millisecond)
+	if m := dir.count("sess-a"); m != n {
+		t.Fatalf("still registering once held under the pin: %d -> %d", n, m)
+	}
+}
+
+// A pinned session under a fallback name is retried too.
+func TestServeClaimsPinnedFallbackRetries(t *testing.T) {
+	stateDir := t.TempDir()
+	pinName(t, stateDir, "sess-a", "alice")
+	dir := serveClaimsPinned(t, stateDir, "sess-a", "bob", "bob-1234")
+	eventually(t, "retries under a fallback", func() bool { return dir.count("sess-a") >= 3 })
 }
