@@ -135,7 +135,7 @@ Each window below is a deterministic failure-injection test in steps 2 and 5.
 
 ### 3.7 Sender view
 
-- The sender sees `mailboxed` with a hint: delivery is a best-effort wake that fires only when the session is idle (watcher interval 10 s at 0.167.0, not a deadline), not `delivered`. `list_agents` shows the delivery mode for the row (tool output, queue wake, or pull only) so the sender can judge an ask's deadline.
+- The sender sees `mailboxed` with a hint: delivery is a best-effort wake that fires only when the session is idle (watcher interval 10 s at 0.167.0, not a deadline), not `delivered`. Only the claim-serving shim's own `list_agents` view shows the row's delivery mode (tool output, queue wake, or pull only); descriptors do not carry it, so a sender's listing of another session does not. The mailbox state and hint on the send result are what a sender judges an ask's deadline by.
 - Fetched peer text stays data under the existing notice and the skill, although the wake that prompted the fetch is a user-role turn.
 
 ## 4. Public surface to change
