@@ -84,9 +84,23 @@ func TestLoadConfigWildcardNeedsAdvertise(t *testing.T) {
 		}
 		write(`{"version":1,"alias":"desk","bind":"` + b + `","advertise":"box.ts.net","port":7745}`)
 		c, err := LoadConfig(dir)
-		if err != nil || c.AdvertiseAddr() != "box.ts.net" {
+		if b == AllBind && (err != nil || c.AdvertiseAddr() != "box.ts.net") {
 			t.Errorf("bind %s with advertise: %+v %v", b, c, err)
 		}
+		if b != AllBind && err == nil {
+			t.Errorf("non-canonical wildcard %s loaded: it would listen dual-stack", b)
+		}
+	}
+	dir := newDir(t)
+	if err := ensureDir(dir); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"version":1,"alias":"desk","bind":"::ffff:0.0.0.0","advertise":"box.ts.net","port":7745}`
+	if err := os.WriteFile(filepath.Join(dir, "remote.json"), []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadConfig(dir); err == nil {
+		t.Error("a mapped wildcard bind loaded")
 	}
 }
 
@@ -126,11 +140,12 @@ func TestJoinFromAllAddressesSendsAdvertise(t *testing.T) {
 	}
 }
 
-func TestDialBindAndBindOnHost(t *testing.T) {
-	for in, want := range map[string]string{"0.0.0.0": "127.0.0.1", "::": "::1", "10.0.0.5": "10.0.0.5"} {
-		if got := DialBind(in); got != want {
-			t.Errorf("DialBind(%s) = %s, want %s", in, got, want)
-		}
+func TestDialBindsAndBindOnHost(t *testing.T) {
+	if got := DialBinds("::"); len(got) != 2 || got[0] != "127.0.0.1" || got[1] != "::1" {
+		t.Errorf("DialBinds(::) = %v, want both loopbacks", got)
+	}
+	if got := DialBinds("10.0.0.5"); len(got) != 1 || got[0] != "10.0.0.5" {
+		t.Errorf("DialBinds(10.0.0.5) = %v", got)
 	}
 	old := InterfaceAddrs
 	InterfaceAddrs = func() ([]net.Addr, error) { return nil, nil }

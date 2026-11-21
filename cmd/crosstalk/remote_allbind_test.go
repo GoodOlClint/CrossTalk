@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -192,5 +194,54 @@ func TestK8WaitingWarnNamesAllAddressesMode(t *testing.T) {
 	_, out := statusChecks(t, home)
 	if !strings.Contains(out, "--bind all --advertise") {
 		t.Fatalf("K8 warning does not name all-addresses mode:\n%s", out)
+	}
+}
+
+func TestEnableNarrowingFromAllAddressesRestartsUnit(t *testing.T) {
+	eachOS(t, func(t *testing.T, goos string) {
+		home, rec := unitSandbox(t, goos)
+		mustEnable(t, freePort(t))
+		dir := filepath.Join(home, ".config", "crosstalk")
+		c, err := remote.LoadConfig(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.Bind, c.Advertise = remote.AllBind, "box.ts.net"
+		if err := remote.SaveConfig(dir, c); err != nil {
+			t.Fatal(err)
+		}
+		if code, out := enableCmd(t, "--bind", "127.0.0.1", "--yes"); code != 0 {
+			t.Fatalf("narrowing enable: exit %d\n%s", code, out)
+		}
+		if n := rec.count("launchctl bootstrap") + rec.count("enable --now"); n != 2 {
+			t.Errorf("start commands = %d, want 2: the running all-addresses gateway answers the loopback probe and must still be restarted: %v", n, rec.all())
+		}
+		if goos == "linux" && rec.count("systemctl --user restart") != 1 {
+			t.Errorf("no restart of the running unit: %v", rec.all())
+		}
+	})
+}
+
+func TestStatusWildcardWithIPv4OnlyListener(t *testing.T) {
+	_, dir, state := allAddressesHome(t)
+	cfg, _ := remote.LoadConfig(dir)
+	host, _ := remote.LoadHost(dir)
+	statusLock(t, state)
+	ln, err := tls.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(cfg.Port)), &tls.Config{Certificates: []tls.Certificate{host.Certificate}, MinVersion: tls.VersionTLS13})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() { c.(*tls.Conn).Handshake(); c.Close() }()
+		}
+	}()
+	if st, err := remote.GatewayStatus(state, cfg, host.Fingerprint); err != nil || st != remote.StateRunning {
+		t.Fatalf("a healthy listener reachable over IPv4 only reads %q (%v)", st, err)
 	}
 }

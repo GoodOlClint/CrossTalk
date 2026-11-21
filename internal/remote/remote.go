@@ -376,17 +376,14 @@ func (c Config) ListenLabel() string {
 	return net.JoinHostPort(c.Bind, strconv.Itoa(c.Port))
 }
 
-// DialBind is an address on this host that reaches a listener bound to bind:
-// the bind itself, or loopback for a wildcard.
-func DialBind(bind string) string {
-	a, err := netip.ParseAddr(bind)
-	if err != nil || !a.Unmap().IsUnspecified() {
-		return bind
+// DialBinds are the addresses on this host that reach a listener bound to
+// bind: the bind itself, or both loopbacks for a wildcard (an IPv4-only host
+// serves the wildcard on IPv4 alone).
+func DialBinds(bind string) []string {
+	if IsWildcard(bind) {
+		return []string{"127.0.0.1", "::1"}
 	}
-	if a.Is4() || a.Is4In6() {
-		return "127.0.0.1"
-	}
-	return "::1"
+	return []string{bind}
 }
 
 var tailnetV4 = netip.MustParsePrefix("100.64.0.0/10")
@@ -540,6 +537,9 @@ func validateConfig(c Config) error {
 		return err
 	}
 	if IsWildcard(c.Bind) {
+		if c.Bind != AllBind {
+			return fmt.Errorf("bind: %q is not the all-addresses value %q; use remote config --bind all", c.Bind, AllBind)
+		}
 		if c.Advertise == "" {
 			return errors.New("bind: all-addresses mode needs advertise, the address peers dial")
 		}
