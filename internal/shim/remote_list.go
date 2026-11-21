@@ -14,6 +14,8 @@ import (
 // RemoteFetchBudget is the one deadline all paired hosts share.
 const RemoteFetchBudget = 1500 * time.Millisecond
 
+var remoteFetchBudget = RemoteFetchBudget
+
 const remoteFetchGrace = 30 * time.Millisecond
 
 const cannotReceive = "this host's gateway is not running; it cannot receive from other hosts"
@@ -48,7 +50,7 @@ func (s *Shim) ListRemote(ctx context.Context) mcpserver.RemoteListing {
 	sort.Slice(peers, func(i, j int) bool { return peers[i].Alias < peers[j].Alias })
 	host, hostErr := remote.LoadHost(dir)
 
-	ctx, cancel := context.WithTimeout(ctx, RemoteFetchBudget)
+	ctx, cancel := context.WithTimeout(ctx, remoteFetchBudget)
 	defer cancel()
 	var mu sync.Mutex
 	res := make([]fetched, len(peers))

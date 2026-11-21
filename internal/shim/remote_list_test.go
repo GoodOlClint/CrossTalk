@@ -206,10 +206,11 @@ func TestListAgentsGatewayDown(t *testing.T) {
 		return err != nil
 	})
 
+	budget := shortBudget(t)
 	start := time.Now()
 	out := h1.n.ok(nil, "list_agents", map[string]any{})
-	if d := time.Since(start); d > 1600*time.Millisecond {
-		t.Fatalf("list_agents took %v with a refused peer", d)
+	if d := time.Since(start); d > 20*budget {
+		t.Fatalf("list_agents took %v with a refused peer, budget %v", d, budget)
 	}
 	he := hostEntry(t, out, "lab")
 	if he == nil || he["reachable"] != false || he["error"] != "gateway_not_running" {
@@ -257,6 +258,14 @@ func stallPeer(t *testing.T) remote.Peer {
 	return remote.Peer{Address: ln.Addr().String(), Fingerprint: h.Fingerprint}
 }
 
+func shortBudget(t *testing.T) time.Duration {
+	t.Helper()
+	old := remoteFetchBudget
+	remoteFetchBudget = 100 * time.Millisecond
+	t.Cleanup(func() { remoteFetchBudget = old })
+	return remoteFetchBudget
+}
+
 func TestListAgentsTimeoutBound(t *testing.T) {
 	for _, n := range []int{1, 2} {
 		t.Run(string(rune('0'+n))+" stalled", func(t *testing.T) {
@@ -268,11 +277,16 @@ func TestListAgentsTimeoutBound(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			budget := shortBudget(t)
 			before := runtime.NumGoroutine()
 			start := time.Now()
 			out := h1.n.ok(nil, "list_agents", map[string]any{})
-			if d := time.Since(start); d > 1600*time.Millisecond {
-				t.Fatalf("list_agents took %v with %d stalled peers, want at most 1.5 s", d, n)
+			d := time.Since(start)
+			if d < budget {
+				t.Fatalf("list_agents returned after %v, before the %v budget, with %d stalled peers", d, budget, n)
+			}
+			if d > 20*budget {
+				t.Fatalf("list_agents took %v with %d stalled peers, budget %v: the budget did not bound it", d, n, budget)
 			}
 			for i := 0; i < n; i++ {
 				he := hostEntry(t, out, "slow"+string(rune('a'+i)))
