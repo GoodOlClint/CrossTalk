@@ -521,8 +521,9 @@ func (s *Server) RegisterSession(ctx context.Context, req harness.RequestContext
 		c.cwd = cwd
 	}
 	for {
-		a, _, e := s.agent(ctx, c, false)
+		a, notice, e := s.agent(ctx, c, false)
 		if e == nil {
+			a.holdNotice(notice)
 			a.Done()
 			return nil
 		}
@@ -589,7 +590,7 @@ func boundTool[In any](s *Server, t *mcp.Tool, h func(context.Context, *Agent, I
 		if err != nil {
 			return errResult(toolError(err))
 		}
-		return nil, withNotice(withHint(out), notice), nil
+		return nil, withNotice(withHint(out), a.takeNotice(notice)), nil
 	})
 }
 

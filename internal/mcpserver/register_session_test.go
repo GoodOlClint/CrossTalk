@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/GoodOlClint/crosstalk/internal/harness"
@@ -66,5 +67,26 @@ func TestRegisterSession_AgentHeldByAnotherLiveShim_ExpectRejectedAndRecordUntou
 	after := e1.descriptor(codexID("T-held"))
 	if after.InstanceID != before.InstanceID || after.Cwd != before.Cwd {
 		t.Fatalf("existing record changed: %+v -> %+v", before, after)
+	}
+}
+
+func TestRegisterSession_NoticeReachesNextToolResultOnce(t *testing.T) {
+	fb := NewFakeBackend()
+	fb.SetSessions(
+		Session{Harness: "codex", SessionRef: "01a1a3c0-a", Name: "dup", Cwd: "/w/proj"},
+		Session{Harness: "codex", SessionRef: "01a1a3c0-b", Name: "dup", Cwd: "/w/proj"},
+	)
+	e := newEnv(t, 999999, fb)
+	e.mustOK(thread("01a1a3c0-a"), "send_message", sendArgs("x", "1"))
+	if err := e.srv.RegisterSession(context.Background(), harness.RequestContext{Meta: thread("01a1a3c0-b")}, "/w/proj"); err != nil {
+		t.Fatal(err)
+	}
+	first := e.mustOK(thread("01a1a3c0-b"), "send_message", sendArgs("x", "2"))
+	if n, _ := first["notice"].(string); !strings.Contains(n, "held") {
+		t.Fatalf("first call after RegisterSession has no held notice: %v", first)
+	}
+	second := e.mustOK(thread("01a1a3c0-b"), "send_message", sendArgs("x", "3"))
+	if n, ok := second["notice"]; ok {
+		t.Fatalf("notice repeated on the second call: %v", n)
 	}
 }
