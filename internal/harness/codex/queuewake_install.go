@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 
 	"github.com/GoodOlClint/crosstalk/internal/harness"
@@ -172,6 +173,28 @@ func removeHook(path string) error {
 	return writeHooks(path, doc, existed)
 }
 
+// ourHookRefs lists the "<group>:<handler>" position of each of this program's
+// SessionStart handlers, the suffix of its hooks.state trust key.
+func ourHookRefs(path string) []string {
+	doc, _, err := readHooks(path)
+	if err != nil {
+		return nil
+	}
+	hooks, _ := doc["hooks"].(map[string]any)
+	groups, _ := hooks["SessionStart"].([]any)
+	var refs []string
+	for gi, g := range groups {
+		gm, _ := g.(map[string]any)
+		hs, _ := gm["hooks"].([]any)
+		for hi, h := range hs {
+			if isOurHook(h) {
+				refs = append(refs, fmt.Sprintf("%d:%d", gi, hi))
+			}
+		}
+	}
+	return refs
+}
+
 func hasHook(path string) bool {
 	doc, _, err := readHooks(path)
 	if err != nil {
@@ -221,7 +244,11 @@ func queueWakeRemoveStep(env harness.InstallEnv) harness.Step {
 			if err := os.Remove(sp); err != nil && !errors.Is(err, os.ErrNotExist) {
 				return err
 			}
-			return removeHook(hp)
+			refs := ourHookRefs(hp)
+			if err := removeHook(hp); err != nil {
+				return err
+			}
+			return removeTrustRecords(context.Background(), env, hp, refs)
 		},
 	}
 }
@@ -252,4 +279,37 @@ func (h *Harness) k10(ctx context.Context, env harness.InstallEnv) harness.Check
 	}
 	r.Detail = "experimental --no-daemon queue wake is on: hook installed, codex version passes the gate"
 	return r
+}
+
+// removeTrustRecords deletes the hooks.state table Codex wrote when the user
+// trusted each removed hook; other hooks' records stay.
+func removeTrustRecords(ctx context.Context, env harness.InstallEnv, hooksFile string, refs []string) error {
+	if len(refs) == 0 {
+		return nil
+	}
+	path := configPath(env.Home)
+	b, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	drop := map[string]bool{}
+	for _, r := range refs {
+		drop["hooks.state."+hooksFile+":session_start:"+r] = true
+	}
+	lines := strings.Split(string(b), "\n")
+	ts := tables(lines)
+	changed := false
+	for i := len(ts) - 1; i >= 0; i-- {
+		if drop[ts[i].name] {
+			lines = slices.Delete(lines, ts[i].start, ts[i].end)
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+	return harness.ReplaceFile(path, []byte(strings.Join(lines, "\n")))
 }

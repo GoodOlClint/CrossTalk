@@ -1066,3 +1066,33 @@ func TestPurgeStopRechecksOwnershipAfterPrompt(t *testing.T) {
 		}
 	})
 }
+
+func TestUninstallCodexKeepsUnitWhileClaudeRuns(t *testing.T) {
+	hostOS(t, func(t *testing.T, goos string) {
+		home, _ := unitSandbox(t, goos, "claude", "codex")
+		bin := filepath.Join(home, "bin")
+		if code, out := installRemote(t, bin); code != 0 {
+			t.Fatalf("install --remote: exit %d\n%s", code, out)
+		}
+		if code, out := installRunCmd(t, "uninstall", "codex", "--yes", "--bin-dir", bin); code != 0 {
+			t.Fatalf("uninstall codex: exit %d\n%s", code, out)
+		}
+		if _, err := os.Stat(remoteUnitPath(home)); err != nil {
+			t.Fatalf("unit removed while claude still runs the binary: %v", err)
+		}
+	})
+}
+
+func TestUninstallCodexOnlyRemovesUnit(t *testing.T) {
+	hostOS(t, func(t *testing.T, goos string) {
+		home, _ := unitSandbox(t, goos, "codex")
+		bin := filepath.Join(home, "bin")
+		if code, out := installRemote(t, bin); code != 0 {
+			t.Fatalf("install --remote: exit %d\n%s", code, out)
+		}
+		if code, out := installRunCmd(t, "uninstall", "codex", "--yes", "--bin-dir", bin); code != 0 {
+			t.Fatalf("uninstall codex: exit %d\n%s", code, out)
+		}
+		unitAbsent(t, home)
+	})
+}
