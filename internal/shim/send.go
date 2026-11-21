@@ -908,7 +908,7 @@ func (st *AgentState) retryObligations() {
 // proved, never from the From text: only an agent_id sender is a teammate.
 func entryNoticeClass(e receiver.Entry) msg.NoticeClass {
 	switch {
-	case e.Direction == receiver.DirectionOutbound:
+	case e.Direction == receiver.DirectionOutbound, e.State == string(adapter.Bounced):
 		return msg.NoticeOutbound
 	case e.InboxCopy:
 		return msg.NoticeCopy
