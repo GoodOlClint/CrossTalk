@@ -57,7 +57,7 @@ func (a *Adapter) LoadedThreads(ctx context.Context, extra ...string) []LoadedTh
 			}
 			lt := LoadedThread{Endpoint: ep, ID: id}
 			if th, err := c.ReadThread(ctx, id); err == nil {
-				if th.IsSubAgent() && !bound[id] {
+				if (th.IsSubAgent() || th.Ephemeral) && !bound[id] {
 					continue
 				}
 				lt.Cwd, lt.Status, lt.Session, lt.provider = th.Cwd, th.Status.Type, statusOf(th), th.ModelProvider
