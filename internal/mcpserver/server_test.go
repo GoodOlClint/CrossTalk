@@ -477,6 +477,12 @@ func TestCloseKeepsOwnershipWhenAgentCloseTimesOut(t *testing.T) {
 	if d := e.descriptor(id); d.AgentID != id {
 		t.Fatalf("descriptor %+v", d)
 	}
+	e.srv.mu.Lock()
+	kept := len(e.srv.timedOut) == 1 && e.srv.timedOut[0].id == id
+	e.srv.mu.Unlock()
+	if !kept {
+		t.Fatal("timed-out agent not retained in timedOut")
+	}
 	runtime.GC()
 	runtime.GC()
 	_, err := registry.New(e.stateDir).Acquire(registry.Request{AgentID: id, HarnessName: "other", Harness: "codex", Cwd: "/w"})
@@ -497,6 +503,12 @@ func TestFailedRegistrationKeepsOwnershipWhenAgentCloseTimesOut(t *testing.T) {
 	id := codexID("T-1")
 	if isErr, _ := e.call(thread("T-1"), "send_message", sendArgs("x", "1")); !isErr {
 		t.Fatal("registration should have failed")
+	}
+	e.srv.mu.Lock()
+	kept := len(e.srv.timedOut) == 1 && e.srv.timedOut[0].id == id
+	e.srv.mu.Unlock()
+	if !kept {
+		t.Fatal("timed-out agent not retained in timedOut")
 	}
 	runtime.GC()
 	runtime.GC()
