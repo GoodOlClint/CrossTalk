@@ -170,6 +170,14 @@ failed-steps)
 		map(select(.conclusion == "failure" and ((.name | contains($o)) | not)))
 		| map(.name as $j | ([.steps[]? | select(.conclusion == "failure") | .name] | if length == 0 then ["(no step recorded)"] else . end) | map($j + ": " + .)) | add // [] | .[]' "${2:?$usage}"
 	;;
+tested-code)
+	usage="usage: harness-compat.sh tested-code RUN_SHA BASE_REF RECORD"
+	extra="$(git diff --name-only "${2:?$usage}" "${3:?$usage}" | grep -vxF "${4:?$usage}" || true)"
+	[ -z "$extra" ] || {
+		echo "$3 changed since the tested revision $2; rerun to test it: $extra" >&2
+		exit 1
+	}
+	;;
 issue-title)
 	usage="usage: harness-compat.sh issue-title HARNESS VERSION"
 	echo "harness-compat: ${2:?$usage} ${3:?$usage} did not pass"
@@ -197,7 +205,11 @@ file-issue)
 		exit 1
 	}
 	title="$("$0" issue-title "$h" "$v")"
-	open="$(gh issue list --repo "$repo" --state open --search "\"$title\" in:title" --json number,title | jq -r --arg t "$title" '[.[] | select(.title == $t)] | .[0].number // empty')"
+	listed="$(gh issue list --repo "$repo" --state open --search "\"$title\" in:title" --json number,title)" || {
+		echo "cannot list issues; not filing a possible duplicate" >&2
+		exit 1
+	}
+	open="$(printf '%s' "$listed" | jq -r --arg t "$title" '[.[] | select(.title == $t)] | .[0].number // empty')"
 	if [ -n "$open" ]; then
 		echo "reusing issue #$open for $h $v"
 		exit 0
@@ -218,7 +230,7 @@ file-issue)
 		}
 	;;
 *)
-	echo "usage: harness-compat.sh check-updates|legs|step-status|report|compare-claude|compare-codex|passing|failing|bump-record|failed-steps|issue-title|issue-body|file-issue ..." >&2
+	echo "usage: harness-compat.sh check-updates|legs|step-status|report|compare-claude|compare-codex|passing|failing|bump-record|tested-code|failed-steps|issue-title|issue-body|file-issue ..." >&2
 	exit 2
 	;;
 esac

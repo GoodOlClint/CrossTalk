@@ -242,10 +242,11 @@ land-bump)
 	version="${7:?$usage}"
 	timeout="${LAND_PR_TIMEOUT:-2400}"
 	poll="${LAND_PR_POLL:-30}"
-	on_main="$(gh api -H 'Accept: application/vnd.github.raw' "repos/$repo/contents/$file?ref=main" | jq -r --arg h "$harness" '.[$h].tested // empty')" || {
+	main_record="$(gh api -H 'Accept: application/vnd.github.raw' "repos/$repo/contents/$file?ref=main")" || {
 		echo "cannot read $file on main" >&2
 		exit 1
 	}
+	on_main="$(printf '%s' "$main_record" | jq -r --arg h "$harness" '.[$h].tested // empty')"
 	if [ "$on_main" = "$version" ]; then
 		echo "already recorded on main: $harness $version"
 		exit 0
@@ -257,6 +258,15 @@ land-bump)
 		sha="$(git rev-parse HEAD)"
 		git push origin "HEAD:refs/heads/$branch"
 	fi
+	pushed_record="$(gh api -H 'Accept: application/vnd.github.raw' "repos/$repo/contents/$file?ref=$sha")" || {
+		echo "cannot read $file at $sha" >&2
+		exit 1
+	}
+	printf '%s' "$pushed_record" | jq -e --argjson m "$main_record" --arg h "$harness" --arg v "$version" '
+		.[$h].tested == $v and (del(.[$h]) == ($m | del(.[$h])))' >/dev/null || {
+		echo "refusing $branch at $sha: $file is not main's record with only $harness set to $version" >&2
+		exit 1
+	}
 	verify_pr() {
 		gh pr view "$1" --repo "$repo" --json state,baseRefName,headRefOid,isCrossRepository,headRepository,headRepositoryOwner,files |
 			jq -e --arg repo "$repo" --arg sha "$sha" --arg file "$file" '

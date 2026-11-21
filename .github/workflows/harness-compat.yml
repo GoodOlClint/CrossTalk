@@ -282,6 +282,8 @@ jobs:
         run: |
           set -eu
           git remote add upstream "https://github.com/$GITHUB_REPOSITORY.git"
+          git fetch -q upstream main "$GITHUB_SHA"
+          scripts/harness-compat.sh tested-code "$GITHUB_SHA" upstream/main .github/harness-compat.json
           scripts/harness-compat.sh passing "$RESULTS" | while read -r h v; do
             branch="harness-compat-$h-$v"
             git fetch -q upstream main

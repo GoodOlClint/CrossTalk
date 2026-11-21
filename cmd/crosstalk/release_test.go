@@ -408,7 +408,12 @@ func TestLandPR(t *testing.T) {
 const fakeBumpGH = `#!/bin/sh
 echo "gh $*" >> "$FAKE_DIR/log"
 case "$1" in
-api) cat "$FAKE_DIR/main_record" ;;
+api)
+	case "$*" in
+	*ref=main) cat "$FAKE_DIR/main_record" ;;
+	*) cat "$FAKE_DIR/branch_record" ;;
+	esac
+	;;
 esac
 case "$1 $2" in
 "pr list") cat "$FAKE_DIR/open" 2>/dev/null ;;
@@ -452,7 +457,10 @@ func TestLandBump(t *testing.T) {
 	}
 	const rec = ".github/harness-compat.json"
 	good := bumpView("abc123", "Owner", "Repo", "main", false, rec)
-	unrecorded := `{"codex":{"tested":"unverified","checked":"2026-11-20"}}`
+	unrecorded := `{"codex":{"tested":"unverified","checked":"2026-11-20"},"claude-code":{"tested":"2.1.329","checked":"2026-11-20"}}`
+	bumped := `{"codex":{"tested":"0.172.0","checked":"2026-11-21"},"claude-code":{"tested":"2.1.329","checked":"2026-11-20"}}`
+	wrongVersion := `{"codex":{"tested":"9.9.9","checked":"2026-11-21"},"claude-code":{"tested":"2.1.329","checked":"2026-11-20"}}`
+	otherEntry := `{"codex":{"tested":"0.172.0","checked":"2026-11-21"},"claude-code":{"tested":"9.9.9","checked":"2026-11-20"}}`
 	cases := []struct {
 		name  string
 		files map[string]string
@@ -461,23 +469,27 @@ func TestLandBump(t *testing.T) {
 		has   []string
 		lacks []string
 	}{
-		{"new PR is verified and merged with the head guard", map[string]string{"main_record": unrecorded, "view_7": good}, true, "merged",
+		{"new PR is verified and merged with the head guard", map[string]string{"main_record": unrecorded, "branch_record": bumped, "view_7": good}, true, "merged",
 			[]string{"git push origin HEAD:refs/heads/b", "pr create", "pr merge --auto --squash --match-head-commit abc123"}, nil},
 		{"main already holds the version", map[string]string{"main_record": `{"codex":{"tested":"0.172.0"}}`}, true, "already recorded",
 			nil, []string{"git push", "pr create", "pr merge"}},
-		{"fork PR with the same branch name is skipped, ours is made", map[string]string{"main_record": unrecorded, "open": "3\n", "view_3": bumpView("abc123", "Evil", "Repo", "main", true, rec), "view_7": good}, true, "skipping #3",
+		{"fork PR with the same branch name is skipped, ours is made", map[string]string{"main_record": unrecorded, "branch_record": bumped, "open": "3\n", "view_3": bumpView("abc123", "Evil", "Repo", "main", true, rec), "view_7": good}, true, "skipping #3",
 			[]string{"pr create", "pr merge --auto --squash --match-head-commit abc123 --repo Owner/Repo 7"}, []string{"pr merge --auto --squash --match-head-commit abc123 --repo Owner/Repo 3"}},
-		{"fork PR created as the only match is never merged", map[string]string{"main_record": unrecorded, "view_7": bumpView("abc123", "Evil", "Repo", "main", true, rec)}, false, "refusing to merge #7",
+		{"fork PR created as the only match is never merged", map[string]string{"main_record": unrecorded, "branch_record": bumped, "view_7": bumpView("abc123", "Evil", "Repo", "main", true, rec)}, false, "refusing to merge #7",
 			nil, []string{"pr merge"}},
-		{"diff touching a non-record file is refused", map[string]string{"main_record": unrecorded, "view_7": bumpView("abc123", "Owner", "Repo", "main", false, rec, ".github/workflows/ci.yml")}, false, "refusing to merge",
+		{"diff touching a non-record file is refused", map[string]string{"main_record": unrecorded, "branch_record": bumped, "view_7": bumpView("abc123", "Owner", "Repo", "main", false, rec, ".github/workflows/ci.yml")}, false, "refusing to merge",
 			nil, []string{"pr merge"}},
-		{"only a non-record file is refused", map[string]string{"main_record": unrecorded, "view_7": bumpView("abc123", "Owner", "Repo", "main", false, "scripts/release-build.sh")}, false, "refusing to merge",
+		{"only a non-record file is refused", map[string]string{"main_record": unrecorded, "branch_record": bumped, "view_7": bumpView("abc123", "Owner", "Repo", "main", false, "scripts/release-build.sh")}, false, "refusing to merge",
 			nil, []string{"pr merge"}},
-		{"head commit that is not the pushed one is refused", map[string]string{"main_record": unrecorded, "view_7": bumpView("deadbeef", "Owner", "Repo", "main", false, rec)}, false, "refusing to merge",
+		{"head commit that is not the pushed one is refused", map[string]string{"main_record": unrecorded, "branch_record": bumped, "view_7": bumpView("deadbeef", "Owner", "Repo", "main", false, rec)}, false, "refusing to merge",
 			nil, []string{"pr merge"}},
-		{"base other than main is refused", map[string]string{"main_record": unrecorded, "view_7": bumpView("abc123", "Owner", "Repo", "release", false, rec)}, false, "refusing to merge",
+		{"base other than main is refused", map[string]string{"main_record": unrecorded, "branch_record": bumped, "view_7": bumpView("abc123", "Owner", "Repo", "release", false, rec)}, false, "refusing to merge",
 			nil, []string{"pr merge"}},
-		{"rerun reuses a verified open PR for the existing branch", map[string]string{"main_record": unrecorded, "remote": "abc123\n", "open": "5\n", "view_5": good}, true, "reusing #5",
+		{"branch with the right file but the wrong version is refused", map[string]string{"main_record": unrecorded, "branch_record": wrongVersion, "remote": "abc123\n", "open": "5\n", "view_5": good}, false, "refusing b",
+			nil, []string{"pr merge"}},
+		{"branch that also changes the other harness entry is refused", map[string]string{"main_record": unrecorded, "branch_record": otherEntry, "view_7": good}, false, "refusing b",
+			nil, []string{"pr merge"}},
+		{"rerun reuses a verified open PR for the existing branch", map[string]string{"main_record": unrecorded, "branch_record": bumped, "remote": "abc123\n", "open": "5\n", "view_5": good}, true, "reusing #5",
 			[]string{"pr merge --auto --squash --match-head-commit abc123 --repo Owner/Repo 5"}, []string{"git push", "pr create"}},
 	}
 	for _, c := range cases {

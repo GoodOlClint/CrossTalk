@@ -22,7 +22,11 @@ func compatDetect(t *testing.T, npmVersion string, args ...string) (string, erro
 	if err := os.WriteFile(filepath.Join(bin, "npm"), []byte(fake), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	cmd := exec.Command(filepath.Join(root, "scripts", "harness-compat.sh"), append([]string{"check-updates", filepath.Join(root, ".github", "harness-compat.json")}, args...)...)
+	rec := filepath.Join(bin, "record.json")
+	if err := os.WriteFile(rec, []byte(`{"codex": {"tested": "unverified", "checked": "2026-11-20"}, "claude-code": {"tested": "unverified", "checked": "2026-11-20"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(filepath.Join(root, "scripts", "harness-compat.sh"), append([]string{"check-updates", rec}, args...)...)
 	cmd.Dir = root
 	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	out, err := cmd.CombinedOutput()
@@ -1678,7 +1682,10 @@ func TestHarnessCompatPassingFailingAndBumpRecord(t *testing.T) {
 const fakeIssueGH = `#!/bin/sh
 echo "gh $*" >> "$FAKE_DIR/log"
 case "$1 $2" in
-"issue list") cat "$FAKE_DIR/open_issues" 2>/dev/null || echo '[]' ;;
+"issue list")
+	[ -e "$FAKE_DIR/listfail" ] && { echo "HTTP 502" >&2; exit 1; }
+	cat "$FAKE_DIR/open_issues" 2>/dev/null || echo '[]'
+	;;
 "issue create")
 	printf '%s\n' "$*" >> "$FAKE_DIR/created"
 	echo "https://example.test/issues/9"
@@ -1741,6 +1748,19 @@ func TestHarnessCompatIssueIsReusedAndHasNoIdentifyingText(t *testing.T) {
 	if n := strings.Count(string(created), "issue create"); n != 1 {
 		t.Errorf("issue create ran %d times across two failures, want 1", n)
 	}
+	if err := os.WriteFile(filepath.Join(fake, "listfail"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := os.ReadFile(filepath.Join(fake, "created"))
+	if out, err := fileIssue(t, fake, bin, jobs); err == nil {
+		t.Fatalf("a failed issue lookup must not file an issue:\n%s", out)
+	}
+	if after, _ := os.ReadFile(filepath.Join(fake, "created")); string(after) != string(before) {
+		t.Error("issue create ran after a failed lookup")
+	}
+	if err := os.Remove(filepath.Join(fake, "listfail")); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filepath.Join(fake, "open_issues"), []byte(`[{"number":4,"title":"harness-compat: claude-code 2.1.329 did not pass"}]`), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -1750,5 +1770,50 @@ func TestHarnessCompatIssueIsReusedAndHasNoIdentifyingText(t *testing.T) {
 	created, _ = os.ReadFile(filepath.Join(fake, "created"))
 	if n := strings.Count(string(created), "issue create"); n != 2 {
 		t.Errorf("an open issue for another version must not suppress this one; creates = %d", n)
+	}
+}
+
+func TestHarnessCompatTestedCodeAllowsOnlyRecordChanges(t *testing.T) {
+	git := func(dir string, args ...string) {
+		t.Helper()
+		c := exec.Command("git", append([]string{"-c", "user.name=t", "-c", "user.email=t@t"}, args...)...)
+		c.Dir = dir
+		if out, err := c.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	dir := t.TempDir()
+	write := func(name, body string) {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, name)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	git(dir, "init", "-q", "-b", "main")
+	write("a.go", "1")
+	write(".github/harness-compat.json", "{}")
+	git(dir, "add", "-A")
+	git(dir, "commit", "-qm", "tested")
+	git(dir, "branch", "tested")
+	write(".github/harness-compat.json", `{"codex":1}`)
+	git(dir, "commit", "-qam", "record only")
+	check := func() error {
+		c := exec.Command(filepath.Join(releaseRepoRoot(t), "scripts", "harness-compat.sh"), "tested-code", "tested", "main", ".github/harness-compat.json")
+		c.Dir = dir
+		out, err := c.CombinedOutput()
+		if err != nil && !strings.Contains(string(out), "a.go") && strings.Contains(string(out), "changed since") {
+			t.Errorf("a refusal must name the changed file: %s", out)
+		}
+		return err
+	}
+	if err := check(); err != nil {
+		t.Fatalf("a record-only change must be allowed: %v", err)
+	}
+	write("a.go", "2")
+	git(dir, "commit", "-qam", "adapter change")
+	if err := check(); err == nil {
+		t.Fatal("main moved on code after the tested revision: the bump must be refused")
 	}
 }
