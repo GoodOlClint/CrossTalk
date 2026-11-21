@@ -245,3 +245,43 @@ func TestStatusWildcardWithIPv4OnlyListener(t *testing.T) {
 		t.Fatalf("a healthy listener reachable over IPv4 only reads %q (%v)", st, err)
 	}
 }
+
+func TestEnablePortChangeRestartsAnsweringUnit(t *testing.T) {
+	eachOS(t, func(t *testing.T, goos string) {
+		home, rec := unitSandbox(t, goos)
+		mustEnable(t, freePort(t))
+		dir := filepath.Join(home, ".config", "crosstalk")
+		host, err := remote.LoadHost(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		next := freePort(t)
+		ln, err := tls.Listen("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(next)), &tls.Config{Certificates: []tls.Certificate{host.Certificate}, MinVersion: tls.VersionTLS13})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer ln.Close()
+		go func() {
+			for {
+				c, err := ln.Accept()
+				if err != nil {
+					return
+				}
+				go func() { c.(*tls.Conn).Handshake(); c.Close() }()
+			}
+		}()
+		inner := rec.hook
+		rec.hook = func(call string) {
+			if strings.Contains(call, "restart") || strings.Contains(call, "launchctl bootstrap") {
+				ln.Close()
+			}
+			inner(call)
+		}
+		if code, out := enableCmd(t, "--port", strconv.Itoa(next), "--yes"); code != 0 {
+			t.Fatalf("enable --port: exit %d\n%s", code, out)
+		}
+		if n := rec.count("launchctl bootstrap") + rec.count("enable --now"); n != 2 {
+			t.Errorf("start commands = %d, want 2: a listener already answers on the new port, but the running gateway still holds the old one: %v", n, rec.all())
+		}
+	})
+}
