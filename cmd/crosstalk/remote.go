@@ -15,9 +15,12 @@ import (
 	"time"
 
 	"github.com/GoodOlClint/crosstalk/internal/mcpserver"
+	"github.com/GoodOlClint/crosstalk/internal/msg"
 	"github.com/GoodOlClint/crosstalk/internal/registry"
 	"github.com/GoodOlClint/crosstalk/internal/remote"
 	"github.com/GoodOlClint/crosstalk/internal/shim"
+	"github.com/GoodOlClint/crosstalk/internal/udsingress"
+	"github.com/GoodOlClint/crosstalk/internal/wire"
 )
 
 const remoteUsage = `usage: crosstalk remote <command>
@@ -436,7 +439,12 @@ func (f cfgFlags) write(dir string, rePair []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	next, err := remote.UpdateConfig(dir, f.apply)
+	var prev remote.Config
+	var had bool
+	next, err := remote.UpdateConfig(dir, func(o remote.Config, configured bool) (remote.Config, error) {
+		prev, had = o, configured
+		return f.apply(o, configured)
+	})
 	if err != nil {
 		return err
 	}
@@ -444,7 +452,42 @@ func (f cfgFlags) write(dir string, rePair []string, stdout io.Writer) error {
 	if len(rePair) > 0 {
 		fmt.Fprintf(stdout, "peers still dial the old address: pair again with %s\n", strings.Join(rePair, ", "))
 	}
+	if remote.AddressChanged(prev, next, had) {
+		fmt.Fprintln(stdout, "telling sessions on this host and on paired hosts that the gateway address changed")
+		addressNudge(dir, prev, next)
+	}
 	return nil
+}
+
+var addressNudge = sendAddressNudge
+
+func sendAddressNudge(dir string, old, next remote.Config) {
+	host, err := remote.LoadHost(dir)
+	if err != nil {
+		return
+	}
+	peers, _ := remote.NewPeers(dir).List()
+	var locals []registry.Descriptor
+	if state, err := registry.DefaultDir(); err == nil {
+		locals, _ = registry.New(state).List()
+	}
+	w := new(wire.Wire)
+	remote.SendAddressNudge(context.Background(), remote.NudgeDeps{
+		Locals: locals,
+		SendLocal: func(d registry.Descriptor, text string) error {
+			_, err := udsingress.Send(d.UDSPath, text, 5*time.Second)
+			return err
+		},
+		Host:  host,
+		Peers: peers,
+		Rows: func(ctx context.Context, h remote.Host, p remote.Peer) ([]remote.AgentRow, error) {
+			return remote.NewClient(h, p).Agents(ctx)
+		},
+		SendRemote: func(ctx context.Context, from registry.Descriptor, h remote.Host, p remote.Peer, agentID string, m msg.Message) error {
+			_, _, err := w.SendRemote(ctx, from, h, p, agentID, m)
+			return err
+		},
+	}, next.Alias, old, next)
 }
 
 type errUsage string
