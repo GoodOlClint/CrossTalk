@@ -92,6 +92,7 @@ type gwConn struct {
 	info   *connInfo
 	once   sync.Once
 	closed atomic.Bool
+	epoch  uint64
 	mu     sync.Mutex
 	timer  *time.Timer
 }
@@ -137,6 +138,8 @@ type Gateway struct {
 	peerSt   map[string]*peerState
 	accepted chan *gwConn
 	lastPair time.Time
+	// epoch counts listener drops; a connection that finished its handshake under an older epoch is refused at admission.
+	epoch uint64
 }
 
 func NewGateway(c GatewayConfig) *Gateway {
@@ -261,6 +264,10 @@ func (g *Gateway) Serve(ctx context.Context) error {
 		<-loopDone
 		g.dropConns()
 		g.state.Store(StateWaitingAddr)
+		if !g.waitAddrBack(ctx) {
+			ln = nil
+			break
+		}
 		if ln, err = g.bind(ctx); err != nil {
 			ln = nil
 			if ctx.Err() == nil {
@@ -286,12 +293,40 @@ func (g *Gateway) Serve(ctx context.Context) error {
 func (g *Gateway) dropConns() {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	g.epoch++
 	for c := range g.raw {
 		c.Close()
 	}
 	for c := range g.conns {
 		go c.Close()
 	}
+}
+
+// waitAddrBack blocks until the bind address is on this host again (true) or
+// ctx ends (false). A listen that would succeed on an absent address (Linux
+// ip_nonlocal_bind) is not taken as the address returning.
+func (g *Gateway) waitAddrBack(ctx context.Context) bool {
+	bind, err := netip.ParseAddr(g.cfg.Bind)
+	if err != nil {
+		return true
+	}
+	for {
+		if has, err := hostHasAddr(bind, g.addrLister()); err != nil || has {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(g.cfg.Limits.BindRetry):
+		}
+	}
+}
+
+func (g *Gateway) addrLister() func() ([]net.Addr, error) {
+	if g.cfg.Addrs != nil {
+		return g.cfg.Addrs
+	}
+	return func() ([]net.Addr, error) { return InterfaceAddrs() }
 }
 
 // waitAddrLost blocks until the bind address has left this host (true), or
@@ -304,10 +339,7 @@ func (g *Gateway) waitAddrLost(ctx context.Context, srvDone <-chan struct{}) boo
 		defer t.Stop()
 		tick = t.C
 	}
-	lister := g.cfg.Addrs
-	if lister == nil {
-		lister = func() ([]net.Addr, error) { return InterfaceAddrs() }
-	}
+	lister := g.addrLister()
 	for {
 		select {
 		case <-ctx.Done():
@@ -389,6 +421,9 @@ func (g *Gateway) acceptLoop(ln net.Listener) {
 
 func (g *Gateway) handshake(raw net.Conn, slots chan struct{}) {
 	info := &connInfo{}
+	g.mu.Lock()
+	epoch := g.epoch
+	g.mu.Unlock()
 	tc := tls.Server(raw, g.tlsConfig(info))
 	raw.SetDeadline(time.Now().Add(g.cfg.Limits.HandshakeTimeout))
 	err := tc.Handshake()
@@ -402,7 +437,7 @@ func (g *Gateway) handshake(raw net.Conn, slots chan struct{}) {
 		return
 	}
 	raw.SetDeadline(time.Time{})
-	c := &gwConn{Conn: tc, g: g, info: info}
+	c := &gwConn{Conn: tc, g: g, info: info, epoch: epoch}
 	if info.unenrolled {
 		c.mu.Lock()
 		c.timer = time.AfterFunc(g.cfg.Limits.UnenrolledLife, func() { c.Close() })
@@ -427,7 +462,7 @@ func (g *Gateway) admit(c *gwConn) bool {
 		return false
 	default:
 	}
-	if c.closed.Load() {
+	if c.closed.Load() || c.epoch != g.epoch {
 		return false
 	}
 	if c.info.unenrolled {

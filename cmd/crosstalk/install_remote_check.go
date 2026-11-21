@@ -58,7 +58,7 @@ func installRemoteChecks(home, bin string) []harness.CheckResult {
 	}
 	switch {
 	case gs == remote.StateWaitingAddr:
-		rs = append(rs, k8(false, true, "gateway is waiting for its bind address %s, which is not on this host; it recovers by itself when the address returns; to use another address now run: crosstalk remote config --bind <current address>", cfg.Bind))
+		rs = append(rs, k8(false, true, "gateway is waiting for its bind address %s, which is not on this host; it recovers by itself when the address returns; to use another address now run: crosstalk remote config --bind <current address>, then restart the gateway (stop and rerun crosstalk remote serve, or run crosstalk remote disable then crosstalk remote enable)", cfg.Bind))
 	case gs == remote.StateRunning:
 		if len(rs) == 0 {
 			rs = append(rs, k8(true, false, "remote configured, gateway answering on %s:%d", cfg.Bind, cfg.Port))

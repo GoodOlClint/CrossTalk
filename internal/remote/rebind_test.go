@@ -4,9 +4,7 @@ import (
 	"errors"
 	"net"
 	"net/netip"
-	"os"
 	"sync/atomic"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -57,9 +55,6 @@ func TestRebindInPlace(t *testing.T) {
 			return []net.Addr{&net.IPNet{IP: net.ParseIP("127.0.0.1"), Mask: net.CIDRMask(8, 32)}}, nil
 		}
 		c.Listen = func(network, addr string) (net.Listener, error) {
-			if gone.Load() {
-				return nil, &net.OpError{Op: "listen", Net: network, Err: os.NewSyscallError("bind", syscall.EADDRNOTAVAIL)}
-			}
 			ln, err := net.Listen(network, addr)
 			if err != nil {
 				return nil, err
@@ -80,6 +75,10 @@ func TestRebindInPlace(t *testing.T) {
 
 	gone.Store(true)
 	waitFor(t, "waiting-for-address state", func() bool { return e.gw.State() == StateWaitingAddr })
+	time.Sleep(50 * time.Millisecond)
+	if e.gw.State() != StateWaitingAddr {
+		t.Fatalf("state left waiting while the address was absent and a listen would succeed: %q", e.gw.State())
+	}
 	open.SetReadDeadline(time.Now().Add(3 * time.Second))
 	if _, err := open.Read(make([]byte, 1)); err == nil {
 		t.Fatal("an established connection survived the listener closing")
@@ -114,5 +113,19 @@ func TestHostHasAddr(t *testing.T) {
 	}
 	if ok, err := hostHasAddr(netip.MustParseAddr("100.64.0.5"), func() ([]net.Addr, error) { return nil, errors.New("x") }); ok || err == nil {
 		t.Error("a listing error is not reported")
+	}
+}
+
+func TestAdmitRefusesConnectionFromBeforeDrop(t *testing.T) {
+	e := newGateway(t, nil)
+	c := &gwConn{info: &connInfo{}, g: e.gw, epoch: e.gw.epoch}
+	if !e.gw.admit(c) {
+		t.Fatal("a current-epoch connection was refused")
+	}
+	e.gw.forget(c)
+	stale := &gwConn{info: &connInfo{}, g: e.gw, epoch: e.gw.epoch}
+	e.gw.dropConns()
+	if e.gw.admit(stale) {
+		t.Fatal("a connection whose handshake began before the listener closed was admitted")
 	}
 }

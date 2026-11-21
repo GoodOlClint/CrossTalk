@@ -665,7 +665,7 @@ func TestK8WaitingForAddressIsOneWarning(t *testing.T) {
 	if failed || len(ls) != 1 || !strings.Contains(ls[0], "K8 crosstalk WARN") {
 		t.Fatalf("failed=%v lines=%q\n%s", failed, ls, out)
 	}
-	for _, want := range []string{"127.0.0.1", "not on this host", "recovers by itself", "remote config --bind"} {
+	for _, want := range []string{"127.0.0.1", "not on this host", "recovers by itself", "remote config --bind", "restart the gateway"} {
 		if !strings.Contains(ls[0], want) {
 			t.Errorf("K8 line lacks %q: %s", want, ls[0])
 		}
