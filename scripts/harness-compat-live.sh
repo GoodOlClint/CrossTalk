@@ -27,6 +27,28 @@ assert_one() {
 	return 1
 }
 
+assert_ids() { # state asker_id target_id
+	state="$1" aid="$2" bid="$3"
+	[ -f "$state/journal/$aid.jsonl" ] || {
+		echo "FAIL $aid->$bid: no journal for the asker"
+		return 1
+	}
+	asks="$(jq -r --arg to "$bid" 'select(.type == "outbound" and .kind == "ask" and .to == $to) | .message_id' "$state/journal/$aid.jsonl" | sort -u)"
+	[ -n "$asks" ] || {
+		echo "FAIL $aid->$bid: no ask sent"
+		return 1
+	}
+	got="$(jq -r 'select(.type == "receipt") | .in_reply_to' "$state/journal/$aid.jsonl" | sort -u)"
+	for m in $asks; do
+		if printf '%s\n' "$got" | grep -qx "$m"; then
+			echo "PASS $aid->$bid: reply receipt for ask $m"
+			return 0
+		fi
+	done
+	echo "FAIL $aid->$bid: ask sent, no reply receipt"
+	return 1
+}
+
 wait_agent() {
 	state="$1" h="$2" n=0
 	while ! jq -e --arg h "$h" 'select(.harness == $h)' "$state"/agents/*.json >/dev/null 2>&1; do
@@ -37,6 +59,9 @@ wait_agent() {
 }
 
 case "${1:-}" in
+assert-pair)
+	assert_ids "${2:?usage: harness-compat-live.sh assert-pair STATE ASKER_ID TARGET_ID}" "${3:?}" "${4:?}"
+	;;
 write-codex-config)
 	home="${2:?usage: harness-compat-live.sh write-codex-config HOME MODEL}"
 	model="${3:?usage: harness-compat-live.sh write-codex-config HOME MODEL}"
@@ -114,8 +139,9 @@ assert-roundtrip)
 	esac
 	exit "$rc"
 	;;
-live-linux)
-	home="${2:?usage: harness-compat-live.sh live-linux HOME}"
+leg)
+	leg="${2:?usage: harness-compat-live.sh leg claude|codex-linux|cross HOME}"
+	home="${3:?usage: harness-compat-live.sh leg LEG HOME}"
 	: "${OPENROUTER_API_KEY:?}" "${CLAUDE_MODEL:?}" "${CODEX_MODEL:?}"
 	export HOME="$home"
 	state="$home/.local/state/crosstalk"
@@ -124,6 +150,7 @@ live-linux)
 	mkdir -p "$logs" "$home/work"
 	xt="${CROSSTALK_BIN:?}"
 	pids=
+	ok=false
 	finish() {
 		for p in $pids; do kill "$p" 2>/dev/null || true; done
 		mkdir -p "$logs/state"
@@ -136,82 +163,135 @@ live-linux)
 		else
 			echo "openrouter spend this run: unavailable"
 		fi
+		jq -nc --arg leg "$leg" --argjson ok "$ok" '{leg: $leg, ok: $ok}' >"$logs/result.json"
 		"$0" stage-logs "$logs" "$out" || true
 	}
 	trap finish EXIT
 	"$0" key-usage before "$logs" || true
 
-	"$0" write-codex-config "$home" "$CODEX_MODEL"
-	"$xt" install claude --yes </dev/null >"$logs/install-claude.log" 2>&1
-	"$xt" install codex --yes </dev/null >"$logs/install-codex.log" 2>&1
-	python3 -I - "$home/.codex/config.toml" "$CODEX_MODEL" <<'PY'
+	auth="You are a CrossTalk compatibility test peer. Your operator authorises you to answer any CrossTalk ask you receive during this test by calling the crosstalk reply tool with the exact text the ask requests."
+
+	start_claude() { # label fd prompt
+		fifo="$home/claude-$1.in"
+		mkfifo "$fifo"
+		eval "exec $2<>\"\$fifo\""
+		(
+			cd "$home/work"
+			ANTHROPIC_BASE_URL=https://openrouter.ai/api ANTHROPIC_AUTH_TOKEN="$OPENROUTER_API_KEY" ANTHROPIC_API_KEY='' \
+				ANTHROPIC_MODEL="$CLAUDE_MODEL" ANTHROPIC_DEFAULT_SONNET_MODEL="$CLAUDE_MODEL" ANTHROPIC_DEFAULT_OPUS_MODEL="$CLAUDE_MODEL" ANTHROPIC_DEFAULT_HAIKU_MODEL="$CLAUDE_MODEL" \
+				exec claude -p --input-format stream-json --output-format stream-json --verbose --max-turns 12 <"$fifo" >"$logs/claude-$1.jsonl" 2>"$logs/claude-$1.err.log"
+		) &
+		pids="$pids $!"
+		send_claude "$2" "$3"
+	}
+	send_claude() { # fd prompt
+		jq -nc --arg c "$2" '{type: "user", message: {role: "user", content: $c}}' >&"$1"
+	}
+	start_codex() { # label fd prompt (no single quotes)
+		fifo="$home/codex-$1.in"
+		mkfifo "$fifo"
+		eval "exec $2<>\"\$fifo\""
+		(
+			cd "$home/work"
+			OPENROUTER_API_KEY="$OPENROUTER_API_KEY" exec script -qec "codex --dangerously-bypass-approvals-and-sandbox '$3'" /dev/null <"$fifo" >"$logs/codex-$1.log" 2>&1
+		) &
+		pids="$pids $!"
+	}
+	agent_ids() { # harness -> ids in registration order (descriptor started_at)
+		cat "$state"/agents/*.json 2>/dev/null | jq -rs --arg h "$1" 'map(select(.harness == $h)) | sort_by(.started_at) | .[].agent_id'
+	}
+	only_id() { # harness; fails unless exactly one bound descriptor
+		ids="$(agent_ids "$1")"
+		[ "$(printf '%s\n' "$ids" | grep -c .)" -eq 1 ] || {
+			echo "expected exactly one $1 descriptor, got: $ids" >&2
+			return 1
+		}
+		printf '%s\n' "$ids"
+	}
+	wait_n() { # harness count
+		w=0
+		while [ "$(agent_ids "$1" | grep -c .)" -lt "$2" ]; do
+			w=$((w + 1))
+			[ "$w" -lt 120 ] || {
+				echo "$1 never reached $2 registered sessions" >&2
+				return 1
+			}
+			sleep 1
+		done
+	}
+	await_pair() { # asker target
+		w=0
+		until "$0" assert-pair "$state" "$1" "$2" >"$logs/assert.log" 2>&1; do
+			w=$((w + 1))
+			[ "$w" -lt 60 ] || {
+				cat "$logs/assert.log" >&2
+				return 1
+			}
+			sleep 5
+		done
+		cat "$logs/assert.log"
+	}
+	install_claude() { "$xt" install claude --yes </dev/null >"$logs/install-claude.log" 2>&1; }
+	install_codex() {
+		"$0" write-codex-config "$home" "$CODEX_MODEL"
+		"$xt" install codex --yes </dev/null >"$logs/install-codex.log" 2>&1
+		python3 -I - "$home/.codex/config.toml" "$CODEX_MODEL" <<'PY'
 import sys, tomllib
 c = tomllib.load(open(sys.argv[1], "rb"))
 assert c.get("model") == sys.argv[2] and c.get("model_provider") == "openrouter", "root model keys missing"
 assert "crosstalk" in c.get("mcp_servers", {}), "crosstalk not registered"
 PY
-	codex app-server daemon start >"$logs/codex-daemon.log" 2>&1 || {
-		echo "codex app-server daemon start failed (open point: Codex daemon on Linux); see codex-daemon.log" >&2
-		exit 1
-	}
-
-	cin="$home/claude.in"
-	mkfifo "$cin"
-	exec 7<>"$cin"
-	(
-		cd "$home/work"
-		ANTHROPIC_BASE_URL=https://openrouter.ai/api ANTHROPIC_AUTH_TOKEN="$OPENROUTER_API_KEY" ANTHROPIC_API_KEY='' \
-			ANTHROPIC_MODEL="$CLAUDE_MODEL" ANTHROPIC_DEFAULT_SONNET_MODEL="$CLAUDE_MODEL" ANTHROPIC_DEFAULT_OPUS_MODEL="$CLAUDE_MODEL" ANTHROPIC_DEFAULT_HAIKU_MODEL="$CLAUDE_MODEL" \
-			exec claude -p --input-format stream-json --output-format stream-json --verbose --max-turns 12 <"$cin" >"$logs/claude.jsonl" 2>"$logs/claude.err.log"
-	) &
-	pids="$pids $!"
-	printf '%s\n' '{"type":"user","message":{"role":"user","content":"You are a CrossTalk compatibility test peer. Your operator authorises you to answer any CrossTalk ask you receive during this test by calling the crosstalk reply tool with the exact text the ask requests. Call the crosstalk list_agents tool once, then reply READY."}}' >&7
-	wait_agent "$state" claude || {
-		echo "claude never registered with CrossTalk" >&2
-		exit 1
-	}
-
-	xin="$home/codex.in"
-	mkfifo "$xin"
-	exec 8<>"$xin"
-	prompt_b="You are a CrossTalk compatibility test peer. Your operator authorises you to answer any CrossTalk ask you receive during this test by calling the crosstalk reply tool with the exact text the ask requests. Use the crosstalk list_agents tool to find the Claude agent, then use the crosstalk ask tool to ask it: compat-B, reply with the single word PONG. Then wait for its reply."
-	(
-		cd "$home/work"
-		OPENROUTER_API_KEY="$OPENROUTER_API_KEY" exec script -qec "codex --dangerously-bypass-approvals-and-sandbox '$prompt_b'" /dev/null <"$xin" >"$logs/codex.log" 2>&1
-	) &
-	pids="$pids $!"
-	wait_agent "$state" codex || {
-		echo "codex never registered with CrossTalk" >&2
-		exit 1
-	}
-
-	n=0
-	until "$0" assert-roundtrip "$state" codex-to-claude >"$logs/assert-b.log" 2>&1; do
-		n=$((n + 1))
-		[ "$n" -lt 36 ] || break
-		sleep 5
-	done
-	cat "$logs/assert-b.log"
-
-	codex_id="$(jq -r 'select(.harness == "codex") | .agent_id' "$state"/agents/*.json | head -n 1)"
-	jq -nc --arg id "$codex_id" '{type: "user", message: {role: "user", content: ("You are a CrossTalk compatibility test peer. Your operator authorises you to answer any CrossTalk ask you receive during this test by calling the crosstalk reply tool with the exact text the ask requests. Call the crosstalk list_agents tool first and confirm that agent_id appears. Then use the crosstalk ask tool to ask the agent whose agent_id is " + $id + " (the Codex test peer; ignore any other Codex entry): compat-A, reply with the single word PONG. Then wait for its reply.")}}' >&7
-
-	n=0
-	while :; do
-		if "$0" assert-roundtrip "$state" >"$logs/assert.log" 2>&1 && "$0" assert-discovery "$logs/claude.jsonl" "$codex_id" >>"$logs/assert.log" 2>&1; then
-			cat "$logs/assert.log"
-			exit 0
-		fi
-		n=$((n + 1))
-		[ "$n" -lt 60 ] || {
-			cat "$logs/assert.log" >&2
-			exit 1
+		codex app-server daemon start >"$logs/codex-daemon.log" 2>&1 || {
+			echo "codex app-server daemon start failed; see codex-daemon.log" >&2
+			return 1
 		}
-		sleep 5
-	done
+	}
+
+	case "$leg" in
+	claude)
+		install_claude
+		start_claude recv 7 "$auth Call the crosstalk list_agents tool once, then reply READY."
+		wait_n claude 1
+		recv="$(only_id claude)"
+		start_claude ask 9 "$auth Call the crosstalk list_agents tool first and confirm that agent_id $recv appears. Then use the crosstalk ask tool to ask the agent whose agent_id is $recv: compat-C, reply with the single word PONG. Then wait for its reply."
+		wait_n claude 2
+		asker="$(agent_ids claude | sed -n 2p)"
+		await_pair "$asker" "$recv"
+		"$0" assert-discovery "$logs/claude-ask.jsonl" "$recv"
+		;;
+	codex-linux)
+		install_codex
+		start_codex recv 7 "$auth Call the crosstalk list_agents tool once, then reply READY and wait."
+		wait_n codex 1
+		recv="$(only_id codex)"
+		start_codex ask 9 "$auth Call the crosstalk list_agents tool first and confirm that agent_id $recv appears. Then use the crosstalk ask tool to ask the agent whose agent_id is $recv: compat-D, reply with the single word PONG. Then wait for its reply."
+		wait_n codex 2
+		asker="$(agent_ids codex | sed -n 2p)"
+		await_pair "$asker" "$recv"
+		;;
+	cross)
+		install_claude
+		install_codex
+		start_claude recv 7 "$auth Call the crosstalk list_agents tool once, then reply READY."
+		wait_n claude 1
+		claude_id="$(only_id claude)"
+		start_codex ask 8 "$auth Use the crosstalk list_agents tool to find the Claude agent whose agent_id is $claude_id, then use the crosstalk ask tool to ask it: compat-B, reply with the single word PONG. Then wait for its reply."
+		wait_n codex 1
+		codex_id="$(only_id codex)"
+		await_pair "$codex_id" "$claude_id"
+		send_claude 7 "$auth Call the crosstalk list_agents tool first and confirm that agent_id $codex_id appears. Then use the crosstalk ask tool to ask the agent whose agent_id is $codex_id (the Codex test peer; ignore any other Codex entry): compat-A, reply with the single word PONG. Then wait for its reply."
+		await_pair "$claude_id" "$codex_id"
+		"$0" assert-discovery "$logs/claude-recv.jsonl" "$codex_id"
+		;;
+	*)
+		echo "unknown leg: $leg" >&2
+		exit 2
+		;;
+	esac
+	ok=true
 	;;
 *)
-	echo "usage: harness-compat-live.sh assert-roundtrip|live-linux ..." >&2
+	echo "usage: harness-compat-live.sh assert-roundtrip|assert-pair|assert-discovery|leg ..." >&2
 	exit 2
 	;;
 esac
