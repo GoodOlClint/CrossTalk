@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"context"
+	"strings"
 	"sync"
 
 	"github.com/GoodOlClint/crosstalk/internal/adapter"
@@ -32,9 +33,12 @@ type Agent struct {
 	harnessName       string
 	// pinned is the name set by rename; while set, the alias only moves toward it.
 	pinned string
-	reg    *registry.Registration
-	j      *journal.Journal
-	replay journal.Replay
+	// pendingNotice holds notices produced when no tool result could carry
+	// them (RegisterSession); the next tool result takes and clears it.
+	pendingNotice string
+	reg           *registry.Registration
+	j             *journal.Journal
+	replay        journal.Replay
 
 	callMu   sync.Mutex
 	draining bool
@@ -118,4 +122,33 @@ func (a *Agent) close() error {
 		}
 	}
 	return nil
+}
+
+func (a *Agent) holdNotice(n string) {
+	if n == "" {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	switch {
+	case a.pendingNotice == "":
+		a.pendingNotice = n
+	case !strings.Contains(a.pendingNotice, n):
+		a.pendingNotice += "; " + n
+	}
+}
+
+// takeNotice returns the held notice joined with n and clears the hold.
+func (a *Agent) takeNotice(n string) string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	p := a.pendingNotice
+	a.pendingNotice = ""
+	switch {
+	case p == "":
+		return n
+	case n == "":
+		return p
+	}
+	return p + "; " + n
 }
