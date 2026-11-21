@@ -307,9 +307,6 @@ func removeTrustRecords(env harness.InstallEnv, hooksFile string, refs []string)
 		t := strings.TrimSpace(l)
 		open := inStr != "" || depth > 0
 		if !open && strings.HasPrefix(t, "[") {
-			if skip && (inStr != "" || depth > 0) {
-				return fmt.Errorf("codex config %s: the trust record for the removed hook ends inside an unclosed array or string; fix or delete it by hand and retry", path)
-			}
 			out = append(out, pending...)
 			pending, skip = nil, drop[t]
 			changed = changed || skip
