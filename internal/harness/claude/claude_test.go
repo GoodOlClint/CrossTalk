@@ -458,7 +458,7 @@ func TestEnvelopeNoticeByClass(t *testing.T) {
 }
 
 func TestNoticeHoldsNoEnvelopeMetacharacters(t *testing.T) {
-	for _, c := range []msg.NoticeClass{msg.NoticeTeammate, msg.NoticeInfo, msg.NoticeCopy, msg.NoticeOutbound, ""} {
+	for _, c := range []msg.NoticeClass{msg.NoticeTeammate, msg.NoticeTeammateAgain, msg.NoticeInfo, msg.NoticeCopy, msg.NoticeOutbound, ""} {
 		for _, h := range []string{"claude", "codex", ""} {
 			if n := msg.PeerNotice(c, h); strings.ContainsAny(n, `"<>&`) {
 				t.Errorf("notice %q/%q is used unescaped in an attribute: %q", c, h, n)

@@ -913,6 +913,9 @@ func entryNoticeClass(e receiver.Entry) msg.NoticeClass {
 	case e.InboxCopy:
 		return msg.NoticeCopy
 	case mcpserver.IsAgentID(e.Sender):
+		if e.PossiblySeen || e.State == string(adapter.Unknown) {
+			return msg.NoticeTeammateAgain
+		}
 		return msg.NoticeTeammate
 	}
 	return msg.NoticeInfo

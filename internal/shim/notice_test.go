@@ -28,6 +28,21 @@ func TestPulledEntryNoticeClassByProvenance(t *testing.T) {
 		{"inbound local-user", entry(receiver.DirectionInbound, receiver.PrincipalLocalUser, false), msg.NoticeInfo},
 		{"inbound remote", entry(receiver.DirectionInbound, remote, false), msg.NoticeInfo},
 		{"inbound inbox copy", entry(receiver.DirectionInbound, agentID, true), msg.NoticeCopy},
+		{"first delivery mailboxed", func() receiver.Entry {
+			e := entry(receiver.DirectionInbound, agentID, false)
+			e.State = string(adapter.Mailboxed)
+			return e
+		}(), msg.NoticeTeammate},
+		{"unknown state", func() receiver.Entry {
+			e := entry(receiver.DirectionInbound, agentID, false)
+			e.State = string(adapter.Unknown)
+			return e
+		}(), msg.NoticeTeammateAgain},
+		{"possibly seen", func() receiver.Entry {
+			e := entry(receiver.DirectionInbound, agentID, false)
+			e.PossiblySeen = true
+			return e
+		}(), msg.NoticeTeammateAgain},
 		{"bounced native reply under own agent id", func() receiver.Entry {
 			e := entry(receiver.DirectionInbound, agentID, false)
 			e.State = string(adapter.Bounced)
@@ -50,9 +65,18 @@ func TestPulledEntryNoticeClassByProvenance(t *testing.T) {
 			if !strings.Contains(n, msg.PeerNotice(tc.class, "")) {
 				t.Errorf("%s: notice %q does not carry the %s text", tc.name, n, tc.class)
 			}
-			if tc.class != msg.NoticeTeammate && strings.Contains(n, "teammate") {
+			if tc.class != msg.NoticeTeammate && tc.class != msg.NoticeTeammateAgain && strings.Contains(n, "teammate") {
 				t.Errorf("%s: notice names a teammate: %q", tc.name, n)
 			}
 		}
+	}
+}
+
+func TestTeammateAgainNoticeAddsCheckSentence(t *testing.T) {
+	base := msg.PeerNotice(msg.NoticeTeammate, "codex")
+	again := msg.PeerNotice(msg.NoticeTeammateAgain, "codex")
+	const tail = " This message may have reached you before: check whether you already acted on its message_id before you act again."
+	if again != base+tail {
+		t.Errorf("teammate_again = %q", again)
 	}
 }
