@@ -177,7 +177,8 @@ One limit: the Linux release binary is built without cgo (the C library bridge),
 - **All addresses.** The gateway never waits for an address: it listens on every address that exists now and later.
 - **What peers dial.** Peers dial the advertise value, not the bind. If it is a name or a tailnet IP that survives the move, nothing changes for them and nobody pairs again.
 - **What still needs pairing again.** Changing the advertise address or the port, because peers hold the old one: `config` prints `peers still dial the old address: pair again with <aliases>`, and you run `remote pair` and `remote join` again for each. Using a bind IP as the address (the fixed-IP setup) and moving to a new IP is this case. A deleted or replaced host key (`uninstall --purge`) also needs every peer paired again. A change of the bind address does not, as long as an advertise value is set and unchanged.
-- Not built: a host telling its peers about a new address by itself. Peers learn an address only from pairing.
+- **The nudge.** When `crosstalk remote config` changes the advertise address or the port, it sends one message to every session on this host and to every CrossTalk session on each paired host that it can reach, saying the gateway address changed. The messages say they come from `remote config`, not from a session, and ask nothing. A paired host that is off or unreachable from this host gets nothing, and an address that changes without `remote config` (DHCP under an unchanged bind) is not noticed.
+- Not built: a host telling its peers a new address they can use by itself. Peers learn an address only from pairing.
 
 ### Address a session on another host
 

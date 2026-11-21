@@ -15,9 +15,12 @@ import (
 	"time"
 
 	"github.com/GoodOlClint/crosstalk/internal/mcpserver"
+	"github.com/GoodOlClint/crosstalk/internal/msg"
 	"github.com/GoodOlClint/crosstalk/internal/registry"
 	"github.com/GoodOlClint/crosstalk/internal/remote"
 	"github.com/GoodOlClint/crosstalk/internal/shim"
+	"github.com/GoodOlClint/crosstalk/internal/udsingress"
+	"github.com/GoodOlClint/crosstalk/internal/wire"
 )
 
 const remoteUsage = `usage: crosstalk remote <command>
@@ -436,7 +439,12 @@ func (f cfgFlags) write(dir string, rePair []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	next, err := remote.UpdateConfig(dir, f.apply)
+	var prev remote.Config
+	var had bool
+	next, err := remote.UpdateConfig(dir, func(o remote.Config, configured bool) (remote.Config, error) {
+		prev, had = o, configured
+		return f.apply(o, configured)
+	})
 	if err != nil {
 		return err
 	}
@@ -444,7 +452,56 @@ func (f cfgFlags) write(dir string, rePair []string, stdout io.Writer) error {
 	if len(rePair) > 0 {
 		fmt.Fprintf(stdout, "peers still dial the old address: pair again with %s\n", strings.Join(rePair, ", "))
 	}
+	if remote.AddressChanged(prev, next, had) {
+		r := addressNudge(dir, prev, next)
+		fmt.Fprintf(stdout, "told %d sessions on this host and paired hosts that the gateway address changed; %d not told (a paired host that is off or unreachable gets nothing)\n", r.Sent, r.Missed)
+	}
 	return nil
+}
+
+var addressNudge = sendAddressNudge
+
+type udsSendFunc func(path, text string, timeout time.Duration) (udsingress.Ack, error)
+
+// localNudgeSender counts a send as delivered only when the session accepted
+// or queued it, as `crosstalk send` does.
+func localNudgeSender(send udsSendFunc) func(registry.Descriptor, string) error {
+	return func(d registry.Descriptor, text string) error {
+		ack, err := send(d.UDSPath, text, 5*time.Second)
+		if err != nil {
+			return err
+		}
+		if ack.State != "accepted" && ack.State != "queued" {
+			return fmt.Errorf("session answered %q %s", ack.State, ack.Reason)
+		}
+		return nil
+	}
+}
+
+func sendAddressNudge(dir string, old, next remote.Config) remote.NudgeResult {
+	host, err := remote.LoadHost(dir)
+	if err != nil {
+		return remote.NudgeResult{}
+	}
+	peers, _ := remote.NewPeers(dir).List()
+	var locals []registry.Descriptor
+	if state, err := registry.DefaultDir(); err == nil {
+		locals, _ = registry.New(state).List()
+	}
+	w := new(wire.Wire)
+	return remote.SendAddressNudge(context.Background(), remote.NudgeDeps{
+		Locals:    locals,
+		SendLocal: localNudgeSender(udsingress.Send),
+		Host:      host,
+		Peers:     peers,
+		Rows: func(ctx context.Context, h remote.Host, p remote.Peer) ([]remote.AgentRow, error) {
+			return remote.NewClient(h, p).Agents(ctx)
+		},
+		SendRemote: func(ctx context.Context, from registry.Descriptor, h remote.Host, p remote.Peer, agentID string, m msg.Message) error {
+			_, _, err := w.SendRemote(ctx, from, h, p, agentID, m)
+			return err
+		},
+	}, next.Alias, old, next)
 }
 
 type errUsage string
