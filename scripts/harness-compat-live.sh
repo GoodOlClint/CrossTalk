@@ -79,13 +79,11 @@ files = [f for f in glob.glob(root + "/**/rollout-*.jsonl", recursive=True) if f
 for f in files:
     for line in open(f, errors="replace"):
         try:
-            item = json.loads(line).get("payload", {}).get("item") or {}
+            payload = json.loads(line).get("payload", {})
         except ValueError:
             continue
-        if item.get("type") == "AgentMessage" and item.get("phase") != "commentary":
-            text = " ".join(c.get("text", "") for c in item.get("content", []) if isinstance(c, dict))
-            if "READY" in text:
-                sys.exit(0)
+        if payload.get("type") == "task_complete":
+            sys.exit(0)
 sys.exit(1)
 PY
 	;;
@@ -349,12 +347,12 @@ leg)
 		) &
 		pids="$pids $!"
 	}
-	await_ready() { # session_ref: the tab's first turn has finished (a final READY answer is in its rollout)
+	await_ready() { # session_ref: the tab's first turn has finished (a task_complete event is in its rollout; model prose is never matched)
 		w=0
 		until "$0" rollout-ready "$home/.codex/sessions" "$1" >/dev/null 2>&1; do
 			w=$((w + 1))
 			[ "$w" -lt 36 ] || {
-				echo "the Codex tab never finished its first turn" >&2
+				echo "timed out after 180 s waiting for a task_complete event in the rollout of thread $1 (its first turn never finished)" >&2
 				return 1
 			}
 			sleep 5
@@ -455,7 +453,7 @@ PY
 		start_claude send 7 "$auth Call the crosstalk list_agents tool once, then reply READY."
 		wait_n claude 1
 		claude_id="$(only_id claude)"
-		start_codex_nd tab 8 "$auth Call the crosstalk list_agents tool once, then reply READY."
+		start_codex_nd tab 8 "$auth Call the crosstalk list_agents tool once, then finish your turn with one short sentence."
 		wait_n codex 1
 		codex_id="$(only_id codex)"
 		await_ready "$(session_of "$codex_id")"

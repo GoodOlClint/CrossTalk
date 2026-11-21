@@ -728,11 +728,15 @@ func TestHarnessCompatPtyrun(t *testing.T) {
 			t.Errorf("ptyrun matches %q, which the captured Codex dialog does not contain", m[1])
 		}
 	}
-	prog := filepath.Join(t.TempDir(), "dialog.sh")
-	script := "#!/bin/sh\ncat '" + filepath.Join(root, "scripts", "testdata", "codex-hooks-dialog.txt") + "'\nread -r answer\necho \"ANSWER=$answer\"\nread -r more\necho \"MORE=$more\"\n"
-	if err := os.WriteFile(prog, []byte(script), 0o755); err != nil {
+	// The fake program is Python, not a shell script: dash's read builtin did not return for a second line typed on a pty.
+	prog := filepath.Join(t.TempDir(), "dialog.py")
+	script := "import sys\nsys.stdout.write(open(sys.argv[1]).read())\nsys.stdout.flush()\n" +
+		"a = sys.stdin.readline().strip()\nprint('ANSWER=' + a, flush=True)\n" +
+		"m = sys.stdin.readline().strip()\nprint('MORE=' + m, flush=True)\n"
+	if err := os.WriteFile(prog, []byte(script), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	fixtureTxt := filepath.Join(root, "scripts", "testdata", "codex-hooks-dialog.txt")
 	run := func(home, cwd string, extraEnv ...string) string {
 		dir := t.TempDir()
 		fifo := filepath.Join(dir, "in")
@@ -740,7 +744,7 @@ func TestHarnessCompatPtyrun(t *testing.T) {
 			t.Fatal(err)
 		}
 		logf := filepath.Join(dir, "log")
-		cmd := exec.Command(filepath.Join(root, "scripts", "ptyrun.py"), logf, fifo, prog)
+		cmd := exec.Command(filepath.Join(root, "scripts", "ptyrun.py"), logf, fifo, "python3", prog, fixtureTxt)
 		var env []string
 		for _, kv := range os.Environ() {
 			if !strings.HasPrefix(kv, "CODEX_HOME=") && !strings.HasPrefix(kv, "RUNNER_TEMP=") && !strings.HasPrefix(kv, "HOME=") {
@@ -752,11 +756,24 @@ func TestHarnessCompatPtyrun(t *testing.T) {
 		if err := cmd.Start(); err != nil {
 			t.Fatal(err)
 		}
-		time.Sleep(2 * time.Second)
+		// Poll the log instead of sleeping: a race-enabled CI run is slow, and a fixed sleep killed the program mid-output.
+		waitFor := func(substr string, limit time.Duration) bool {
+			for end := time.Now().Add(limit); time.Now().Before(end); time.Sleep(100 * time.Millisecond) {
+				if b, _ := os.ReadFile(logf); strings.Contains(string(b), substr) {
+					return true
+				}
+			}
+			return false
+		}
+		waitFor("enter confirm", 15*time.Second)
+		// A refusal writes its note as soon as the driver starts, so look for that first; only an answering driver needs the long wait.
+		if !waitFor("not a disposable", 1500*time.Millisecond) {
+			waitFor("ANSWER=2", 15*time.Second)
+		}
 		f, _ := os.OpenFile(fifo, os.O_RDWR, 0)
 		f.WriteString("typed\r")
 		f.Close()
-		time.Sleep(1 * time.Second)
+		waitFor("MORE=typed", 4*time.Second)
 		_ = cmd.Process.Signal(syscall.SIGTERM)
 		_ = cmd.Wait()
 		b, _ := os.ReadFile(logf)
@@ -939,30 +956,37 @@ func TestHarnessCompatMacosLegHelpers(t *testing.T) {
 		}
 	})
 
-	t.Run("rollout-ready needs a non-commentary READY answer in that session's rollout", func(t *testing.T) {
+	t.Run("rollout-ready needs a task_complete event in that session's own rollout, never model text", func(t *testing.T) {
 		if _, err := exec.LookPath("python3"); err != nil {
 			t.Skip("python3 not on PATH")
 		}
-		msg := func(kind, phase, text string) string {
-			b, _ := json.Marshal(map[string]any{"payload": map[string]any{"type": "item_completed", "item": map[string]any{"type": kind, "phase": phase, "content": []map[string]any{{"type": "Text", "text": text}}}}})
+		// Shapes from a live Codex 0.167.0 rollout: payload-level task_started and task_complete events.
+		event := func(kind string) string {
+			b, _ := json.Marshal(map[string]any{"payload": map[string]any{"type": kind, "turn_id": "t1", "last_agent_message": "READY"}})
+			return string(b) + "\n"
+		}
+		answer := func(text string) string {
+			b, _ := json.Marshal(map[string]any{"payload": map[string]any{"type": "item_completed", "item": map[string]any{"type": "AgentMessage", "phase": "final_answer", "content": []map[string]any{{"type": "Text", "text": text}}}}})
 			return string(b) + "\n"
 		}
 		cases := map[string]struct {
-			body string
-			ok   bool
+			files map[string]string
+			ok    bool
 		}{
-			"final READY":                   {msg("AgentMessage", "final_answer", "READY"), true},
-			"READY only in the user prompt": {msg("UserMessage", "", "reply READY"), false},
-			"commentary mentioning READY":   {msg("AgentMessage", "commentary", "I will reply READY"), false},
-			"no answer yet":                 {msg("AgentMessage", "commentary", "working"), false},
+			"the turn completed":                      {map[string]string{"th1": event("task_started") + answer("anything at all") + event("task_complete")}, true},
+			"the turn only started":                   {map[string]string{"th1": event("task_started")}, false},
+			"a READY answer without a completed turn": {map[string]string{"th1": event("task_started") + answer("READY")}, false},
+			"another session's turn completed":        {map[string]string{"other": event("task_complete"), "th1": event("task_started")}, false},
 		}
 		for name, c := range cases {
 			dir := filepath.Join(t.TempDir(), "2026", "11", "21")
 			if err := os.MkdirAll(dir, 0o755); err != nil {
 				t.Fatal(err)
 			}
-			if err := os.WriteFile(filepath.Join(dir, "rollout-2026-11-21T01-00-00-th1.jsonl"), []byte(c.body), 0o644); err != nil {
-				t.Fatal(err)
+			for ref, body := range c.files {
+				if err := os.WriteFile(filepath.Join(dir, "rollout-2026-11-21T01-00-00-"+ref+".jsonl"), []byte(body), 0o644); err != nil {
+					t.Fatal(err)
+				}
 			}
 			err := exec.Command(script, "rollout-ready", filepath.Dir(filepath.Dir(filepath.Dir(dir))), "th1").Run()
 			if (err == nil) != c.ok {
@@ -1114,4 +1138,27 @@ func TestHarnessCompatMacosLegRunsHookBypassOnlyInAScratchHome(t *testing.T) {
 			t.Errorf("nothing may be copied into the logs: %v", got)
 		}
 	})
+}
+
+func TestHarnessCompatLegNeverKeysOnModelProse(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join(releaseRepoRoot(t), "scripts", "harness-compat-live.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, line := range strings.Split(string(b), "\n") {
+		l := strings.TrimSpace(line)
+		// The words the prompts use may appear only inside a prompt handed to a session, never in a check.
+		for _, word := range []string{"READY", "PONG"} {
+			if strings.Contains(l, word) && !strings.HasPrefix(l, "start_claude ") && !strings.HasPrefix(l, "start_codex ") && !strings.HasPrefix(l, "start_codex_nd ") && !strings.Contains(l, "compat-") {
+				t.Errorf("line %d matches model prose (%s) outside a prompt: %s", i+1, word, l)
+			}
+		}
+		// A queue-wake tab legitimately shows reachable false and an empty status, so no check may depend on them.
+		if strings.Contains(l, "reachable") || strings.Contains(l, ".status") {
+			t.Errorf("line %d depends on a reachable or status field: %s", i+1, l)
+		}
+	}
+	if !strings.Contains(string(b), "waiting for a task_complete event in the rollout of thread") {
+		t.Error("await_ready's timeout must name what it waited for")
+	}
 }
