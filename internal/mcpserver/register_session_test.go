@@ -90,3 +90,33 @@ func TestRegisterSession_NoticeReachesNextToolResultOnce(t *testing.T) {
 		t.Fatalf("notice repeated on the second call: %v", n)
 	}
 }
+
+func TestRegisterSession_NoticeReachesListAgentsOnce(t *testing.T) {
+	fb := NewFakeBackend()
+	fb.SetSessions(
+		Session{Harness: "codex", SessionRef: "01a1a3c0-a", Name: "dup", Cwd: "/w/proj"},
+		Session{Harness: "codex", SessionRef: "01a1a3c0-b", Name: "dup", Cwd: "/w/proj"},
+	)
+	e := newEnv(t, 999999, fb)
+	e.mustOK(thread("01a1a3c0-a"), "send_message", sendArgs("x", "1"))
+	if err := e.srv.RegisterSession(context.Background(), harness.RequestContext{Meta: thread("01a1a3c0-b")}, "/w/proj"); err != nil {
+		t.Fatal(err)
+	}
+	first := e.mustOK(thread("01a1a3c0-b"), "list_agents", map[string]any{})
+	if n, _ := first["notice"].(string); !strings.Contains(n, "held") {
+		t.Fatalf("list_agents after RegisterSession has no held notice: %v", first)
+	}
+	if n, ok := e.mustOK(thread("01a1a3c0-b"), "list_agents", map[string]any{})["notice"]; ok {
+		t.Fatalf("notice repeated: %v", n)
+	}
+}
+
+func TestHoldNotice_RepeatedTextNotAccumulated(t *testing.T) {
+	a := &Agent{}
+	a.holdNotice("x")
+	a.holdNotice("x")
+	a.holdNotice("y")
+	if got := a.takeNotice(""); got != "x; y" {
+		t.Fatalf("got %q", got)
+	}
+}

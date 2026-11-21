@@ -79,11 +79,11 @@ type RemoteLister interface {
 func (s *Server) listAgentsTool(ctx context.Context, req *mcp.CallToolRequest, _ listIn) (*mcp.CallToolResult, any, error) {
 	var notice, self string
 	if c, err := s.resolve(ctx, req); err == nil && c.bound() {
-		if a, n, e := s.agent(ctx, c, true); e != nil {
+		if a, e := s.agent(ctx, c, true); e != nil {
 			notice = "not registered: " + describe(e)
 		} else {
 			a.Done()
-			notice, self = n, a.ID()
+			notice, self = a.takeNotice(""), a.ID()
 		}
 	}
 	var remote chan RemoteListing

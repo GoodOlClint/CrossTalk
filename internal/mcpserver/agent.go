@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"context"
+	"strings"
 	"sync"
 
 	"github.com/GoodOlClint/crosstalk/internal/adapter"
@@ -129,10 +130,12 @@ func (a *Agent) holdNotice(n string) {
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	if a.pendingNotice != "" {
-		n = a.pendingNotice + "; " + n
+	switch {
+	case a.pendingNotice == "":
+		a.pendingNotice = n
+	case !strings.Contains(a.pendingNotice, n):
+		a.pendingNotice += "; " + n
 	}
-	a.pendingNotice = n
 }
 
 // takeNotice returns the held notice joined with n and clears the hold.

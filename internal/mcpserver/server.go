@@ -235,12 +235,12 @@ func (s *Server) Close() error {
 // call, with the call admitted: the caller must call a.calls.Done. A call that
 // finds its agent's registration still running gets not_ready; it never waits
 // on or binds to another caller's registration.
-func (s *Server) agent(ctx context.Context, c caller, viaCall bool) (*Agent, string, *Error) {
+func (s *Server) agent(ctx context.Context, c caller, viaCall bool) (*Agent, *Error) {
 	id := identity.AgentID(string(c.harness), c.sessionRef)
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()
-		return nil, "", &Error{Code: CodeNotReady, Reason: "shutting_down"}
+		return nil, &Error{Code: CodeNotReady, Reason: "shutting_down"}
 	}
 	a, ok := s.agents[id]
 	if !ok {
@@ -255,26 +255,28 @@ func (s *Server) agent(ctx context.Context, c caller, viaCall bool) (*Agent, str
 			s.mu.Unlock()
 			a.err = err
 			close(a.ready)
-			return nil, "", toolError(err)
+			return nil, toolError(err)
 		}
 		a.Admit()
+		a.holdNotice(notice)
 		close(a.ready)
-		return a, notice, nil
+		return a, nil
 	}
 	a.viaCall = a.viaCall || viaCall
 	s.mu.Unlock()
 	select {
 	case <-a.ready:
 	default:
-		return nil, "", &Error{Code: CodeNotReady, Reason: "binding_in_progress"}
+		return nil, &Error{Code: CodeNotReady, Reason: "binding_in_progress"}
 	}
 	if a.err != nil {
-		return nil, "", &Error{Code: CodeNotReady, Reason: "binding_failed"}
+		return nil, &Error{Code: CodeNotReady, Reason: "binding_failed"}
 	}
 	if !a.Admit() {
-		return nil, "", &Error{Code: CodeNotReady, Reason: "agent_retiring"}
+		return nil, &Error{Code: CodeNotReady, Reason: "agent_retiring"}
 	}
-	return a, s.followRename(a, c), nil
+	a.holdNotice(s.followRename(a, c))
+	return a, nil
 }
 
 // register runs the §3 order: agent and alias locks, journal replay, Binder,
@@ -521,9 +523,8 @@ func (s *Server) RegisterSession(ctx context.Context, req harness.RequestContext
 		c.cwd = cwd
 	}
 	for {
-		a, notice, e := s.agent(ctx, c, false)
+		a, e := s.agent(ctx, c, false)
 		if e == nil {
-			a.holdNotice(notice)
 			a.Done()
 			return nil
 		}
@@ -581,7 +582,7 @@ func boundTool[In any](s *Server, t *mcp.Tool, h func(context.Context, *Agent, I
 		if !c.bound() {
 			return errResult(&Error{Code: CodeUnbound, Reason: "no harness claims this call"})
 		}
-		a, notice, e := s.agent(ctx, c, true)
+		a, e := s.agent(ctx, c, true)
 		if e != nil {
 			return errResult(e)
 		}
@@ -590,7 +591,7 @@ func boundTool[In any](s *Server, t *mcp.Tool, h func(context.Context, *Agent, I
 		if err != nil {
 			return errResult(toolError(err))
 		}
-		return nil, withNotice(withHint(out), a.takeNotice(notice)), nil
+		return nil, withNotice(withHint(out), a.takeNotice("")), nil
 	})
 }
 
