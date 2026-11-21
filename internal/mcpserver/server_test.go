@@ -18,6 +18,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/GoodOlClint/crosstalk/internal/adapter"
+	"github.com/GoodOlClint/crosstalk/internal/harness/claude"
 	"github.com/GoodOlClint/crosstalk/internal/identity"
 	"github.com/GoodOlClint/crosstalk/internal/journal"
 	"github.com/GoodOlClint/crosstalk/internal/registry"
@@ -31,6 +32,7 @@ type env struct {
 	fb         *FakeBackend
 	srv        *Server
 	cs         *mcp.ClientSession
+	tune       []func(*claude.HarnessOptions)
 }
 
 func newEnv(t *testing.T, ppid int, fb *FakeBackend) *env {
@@ -49,7 +51,7 @@ func newEnv(t *testing.T, ppid int, fb *FakeBackend) *env {
 func (e *env) start(ppid int) {
 	t := e.t
 	e.reg = registry.New(e.stateDir)
-	hs := testHarnesses(t, e.sessionDir)
+	hs := testHarnesses(t, e.sessionDir, e.tune...)
 	e.fb.Harnesses = hs[1:]
 	e.srv = New(Options{Backend: e.fb.AsBackend(), Registry: e.reg, Harnesses: hs, PPID: ppid})
 	st, ct := mcp.NewInMemoryTransports()

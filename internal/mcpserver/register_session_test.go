@@ -120,3 +120,12 @@ func TestHoldNotice_RepeatedTextNotAccumulated(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+func TestHoldNotice_SubstringOfHeldTextStillKept(t *testing.T) {
+	a := &Agent{}
+	a.holdNotice(`registered as "dup-1": harness name "dup" is held by another live agent`)
+	a.holdNotice("held")
+	if got := a.takeNotice(""); !strings.HasSuffix(got, "; held") {
+		t.Fatalf("got %q", got)
+	}
+}

@@ -12,9 +12,13 @@ import (
 func itoa(i int) string { return strconv.Itoa(i) }
 
 // testHarnesses is the production order: Codex, then Claude on sessionDir.
-func testHarnesses(t *testing.T, sessionDir string) []harness.Harness {
+func testHarnesses(t *testing.T, sessionDir string, tune ...func(*claude.HarnessOptions)) []harness.Harness {
 	t.Helper()
-	ch, err := claude.NewHarness(claude.HarnessOptions{SessionsDir: sessionDir, Alive: func(pid int) bool { return pid > 0 && pid < 900000 }})
+	o := claude.HarnessOptions{SessionsDir: sessionDir, Alive: func(pid int) bool { return pid > 0 && pid < 900000 }}
+	for _, f := range tune {
+		f(&o)
+	}
+	ch, err := claude.NewHarness(o)
 	if err != nil {
 		t.Fatal(err)
 	}
