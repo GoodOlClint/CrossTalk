@@ -250,7 +250,7 @@ func TestRemotePairCLI(t *testing.T) {
 	if code, _, errb := remoteRun(t, false, "pair"); code != 2 || !strings.Contains(errb, "not configured") {
 		t.Fatalf("pair with no config: %d %q, want 2", code, errb)
 	}
-	if code, _, _ := remoteRun(t, false, "config", "--bind", "127.0.0.1", "--alias", "alpha", "--yes"); code != 0 {
+	if code, _, _ := remoteRun(t, false, "config", "--bind", "127.0.0.1", "--advertise", "alpha.tail1234.ts.net", "--alias", "alpha", "--yes"); code != 0 {
 		t.Fatal("config failed")
 	}
 	if code, _, errb := remoteRun(t, false, "pair"); code != 1 || !strings.Contains(errb, "no gateway running") {
@@ -295,9 +295,10 @@ func TestRemotePairCLI(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if tok.Fingerprint != host.Fingerprint || tok.Address != "127.0.0.1" || tok.Port != 7745 {
-		t.Fatalf("token %+v", tok)
+	if tok.Fingerprint != host.Fingerprint || tok.Address != "alpha.tail1234.ts.net" || tok.Port != 7745 {
+		t.Fatalf("token %+v, want the advertise address", tok)
 	}
+	tok.Address = "127.0.0.1"
 	tok.Port = gw.Addr().(*net.TCPAddr).Port
 
 	bdir := filepath.Join(t.TempDir(), "crosstalk")
@@ -343,5 +344,34 @@ func TestRegisteredA2AURL(t *testing.T) {
 		if u, ok := lookup(id); ok {
 			t.Fatalf("%s resolved to %q", name, u)
 		}
+	}
+}
+
+func TestRemoteConfigAdvertiseCLI(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+
+	code, out, errs := remoteRun(t, false, "config", "--bind", "127.0.0.1", "--yes")
+	if code != 0 || !strings.Contains(out, "advertise:   127.0.0.1") {
+		t.Fatalf("single-address default: %d %q %q", code, out, errs)
+	}
+	for _, bad := range []string{"0.0.0.0", "::", "*", "a b", "https://box.local"} {
+		if code, _, errs := remoteRun(t, false, "config", "--advertise", bad, "--yes"); code != 2 || !strings.Contains(errs, "--advertise") {
+			t.Errorf("--advertise %q: exit %d %q, want 2", bad, code, errs)
+		}
+	}
+	dir := filepath.Join(home, ".config", "crosstalk")
+	if err := remote.NewPeers(dir).Upsert(remote.Peer{Alias: "lap", Address: "10.0.0.2:7745", Fingerprint: strings.Repeat("e", 64)}); err != nil {
+		t.Fatal(err)
+	}
+	code, out, errs = remoteRun(t, false, "config", "--advertise", "Desk.Tail1234.ts.net", "--yes")
+	if code != 0 || !strings.Contains(out, "advertise:   desk.tail1234.ts.net") || !strings.Contains(out, "pair again with lap") {
+		t.Fatalf("advertise a name: %d %q %q", code, out, errs)
+	}
+	if code, out, _ = remoteRun(t, false, "config"); code != 0 || !strings.Contains(out, "bind:        127.0.0.1") || !strings.Contains(out, "advertise:   desk.tail1234.ts.net") {
+		t.Fatalf("read: %d %q", code, out)
+	}
+	if code, _, errs := remoteRun(t, false, "config", "--bind", "0.0.0.0", "--force", "--yes"); code != 2 {
+		t.Fatalf("wildcard bind still refused: %d %q", code, errs)
 	}
 }

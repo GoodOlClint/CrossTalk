@@ -4,6 +4,7 @@
 package remote
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -65,6 +66,7 @@ type Config struct {
 	Version    int    `json:"version"`
 	Alias      string `json:"alias"`
 	Bind       string `json:"bind"`
+	Advertise  string `json:"advertise,omitempty"`
 	Port       int    `json:"port"`
 	UnitSHA256 string `json:"unit_sha256,omitempty"`
 }
@@ -340,6 +342,81 @@ func DefaultAlias() string {
 	return h
 }
 
+// AdvertiseAddr is the address peers are told to dial: Advertise, or Bind when
+// none is set.
+func (c Config) AdvertiseAddr() string {
+	if c.Advertise != "" {
+		return c.Advertise
+	}
+	return c.Bind
+}
+
+var dnsLabelRE = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$`)
+
+// ValidHost accepts a unicast IP or a syntactically valid DNS name. It is a
+// peer-facing address, never a bind address: wildcard, multicast, zones,
+// schemes, paths, ports and whitespace are refused.
+func ValidHost(s string) (string, error) {
+	if a, err := netip.ParseAddr(s); err == nil {
+		a, err = checkBindClass(s)
+		if err != nil {
+			return "", err
+		}
+		return a.String(), nil
+	}
+	h := strings.TrimSuffix(s, ".")
+	if h == "" || s == "." || len(h) > 253 {
+		return "", fmt.Errorf("%q is not an IP address or a DNS name", s)
+	}
+	labels := strings.Split(h, ".")
+	for _, l := range labels {
+		if !dnsLabelRE.MatchString(l) {
+			return "", fmt.Errorf("%q is not an IP address or a DNS name", s)
+		}
+	}
+	if top := labels[len(labels)-1]; strings.Trim(top, "0123456789") == "" {
+		return "", fmt.Errorf("%q is not an IP address or a DNS name (the last label is all digits)", s)
+	}
+	return strings.ToLower(s), nil
+}
+
+// LookupHost resolves a peer's DNS name at connect time; tests replace it.
+var LookupHost = net.DefaultResolver.LookupHost
+
+var dialOne = func(ctx context.Context, network, addr string) (net.Conn, error) {
+	return (&net.Dialer{}).DialContext(ctx, network, addr)
+}
+
+// DialPeer dials addr (host:port). A DNS name is resolved on every call, so a
+// peer whose name keeps its fingerprint but changes address needs no re-pair.
+func DialPeer(ctx context.Context, network, addr string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := netip.ParseAddr(host); err == nil {
+		return dialOne(ctx, network, addr)
+	}
+	ips, err := LookupHost(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	var last error = fmt.Errorf("no address for %s", host)
+	for i, ip := range ips {
+		actx, cancel := ctx, context.CancelFunc(func() {})
+		if dl, ok := ctx.Deadline(); ok {
+			actx, cancel = context.WithTimeout(ctx, time.Until(dl)/time.Duration(len(ips)-i))
+		}
+		c, err := dialOne(actx, network, net.JoinHostPort(ip, port))
+		cancel()
+		if err == nil {
+			return c, nil
+		}
+		last = err
+	}
+	return nil, last
+}
+
 func checkBindClass(s string) (netip.Addr, error) {
 	a, err := netip.ParseAddr(s)
 	if err != nil || a.Zone() != "" {
@@ -407,6 +484,11 @@ func validateConfig(c Config) error {
 	}
 	if _, err := checkBindClass(c.Bind); err != nil {
 		return fmt.Errorf("bind: %w", err)
+	}
+	if c.Advertise != "" {
+		if _, err := ValidHost(c.Advertise); err != nil {
+			return fmt.Errorf("advertise: %w", err)
+		}
 	}
 	if c.Port < 1 || c.Port > 65535 {
 		return fmt.Errorf("port %d outside 1-65535", c.Port)

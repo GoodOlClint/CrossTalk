@@ -26,6 +26,7 @@ type statusReport struct {
 	GatewayState string       `json:"gateway_state"`
 	Alias        string       `json:"alias"`
 	Bind         string       `json:"bind"`
+	Advertise    string       `json:"advertise"`
 	Port         int          `json:"port"`
 	Fingerprint  string       `json:"fingerprint"`
 	LoginUnit    string       `json:"login_unit"`
@@ -88,7 +89,7 @@ func runRemoteStatus(args []string, stdout, stderr io.Writer) int {
 	if err != nil {
 		return fail(err)
 	}
-	rep.Alias, rep.Bind, rep.Port, rep.Fingerprint = cfg.Alias, cfg.Bind, cfg.Port, host.Fingerprint
+	rep.Alias, rep.Bind, rep.Advertise, rep.Port, rep.Fingerprint = cfg.Alias, cfg.Bind, cfg.AdvertiseAddr(), cfg.Port, host.Fingerprint
 	if rep.GatewayState, err = remote.GatewayStatus(state, cfg, host.Fingerprint); err != nil {
 		return fail(err)
 	}
@@ -117,7 +118,7 @@ func printStatus(r statusReport, unit string, asJSON bool, stdout, stderr io.Wri
 	} else {
 		fmt.Fprintf(stdout, "gateway: %s\n", r.GatewayState)
 		if r.Alias != "" {
-			fmt.Fprintf(stdout, "alias: %s\nbind: %s\nport: %d\nfingerprint: %s\n", r.Alias, r.Bind, r.Port, r.Fingerprint)
+			fmt.Fprintf(stdout, "alias: %s\nbind: %s\nadvertise: %s\nport: %d\nfingerprint: %s\n", r.Alias, r.Bind, r.Advertise, r.Port, r.Fingerprint)
 		}
 		fmt.Fprintf(stdout, "login unit: %s\n", r.LoginUnit)
 		for _, p := range r.Peers {

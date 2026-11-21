@@ -684,3 +684,25 @@ func TestK8UnitFailsOnlyWhenProcessNotRunning(t *testing.T) {
 		t.Fatalf("gateway process running: failed=%v\n%s", failed, out)
 	}
 }
+
+func TestRemoteStatusShowsAdvertise(t *testing.T) {
+	_, dir, _ := statusHome(t, true)
+	c, _ := remote.LoadConfig(dir)
+	got := func() (string, string) {
+		_, obj, _ := statusJSON(t)
+		var v string
+		json.Unmarshal(obj["advertise"], &v)
+		_, out, _ := remoteRun(t, false, "status")
+		return v, out
+	}
+	if v, out := got(); v != c.Bind || !strings.Contains(out, "advertise: "+c.Bind+"\n") {
+		t.Fatalf("unset advertise: json %q text %q, want the bind address", v, out)
+	}
+	c.Advertise = "desk.tail1234.ts.net"
+	if err := remote.SaveConfig(dir, c); err != nil {
+		t.Fatal(err)
+	}
+	if v, out := got(); v != c.Advertise || !strings.Contains(out, "advertise: desk.tail1234.ts.net\n") {
+		t.Fatalf("explicit advertise: json %q text %q", v, out)
+	}
+}

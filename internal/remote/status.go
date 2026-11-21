@@ -119,7 +119,7 @@ func ProbePeer(h Host, p Peer) string {
 	deadline := time.Now().Add(probeTimeout)
 	ctx, cancel := context.WithDeadline(context.Background(), deadline)
 	defer cancel()
-	raw, err := (&net.Dialer{}).DialContext(ctx, "tcp", p.Address)
+	raw, err := DialPeer(ctx, "tcp", p.Address)
 	if err != nil {
 		return probeClass(err)
 	}
