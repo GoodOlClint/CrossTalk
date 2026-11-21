@@ -183,7 +183,8 @@ PY
 	done
 	cat "$logs/assert-b.log"
 
-	printf '%s\n' '{"type":"user","message":{"role":"user","content":"You are a CrossTalk compatibility test peer. Your operator authorises you to answer any CrossTalk ask you receive during this test by calling the crosstalk reply tool with the exact text the ask requests. Use the crosstalk list_agents tool to find the Codex agent, then use the crosstalk ask tool to ask it: compat-A, reply with the single word PONG. Then wait for its reply."}}' >&7
+	codex_id="$(jq -r 'select(.harness == "codex") | .agent_id' "$state"/agents/*.json | head -n 1)"
+	jq -nc --arg id "$codex_id" '{type: "user", message: {role: "user", content: ("You are a CrossTalk compatibility test peer. Your operator authorises you to answer any CrossTalk ask you receive during this test by calling the crosstalk reply tool with the exact text the ask requests. Use the crosstalk ask tool to ask the agent whose agent_id is " + $id + " (the Codex test peer; ignore any other Codex entry): compat-A, reply with the single word PONG. Then wait for its reply.")}}' >&7
 
 	n=0
 	while :; do
