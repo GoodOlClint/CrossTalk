@@ -313,16 +313,7 @@ func removeTrustRecords(env harness.InstallEnv, hooksFile string, refs []string)
 		default:
 			skip = false
 		}
-		for _, d := range []string{`"""`, `'''`} {
-			if strings.Count(l, d)%2 == 1 {
-				switch inStr {
-				case "":
-					inStr = d
-				case d:
-					inStr = ""
-				}
-			}
-		}
+		inStr = tomlStringState(l, inStr)
 		if !skip {
 			out = append(out, l)
 		}
@@ -331,4 +322,44 @@ func removeTrustRecords(env harness.InstallEnv, hooksFile string, refs []string)
 		return nil
 	}
 	return harness.ReplaceFile(path, []byte(strings.Join(out, "\n")))
+}
+
+// tomlStringState is the multi-line string state ("", `"""` or `”'`) after
+// line, given the state before it. Backslashes escape in basic strings; a
+// quote inside a single-line string or after # opens nothing.
+func tomlStringState(line, in string) string {
+	for i := 0; i < len(line); i++ {
+		c := line[i]
+		switch in {
+		case `"""`:
+			if c == '\\' {
+				i++
+			} else if strings.HasPrefix(line[i:], `"""`) {
+				in, i = "", i+2
+			}
+		case `'''`:
+			if strings.HasPrefix(line[i:], `'''`) {
+				in, i = "", i+2
+			}
+		default:
+			switch {
+			case c == '#':
+				return ""
+			case strings.HasPrefix(line[i:], `"""`):
+				in, i = `"""`, i+2
+			case strings.HasPrefix(line[i:], `'''`):
+				in, i = `'''`, i+2
+			case c == '"':
+				for i++; i < len(line) && line[i] != '"'; i++ {
+					if line[i] == '\\' {
+						i++
+					}
+				}
+			case c == '\'':
+				for i++; i < len(line) && line[i] != '\''; i++ {
+				}
+			}
+		}
+	}
+	return in
 }

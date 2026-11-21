@@ -137,3 +137,23 @@ func TestTrustRecordHeaderInsideMultilineStringIsKept(t *testing.T) {
 		t.Errorf("config = %q, want %q", b, want)
 	}
 }
+
+func TestTrustRecordScannerHandlesEscapesAndComments(t *testing.T) {
+	env, r := codexEnv(t, "")
+	hp := hooksPath(env.Home)
+	os.MkdirAll(filepath.Dir(hp), 0o700)
+	if err := addHook(hp, env.Bin); err != nil {
+		t.Fatal(err)
+	}
+	ours := `[hooks.state."` + hp + `:session_start:0:0"]`
+	keep := "# a \"\"\" in a comment\n[n]\ns = \"\"\"\nx \\\"\"\" y\n" + ours + "\n\"\"\"\nl = '''\n" + ours + "\n'''\nq = \"it's\"\n\n"
+	if err := os.WriteFile(r.path, []byte(keep+ours+"\ntrusted_hash = \"sha256:ours\"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := queueWakeRemoveStep(env).Apply(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := os.ReadFile(r.path); string(b) != keep {
+		t.Errorf("config = %q, want %q", b, keep)
+	}
+}
