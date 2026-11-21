@@ -178,7 +178,8 @@ func TestHarnessCompatAssertOneCodexRow(t *testing.T) {
 		{"first list_agents output is unreadable", map[string]string{"recv": call("list_agents", "completed", map[string]any{"content": []map[string]any{{"type": "text", "text": "not json"}}})}, 1},
 		{"receiver has no rollout yet", map[string]string{"other": listing("codex")}, 2},
 		{"another tool's result is not a list_agents result", map[string]string{"recv": call("receive_message", "completed", map[string]any{"structuredContent": map[string]any{"agents": []map[string]any{{"harness": "codex"}}}})}, 2},
-		{"a call that has not completed", map[string]string{"recv": call("list_agents", "inProgress", nil)}, 2},
+		{"first list_agents call failed", map[string]string{"recv": call("list_agents", "failed", nil)}, 1},
+		{"a failed first call is not masked by a good retry", map[string]string{"recv": call("list_agents", "failed", nil) + listing("codex")}, 1},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

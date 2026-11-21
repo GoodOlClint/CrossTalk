@@ -105,7 +105,10 @@ for line in open(files[0], errors="replace"):
         item = json.loads(line).get("payload", {}).get("item") or {}
     except ValueError:
         continue
-    if item.get("type") == "McpToolCall" and item.get("server") == "crosstalk" and item.get("tool") == "list_agents" and item.get("status") == "completed":
+    if item.get("type") == "McpToolCall" and item.get("server") == "crosstalk" and item.get("tool") == "list_agents":
+        if item.get("status") != "completed":
+            print("FAIL one-row: the first list_agents call ended " + str(item.get("status")))
+            sys.exit(1)
         agents = agents_of(item.get("result"))
         if agents is None:
             print("FAIL one-row: the first list_agents output could not be read")
