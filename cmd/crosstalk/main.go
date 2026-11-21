@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"runtime"
 	"strings"
 	"sync"
 	"syscall"
@@ -129,8 +130,15 @@ func runMCP(stderr io.Writer) int {
 	srv := mcpserver.New(sh.MCPOptions())
 	stopClaims := serveClaims(ctx, hs, srv)
 	err = srv.Run(ctx, &mcp.StdioTransport{})
+	return finish(srv, err, stopClaims, sh.Close, stderr)
+}
+
+// finish stops the claim sources, closes the shim and reports the error; srv
+// owns the lock files of timed-out agents until the process exits.
+func finish(srv *mcpserver.Server, runErr error, stopClaims func(), closeShim func() error, stderr io.Writer) int {
+	defer runtime.KeepAlive(srv)
 	stopClaims()
-	err = errors.Join(err, sh.Close())
+	err := errors.Join(runErr, closeShim())
 	if err != nil && !errors.Is(err, context.Canceled) {
 		fmt.Fprintf(stderr, "crosstalk mcp: %v\n", err)
 		return 1
