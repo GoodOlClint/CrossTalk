@@ -66,7 +66,8 @@ func GatewayHolderPID(stateDir string) string {
 }
 
 // GatewayStatus names the gateway state of a configured host. The lock says
-// a gateway process runs; the port is bound only if the listener on
+// a gateway process runs; with its bind address gone from this host it is
+// waiting for the address; the port is bound only if the listener on
 // bind:port presents the certificate with this host's fingerprint, so a
 // foreign listener on the address never reads as running.
 func GatewayStatus(stateDir string, c Config, fingerprint string) (string, error) {
@@ -78,6 +79,9 @@ func GatewayStatus(stateDir string, c Config, fingerprint string) (string, error
 		return StateNotRunning, nil
 	}
 	if !listenerIsOurs(net.JoinHostPort(c.Bind, strconv.Itoa(c.Port)), fingerprint) {
+		if !BindOnHost(c.Bind) {
+			return StateWaitingAddr, nil
+		}
 		return StateNoPort, nil
 	}
 	return StateRunning, nil

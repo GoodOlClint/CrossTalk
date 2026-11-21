@@ -553,8 +553,8 @@ func TestBindRetry(t *testing.T) {
 		if calls.Load() != 9 {
 			t.Fatalf("listen attempts = %d, want 9: a missing address is retried past the give-up time", calls.Load())
 		}
-		if got, _ := stateSeen.Load().(string); got != StatePortNotBound {
-			t.Fatalf("State() while retrying = %q, want %q", got, StatePortNotBound)
+		if got, _ := stateSeen.Load().(string); got != StateWaitingAddr {
+			t.Fatalf("State() while retrying = %q, want %q", got, StateWaitingAddr)
 		}
 		if !strings.Contains(e.logs.String(), "retry") {
 			t.Fatalf("no retry line in the log:\n%s", e.logs)

@@ -11,6 +11,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -25,6 +26,7 @@ import (
 
 const (
 	StatePortNotBound = "service running, port not bound"
+	StateWaitingAddr  = "service running, waiting for address"
 	stateStarting     = "starting"
 	stateListening    = "listening"
 )
@@ -38,8 +40,10 @@ type Limits struct {
 	MaxPinnedConns, MaxPeerConcurrent, MaxPeerPerMinute                     int
 	MaxHandshaking, MaxUnenrolled                                           int
 	UnenrolledLife, PendingPoll, BindRetry, BindGiveUp                      time.Duration
-	StallWindow                                                             time.Duration
-	MaxStallAddrs                                                           int
+	// AddrPoll is how often a running gateway checks that its bind address is still on this host; zero or less turns the check off.
+	AddrPoll      time.Duration
+	StallWindow   time.Duration
+	MaxStallAddrs int
 	// PairInterval is the gateway-wide gap between pairing attempts; negative disables it.
 	PairInterval time.Duration
 }
@@ -52,7 +56,7 @@ func DefaultLimits() Limits {
 		MaxPinnedConns: 64, MaxPeerConcurrent: 8, MaxPeerPerMinute: 120,
 		MaxHandshaking: 16, MaxUnenrolled: 4,
 		UnenrolledLife: 15 * time.Second, PendingPoll: time.Second,
-		BindRetry: 10 * time.Second, BindGiveUp: 60 * time.Second,
+		BindRetry: 10 * time.Second, BindGiveUp: 60 * time.Second, AddrPoll: 10 * time.Second,
 		PairInterval: time.Second,
 		StallWindow:  time.Minute, MaxStallAddrs: 256,
 	}
@@ -72,7 +76,9 @@ type GatewayConfig struct {
 	Limits Limits
 	Now    func() time.Time
 	Listen func(network, addr string) (net.Listener, error)
-	Log    func(format string, args ...any)
+	// Addrs lists this host's interface addresses; nil means InterfaceAddrs.
+	Addrs func() ([]net.Addr, error)
+	Log   func(format string, args ...any)
 }
 
 type connInfo struct {
@@ -86,6 +92,7 @@ type gwConn struct {
 	info   *connInfo
 	once   sync.Once
 	closed atomic.Bool
+	epoch  uint64
 	mu     sync.Mutex
 	timer  *time.Timer
 }
@@ -131,6 +138,8 @@ type Gateway struct {
 	peerSt   map[string]*peerState
 	accepted chan *gwConn
 	lastPair time.Time
+	// epoch counts listener drops; a connection that finished its handshake under an older epoch is refused at admission.
+	epoch uint64
 }
 
 func NewGateway(c GatewayConfig) *Gateway {
@@ -175,8 +184,18 @@ func NewGateway(c GatewayConfig) *Gateway {
 }
 
 func (g *Gateway) Ready() <-chan struct{} { return g.ready }
-func (g *Gateway) Addr() net.Addr         { return g.addr }
-func (g *Gateway) State() string          { return g.state.Load().(string) }
+func (g *Gateway) Addr() net.Addr {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.addr
+}
+
+func (g *Gateway) setAddr(a net.Addr) {
+	g.mu.Lock()
+	g.addr = a
+	g.mu.Unlock()
+}
+func (g *Gateway) State() string { return g.state.Load().(string) }
 
 type peerKey struct{}
 
@@ -208,10 +227,10 @@ func (g *Gateway) Serve(ctx context.Context) error {
 		}
 		return err
 	}
-	g.addr = ln.Addr()
+	g.setAddr(ln.Addr())
 	g.state.Store(stateListening)
 	close(g.ready)
-	g.cfg.Log("gateway listening on %s, fingerprint %s", g.addr, g.cfg.Host.Fingerprint)
+	g.cfg.Log("gateway listening on %s, fingerprint %s", ln.Addr(), g.cfg.Host.Fingerprint)
 
 	lim := g.cfg.Limits
 	srv := &http.Server{
@@ -227,29 +246,112 @@ func (g *Gateway) Serve(ctx context.Context) error {
 		},
 	}
 	var wg sync.WaitGroup
-	wg.Add(3)
+	wg.Add(2)
 	srvDone := make(chan struct{})
 	go func() { defer wg.Done(); srv.Serve(chanListener{g}); close(srvDone) }()
 	go func() { defer wg.Done(); g.sweepUnenrolled() }()
-	go func() { defer wg.Done(); g.acceptLoop(ln) }()
 
-	select {
-	case <-ctx.Done():
-	case <-srvDone:
+	var serveErr error
+	var loopDone chan struct{}
+	for {
+		loopDone = make(chan struct{})
+		go func(ln net.Listener, done chan struct{}) { defer close(done); g.acceptLoop(ln) }(ln, loopDone)
+		if !g.waitAddrLost(ctx, srvDone) {
+			break
+		}
+		g.cfg.Log("bind address %s is no longer on this host; closing the listener", g.cfg.Bind)
+		ln.Close()
+		<-loopDone
+		g.dropConns()
+		g.state.Store(StateWaitingAddr)
+		if !g.waitAddrBack(ctx) {
+			ln = nil
+			break
+		}
+		if ln, err = g.bind(ctx); err != nil {
+			ln = nil
+			if ctx.Err() == nil {
+				serveErr = err
+			}
+			break
+		}
+		g.setAddr(ln.Addr())
+		g.state.Store(stateListening)
+		g.cfg.Log("gateway listening on %s again, fingerprint %s", ln.Addr(), g.cfg.Host.Fingerprint)
 	}
 	close(g.quit)
-	ln.Close()
+	if ln != nil {
+		ln.Close()
+	}
 	srv.Close()
+	g.dropConns()
+	<-loopDone
+	wg.Wait()
+	return serveErr
+}
+
+func (g *Gateway) dropConns() {
 	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.epoch++
 	for c := range g.raw {
 		c.Close()
 	}
 	for c := range g.conns {
 		go c.Close()
 	}
-	g.mu.Unlock()
-	wg.Wait()
-	return nil
+}
+
+// waitAddrBack blocks until the bind address is on this host again (true) or
+// ctx ends (false). A listen that would succeed on an absent address (Linux
+// ip_nonlocal_bind) is not taken as the address returning.
+func (g *Gateway) waitAddrBack(ctx context.Context) bool {
+	bind, err := netip.ParseAddr(g.cfg.Bind)
+	if err != nil {
+		return true
+	}
+	for {
+		if has, err := hostHasAddr(bind, g.addrLister()); err != nil || has {
+			return true
+		}
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(g.cfg.Limits.BindRetry):
+		}
+	}
+}
+
+func (g *Gateway) addrLister() func() ([]net.Addr, error) {
+	if g.cfg.Addrs != nil {
+		return g.cfg.Addrs
+	}
+	return func() ([]net.Addr, error) { return InterfaceAddrs() }
+}
+
+// waitAddrLost blocks until the bind address has left this host (true), or
+// until ctx ends or the HTTP server stops (false).
+func (g *Gateway) waitAddrLost(ctx context.Context, srvDone <-chan struct{}) bool {
+	var tick <-chan time.Time
+	bind, perr := netip.ParseAddr(g.cfg.Bind)
+	if poll := g.cfg.Limits.AddrPoll; poll > 0 && perr == nil && !bind.IsUnspecified() {
+		t := time.NewTicker(poll)
+		defer t.Stop()
+		tick = t.C
+	}
+	lister := g.addrLister()
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-srvDone:
+			return false
+		case <-tick:
+			if has, err := hostHasAddr(bind, lister); err == nil && !has {
+				return true
+			}
+		}
+	}
 }
 
 func (g *Gateway) bind(ctx context.Context) (net.Listener, error) {
@@ -262,6 +364,7 @@ func (g *Gateway) bind(ctx context.Context) (net.Listener, error) {
 		}
 		switch {
 		case errors.Is(err, syscall.EADDRINUSE):
+			g.state.Store(StatePortNotBound)
 			if heldSince.IsZero() {
 				heldSince = time.Now()
 			}
@@ -270,10 +373,10 @@ func (g *Gateway) bind(ctx context.Context) (net.Listener, error) {
 			}
 		case errors.Is(err, syscall.EADDRNOTAVAIL):
 			heldSince = time.Time{}
+			g.state.Store(StateWaitingAddr)
 		default:
 			return nil, fmt.Errorf("remote: listen %s: %w", addr, err)
 		}
-		g.state.Store(StatePortNotBound)
 		g.cfg.Log("cannot bind %s: %v; retry in %v", addr, err, g.cfg.Limits.BindRetry)
 		select {
 		case <-ctx.Done():
@@ -288,6 +391,9 @@ func (g *Gateway) acceptLoop(ln net.Listener) {
 	for {
 		c, err := ln.Accept()
 		if err != nil {
+			if errors.Is(err, net.ErrClosed) {
+				return
+			}
 			select {
 			case <-g.quit:
 				return
@@ -315,6 +421,9 @@ func (g *Gateway) acceptLoop(ln net.Listener) {
 
 func (g *Gateway) handshake(raw net.Conn, slots chan struct{}) {
 	info := &connInfo{}
+	g.mu.Lock()
+	epoch := g.epoch
+	g.mu.Unlock()
 	tc := tls.Server(raw, g.tlsConfig(info))
 	raw.SetDeadline(time.Now().Add(g.cfg.Limits.HandshakeTimeout))
 	err := tc.Handshake()
@@ -328,7 +437,7 @@ func (g *Gateway) handshake(raw net.Conn, slots chan struct{}) {
 		return
 	}
 	raw.SetDeadline(time.Time{})
-	c := &gwConn{Conn: tc, g: g, info: info}
+	c := &gwConn{Conn: tc, g: g, info: info, epoch: epoch}
 	if info.unenrolled {
 		c.mu.Lock()
 		c.timer = time.AfterFunc(g.cfg.Limits.UnenrolledLife, func() { c.Close() })
@@ -353,7 +462,7 @@ func (g *Gateway) admit(c *gwConn) bool {
 		return false
 	default:
 	}
-	if c.closed.Load() {
+	if c.closed.Load() || c.epoch != g.epoch {
 		return false
 	}
 	if c.info.unenrolled {
@@ -423,7 +532,7 @@ func (l chanListener) Accept() (net.Conn, error) {
 	}
 }
 func (l chanListener) Close() error   { return nil }
-func (l chanListener) Addr() net.Addr { return l.g.addr }
+func (l chanListener) Addr() net.Addr { return l.g.Addr() }
 
 func (g *Gateway) tlsConfig(info *connInfo) *tls.Config {
 	c := g.base.Clone()

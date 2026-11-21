@@ -623,3 +623,64 @@ func TestRemoteStatusPeerTLS12OnlyIsUnreachable(t *testing.T) {
 		t.Errorf("TLS 1.2-only peer: got %q, want unreachable", got)
 	}
 }
+
+func noInterfaceAddrs(t *testing.T) {
+	t.Helper()
+	old := remote.InterfaceAddrs
+	remote.InterfaceAddrs = func() ([]net.Addr, error) { return nil, nil }
+	t.Cleanup(func() { remote.InterfaceAddrs = old })
+}
+
+func k8Lines(out string) []string {
+	var ls []string
+	for _, l := range strings.Split(out, "\n") {
+		if strings.Contains(l, "K8 crosstalk") {
+			ls = append(ls, l)
+		}
+	}
+	return ls
+}
+
+func TestRemoteStatusWaitingForAddress(t *testing.T) {
+	_, _, state := statusHome(t, true)
+	statusLock(t, state)
+	noInterfaceAddrs(t)
+	_, obj, _ := statusJSON(t)
+	var got string
+	if err := json.Unmarshal(obj["gateway_state"], &got); err != nil {
+		t.Fatal(err)
+	}
+	if got != "service running, waiting for address" {
+		t.Fatalf("state = %q", got)
+	}
+}
+
+func TestK8WaitingForAddressIsOneWarning(t *testing.T) {
+	home, _, state := statusHome(t, true)
+	statusUnit(t, home)
+	statusLock(t, state)
+	noInterfaceAddrs(t)
+	failed, out := statusChecks(t, home)
+	ls := k8Lines(out)
+	if failed || len(ls) != 1 || !strings.Contains(ls[0], "K8 crosstalk WARN") {
+		t.Fatalf("failed=%v lines=%q\n%s", failed, ls, out)
+	}
+	for _, want := range []string{"127.0.0.1", "not on this host", "recovers by itself", "remote config --bind", "restart the gateway"} {
+		if !strings.Contains(ls[0], want) {
+			t.Errorf("K8 line lacks %q: %s", want, ls[0])
+		}
+	}
+}
+
+func TestK8UnitFailsOnlyWhenProcessNotRunning(t *testing.T) {
+	home, _, state := statusHome(t, true)
+	statusUnit(t, home)
+	noInterfaceAddrs(t)
+	if failed, out := statusChecks(t, home); !failed || !strings.Contains(out, "K8 crosstalk FAIL") {
+		t.Fatalf("no gateway process: failed=%v\n%s", failed, out)
+	}
+	statusLock(t, state)
+	if failed, out := statusChecks(t, home); failed || strings.Contains(out, "K8 crosstalk FAIL") {
+		t.Fatalf("gateway process running: failed=%v\n%s", failed, out)
+	}
+}

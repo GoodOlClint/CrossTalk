@@ -362,16 +362,40 @@ func ValidateBind(s string, force bool) (string, error) {
 	if force {
 		return a.String(), nil
 	}
-	addrs, err := InterfaceAddrs()
+	has, err := hostHasAddr(a, InterfaceAddrs)
 	if err != nil {
 		return "", err
 	}
+	if !has {
+		return "", fmt.Errorf("%s is not an address of any interface on this host (--force allows it)", s)
+	}
+	return a.String(), nil
+}
+
+// hostHasAddr reports whether a is assigned to an interface that list returns.
+func hostHasAddr(a netip.Addr, list func() ([]net.Addr, error)) (bool, error) {
+	addrs, err := list()
+	if err != nil {
+		return false, err
+	}
 	for _, ia := range addrs {
-		if p, err := netip.ParsePrefix(ia.String()); err == nil && p.Addr().Unmap() == a {
-			return a.String(), nil
+		if p, err := netip.ParsePrefix(ia.String()); err == nil && p.Addr().Unmap() == a.Unmap() {
+			return true, nil
 		}
 	}
-	return "", fmt.Errorf("%s is not an address of any interface on this host (--force allows it)", s)
+	return false, nil
+}
+
+// BindOnHost reports whether bind is an address of this host; an unparsable
+// bind or a failed interface listing reads as true, so a caller never
+// reports a missing address it did not establish.
+func BindOnHost(bind string) bool {
+	a, err := netip.ParseAddr(bind)
+	if err != nil {
+		return true
+	}
+	has, err := hostHasAddr(a, InterfaceAddrs)
+	return err != nil || has
 }
 
 func validateConfig(c Config) error {
