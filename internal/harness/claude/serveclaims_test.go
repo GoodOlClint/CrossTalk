@@ -176,11 +176,11 @@ func pinName(t *testing.T, stateDir, sid, name string) {
 	}
 }
 
-func serveClaimsPinned(t *testing.T, stateDir, sid, harnessName string) *fakeDir {
+func serveClaimsPinned(t *testing.T, stateDir, sid, harnessName, regName string) *fakeDir {
 	t.Helper()
 	sessions := t.TempDir()
 	writeClaimSession(t, sessions, 4100, sid, harnessName)
-	dir := &fakeDir{regName: harnessName, calls: map[string]int{}}
+	dir := &fakeDir{regName: regName, calls: map[string]int{}}
 	h, err := NewHarness(HarnessOptions{SessionsDir: sessions, PPID: 4100, PollInterval: time.Millisecond, Directory: dir, StateDir: stateDir})
 	if err != nil {
 		t.Fatal(err)
@@ -200,8 +200,7 @@ func serveClaimsPinned(t *testing.T, stateDir, sid, harnessName string) *fakeDir
 func TestServeClaimsPinnedNameIsHeld(t *testing.T) {
 	stateDir := t.TempDir()
 	pinName(t, stateDir, "sess-a", "alice")
-	dir := serveClaimsPinned(t, stateDir, "sess-a", "bob")
-	dir.setRegName("alice")
+	dir := serveClaimsPinned(t, stateDir, "sess-a", "bob", "alice")
 	eventually(t, "first registration", func() bool { return dir.count("sess-a") == 1 })
 	time.Sleep(50 * time.Millisecond)
 	if n := dir.count("sess-a"); n != 1 {
@@ -209,12 +208,29 @@ func TestServeClaimsPinnedNameIsHeld(t *testing.T) {
 	}
 }
 
-// An unpinned name that differs from the harness name (a fallback because the
-// harness name was held) keeps being retried.
-func TestServeClaimsUnpinnedMismatchRetries(t *testing.T) {
+// A saved pin outranks the harness name: a restart that got the harness name
+// because another agent held the pin keeps retrying until the pin is taken.
+func TestServeClaimsRetriesUntilPinTaken(t *testing.T) {
 	stateDir := t.TempDir()
 	pinName(t, stateDir, "sess-a", "alice")
-	dir := serveClaimsPinned(t, stateDir, "sess-a", "bob")
-	dir.setRegName("bob-1234")
-	eventually(t, "retries while the pinned name is not held", func() bool { return dir.count("sess-a") >= 3 })
+	dir := serveClaimsPinned(t, stateDir, "sess-a", "bob", "bob")
+	eventually(t, "retries under the harness name", func() bool { return dir.count("sess-a") >= 3 })
+	dir.setRegName("alice")
+	eventually(t, "pin taken", func() bool {
+		ds, _ := dir.List()
+		return len(ds) == 1 && ds[0].Name == "alice"
+	})
+	n := dir.count("sess-a")
+	time.Sleep(20 * time.Millisecond)
+	if m := dir.count("sess-a"); m != n {
+		t.Fatalf("still registering once held under the pin: %d -> %d", n, m)
+	}
+}
+
+// A pinned session under a fallback name is retried too.
+func TestServeClaimsPinnedFallbackRetries(t *testing.T) {
+	stateDir := t.TempDir()
+	pinName(t, stateDir, "sess-a", "alice")
+	dir := serveClaimsPinned(t, stateDir, "sess-a", "bob", "bob-1234")
+	eventually(t, "retries under a fallback", func() bool { return dir.count("sess-a") >= 3 })
 }

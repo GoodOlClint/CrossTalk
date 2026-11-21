@@ -58,6 +58,16 @@ type Harness struct {
 		List() ([]registry.Descriptor, error)
 	}
 	stateDir string
+	pin      pinCache
+}
+
+// pinCache holds the pin read from one journal file, re-read only when the
+// file's size or modification time changes.
+type pinCache struct {
+	path string
+	size int64
+	mod  time.Time
+	name string
 }
 
 var (
@@ -126,15 +136,30 @@ func (h *Harness) held(s Session) bool {
 	id := identity.AgentID(string(adapter.Claude), s.SessionID)
 	for _, d := range ds {
 		if d.AgentID == id {
-			return s.Name == "" || d.Name == s.Name || h.pinned(id, d.Name)
+			if p := h.pinnedName(id); p != "" {
+				return d.Name == p
+			}
+			return s.Name == "" || d.Name == s.Name
 		}
 	}
 	return false
 }
 
-// pinned reports that name is the one the session set with rename (ADR 0027).
-func (h *Harness) pinned(agentID, name string) bool {
-	return h.stateDir != "" && journal.PinnedName(h.stateDir, agentID) == name
+// pinnedName is the name the session set with rename (ADR 0027), or "". A
+// saved pin outranks the harness name: the session is held only under it.
+func (h *Harness) pinnedName(agentID string) string {
+	if h.stateDir == "" {
+		return ""
+	}
+	path := journal.Path(h.stateDir, agentID)
+	fi, err := os.Stat(path)
+	if err != nil {
+		return ""
+	}
+	if c := h.pin; c.path != path || c.size != fi.Size() || !c.mod.Equal(fi.ModTime()) {
+		h.pin = pinCache{path, fi.Size(), fi.ModTime(), journal.PinnedName(h.stateDir, agentID)}
+	}
+	return h.pin.name
 }
 
 func (h *Harness) Name() adapter.Harness { return adapter.Claude }
