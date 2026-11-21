@@ -38,9 +38,7 @@ func installRemoteChecks(home, bin string) []harness.CheckResult {
 	if _, err := remote.NewPeers(dir).List(); err != nil {
 		rs = append(rs, k8(false, false, "%v", err))
 	}
-	if _, err := remote.ValidateBind(cfg.Bind, false); err != nil {
-		rs = append(rs, k8(false, true, "bind address %s is not on any interface of this host", cfg.Bind))
-	}
+	_, bindErr := remote.ValidateBind(cfg.Bind, false)
 	if uerr == nil {
 		switch {
 		case cfg.UnitSHA256 != sha256Hex(unitBytes):
@@ -55,13 +53,20 @@ func installRemoteChecks(home, bin string) []harness.CheckResult {
 	if err != nil {
 		return append(rs, k8(false, false, "%v", err))
 	}
+	if bindErr != nil && gs != remote.StateWaitingAddr {
+		rs = append(rs, k8(false, true, "bind address %s is not on any interface of this host", cfg.Bind))
+	}
 	switch {
+	case gs == remote.StateWaitingAddr:
+		rs = append(rs, k8(false, true, "gateway is waiting for its bind address %s, which is not on this host; it recovers by itself when the address returns; to use another address now run: crosstalk remote config --bind <current address>", cfg.Bind))
 	case gs == remote.StateRunning:
 		if len(rs) == 0 {
 			rs = append(rs, k8(true, false, "remote configured, gateway answering on %s:%d", cfg.Bind, cfg.Port))
 		}
-	case uerr == nil:
+	case uerr == nil && gs == remote.StateNotRunning:
 		rs = append(rs, k8(false, false, "gateway not answering on %s:%d (%s) and the login unit %s exists", cfg.Bind, cfg.Port, gs, unit))
+	case uerr == nil:
+		rs = append(rs, k8(false, true, "gateway process runs but is not answering on %s:%d (%s)", cfg.Bind, cfg.Port, gs))
 	default:
 		rs = append(rs, k8(false, true, "gateway not answering on %s:%d (%s); fine for foreground use", cfg.Bind, cfg.Port, gs))
 	}
