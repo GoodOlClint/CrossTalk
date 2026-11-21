@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 
 	"github.com/GoodOlClint/crosstalk/internal/adapter"
 	"github.com/GoodOlClint/crosstalk/internal/journal"
@@ -34,6 +35,8 @@ type Entry struct {
 	Message    *msg.Message `json:"message,omitempty"`
 	// PossiblySeen marks a delivered entry returned again: an earlier pull may not have reached the model.
 	PossiblySeen bool `json:"possibly_seen,omitempty"`
+	// Inbox is the role inbox the message was addressed to; "" for a direct message.
+	Inbox string `json:"inbox,omitempty"`
 	// InboxCopy marks a watcher's copy of a role inbox message.
 	InboxCopy bool `json:"inbox_copy,omitempty"`
 	// Sender is the dedupe key of an inbound entry: the transport-proven sender, unlike From.
@@ -74,6 +77,7 @@ type entryState struct {
 	binding journal.Binding
 	message json.RawMessage
 	copy    bool
+	inbox   string
 }
 
 func dedupeEntries(rs []journal.Record) ([]dedupeKey, map[dedupeKey]*entryState) {
@@ -92,6 +96,9 @@ func dedupeEntries(rs []journal.Record) ([]dedupeKey, map[dedupeKey]*entryState)
 		}
 		e.latest = rec
 		e.copy = e.copy || rec.Copy
+		if rec.Inbox != "" {
+			e.inbox = rec.Inbox
+		}
 		if len(rec.Message) > 0 {
 			e.message = rec.Message
 		}
@@ -183,10 +190,13 @@ func (r *Receiver) pull(after string, limit int) ([]Entry, bool, error) {
 	}
 	_, idx := dedupeEntries(rs)
 	outs := map[string]*outboundState{}
+	routes := map[string]journal.Record{}
 	var order []mailKey
 	seen := map[dedupeKey]bool{}
 	for _, rec := range rs {
 		switch rec.Type {
+		case journal.TypeRoute:
+			routes[rec.MessageID] = rec
 		case journal.TypeDedupe:
 			if k := (dedupeKey{rec.Sender, rec.MessageID}); !seen[k] {
 				seen[k] = true
@@ -258,7 +268,7 @@ func (r *Receiver) pull(after string, limit int) ([]Entry, bool, error) {
 		if !inMailbox(e.latest.State) {
 			continue
 		}
-		en := Entry{Direction: DirectionInbound, MessageID: k.id, From: k.sender, Sender: k.sender, InboxCopy: e.copy, State: e.latest.State, InstanceID: e.binding.InstanceID, SessionRef: e.binding.SessionRef}
+		en := Entry{Direction: DirectionInbound, MessageID: k.id, From: k.sender, Sender: k.sender, Inbox: e.inbox, InboxCopy: e.copy, State: e.latest.State, InstanceID: e.binding.InstanceID, SessionRef: e.binding.SessionRef}
 		if len(e.message) > 0 {
 			var m msg.Message
 			if json.Unmarshal(e.message, &m) == nil {
@@ -287,6 +297,13 @@ func (r *Receiver) pull(after string, limit int) ([]Entry, bool, error) {
 		next := journal.StateDelivered
 		if out[i].PossiblySeen {
 			next = journal.StateConfirmed
+		} else if rt, ok := routes[out[i].MessageID]; ok && msg.Kind(rt.Kind) != msg.Ask {
+			if err := r.restartRoute(rt); err != nil {
+				if i == 0 {
+					return nil, false, err
+				}
+				return out[:i], true, nil
+			}
 		}
 		if err := r.j.SetDedupeState(keys[i].sender, keys[i].id, next); err != nil {
 			if i == 0 {
@@ -297,6 +314,15 @@ func (r *Receiver) pull(after string, limit int) ([]Entry, bool, error) {
 		out[i].State = journal.StateDelivered
 	}
 	return out, more, nil
+}
+
+// restartRoute reopens the reply route a pulled inform's journal record names,
+// with OpenedAt now.
+func (r *Receiver) restartRoute(rec journal.Record) error {
+	r.mu.Lock()
+	r.routes = slices.DeleteFunc(r.routes, func(o route) bool { return o.Session == rec.Session && o.MessageID == rec.MessageID })
+	r.mu.Unlock()
+	return r.openRoute(route{Session: rec.Session, MessageID: rec.MessageID, Sender: rec.Sender, Name: rec.To, Kind: msg.Kind(rec.Kind)})
 }
 
 // Recover applies the §5 replay rules after journal.Open: an unresolved

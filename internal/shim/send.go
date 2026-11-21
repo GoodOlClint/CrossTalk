@@ -948,7 +948,7 @@ func (s *Shim) Mailbox(ctx context.Context, of *mcpserver.Agent, after string, l
 	}
 	out := make([]mcpserver.MailboxEntry, 0, len(es))
 	for _, e := range es {
-		me := mcpserver.MailboxEntry{Direction: e.Direction, MessageID: e.MessageID, TaskID: e.TaskID, InReplyTo: e.InReplyTo, From: e.From, To: e.To, Reason: e.Reason, State: adapter.State(e.State), InstanceID: e.InstanceID, SessionRef: e.SessionRef, PossiblySeen: e.PossiblySeen, InboxCopy: e.InboxCopy}
+		me := mcpserver.MailboxEntry{Direction: e.Direction, MessageID: e.MessageID, TaskID: e.TaskID, InReplyTo: e.InReplyTo, From: e.From, To: e.To, Reason: e.Reason, State: adapter.State(e.State), InstanceID: e.InstanceID, SessionRef: e.SessionRef, PossiblySeen: e.PossiblySeen, Inbox: e.Inbox, InboxCopy: e.InboxCopy}
 		if e.Message != nil {
 			me.Text = e.Message.Text()
 			if n, ok := st.harness.(harness.Noticer); ok {

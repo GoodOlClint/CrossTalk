@@ -61,6 +61,8 @@ type MailboxEntry struct {
 	SessionRef string `json:"session_ref"`
 	// PossiblySeen marks a delivered entry returned again because an earlier pull may not have reached the model.
 	PossiblySeen bool `json:"possibly_seen,omitempty"`
+	// Inbox is the role inbox the message was addressed to; "" for a direct message.
+	Inbox string `json:"inbox,omitempty"`
 	// InboxCopy marks a watcher's copy of a role inbox message.
 	InboxCopy bool `json:"inbox_copy,omitempty"`
 }
