@@ -249,6 +249,11 @@ func runInstall(mode string, args []string, in io.Reader, tty bool, stdout, stde
 	if mode != "uninstall" {
 		groups = append(groups, group{"crosstalk", []harness.Step{installBinaryStep(env.Bin, brewBin != "")}})
 	}
+	if mode != "uninstall" {
+		if _, _, present, owned, _ := unitOwnership(home, cfgDir); present && owned {
+			groups = append(groups, group{"gateway", []harness.Step{gatewayRestartStep(stateDir, env.Bin, stdout)}})
+		}
+	}
 	if stopFirst {
 		groups = append(groups, group{"gateway", []harness.Step{{
 			Title:  "stop the gateway",
@@ -660,6 +665,9 @@ func installChecks(ctx context.Context, w io.Writer, targets []installTarget, en
 		failed = true
 	}
 	if installReport(w, "crosstalk", installRemoteChecks(env.Home, env.Bin)) {
+		failed = true
+	}
+	if installReport(w, "crosstalk", installShimChecks(env.Bin)) {
 		failed = true
 	}
 	return failed
