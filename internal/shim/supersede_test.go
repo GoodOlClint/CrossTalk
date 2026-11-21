@@ -80,12 +80,18 @@ func TestRunRetiresSupersededWithoutACall(t *testing.T) {
 		_, err := os.Stat(reg.DescriptorPath(oldID))
 		return errors.Is(err, os.ErrNotExist)
 	})
-	g, err := reg.Acquire(registry.Request{AgentID: "ffffffffffffffff", HarnessName: "bob", Harness: "claude", Cwd: "/w"})
-	if err != nil {
-		t.Fatal(err)
-	}
+	var g *registry.Registration
+	waitFor(t, "the name lock to be released", func() bool {
+		c, err := reg.Acquire(registry.Request{AgentID: "ffffffffffffffff", HarnessName: "bob", Harness: "claude", Cwd: "/w"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c.Name() != "bob" {
+			c.Close()
+			return false
+		}
+		g = c
+		return true
+	})
 	defer g.Close()
-	if g.Name() != "bob" {
-		t.Fatalf("name lock still held: got %q", g.Name())
-	}
 }
