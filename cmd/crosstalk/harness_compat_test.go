@@ -79,11 +79,8 @@ func TestHarnessCompatWorkflowSafe(t *testing.T) {
 			t.Errorf("workflow lacks %q", want)
 		}
 	}
-	if strings.Contains(w, "schedule:") {
-		t.Error("the workflow is dispatch-only until slice 5")
-	}
 	jobs := workflowJobs(w)
-	secretJobs := map[string]bool{"harness": true, "report": true}
+	secretJobs := map[string]bool{"harness": true, "report": true, "bump": true}
 	for name, body := range jobs {
 		has := strings.Contains(body, "secrets.") || strings.Contains(body, "environment:")
 		if has != secretJobs[name] {
@@ -1197,10 +1194,10 @@ func TestHarnessCompatRestructureJobs(t *testing.T) {
 	for n := range jobs {
 		names = append(names, n)
 	}
-	want := map[string]bool{"check-updates": true, "compare": true, "build": true, "harness": true, "report": true}
+	want := map[string]bool{"check-updates": true, "compare": true, "build": true, "harness": true, "report": true, "bump": true, "issue": true}
 	for _, n := range names {
 		if !want[n] {
-			t.Errorf("unexpected job %q: the workflow has check-updates, compare, build, harness and report only", n)
+			t.Errorf("unexpected job %q: the workflow has check-updates, compare, build, harness, report, bump and issue only", n)
 		}
 	}
 	for n := range want {
@@ -1578,5 +1575,180 @@ func TestHarnessCompatReportJobFailsWhenAHarnessDidNotPass(t *testing.T) {
 		if got := cmd.Run() == nil; got != want {
 			t.Errorf("%s: check passed = %v, want %v", results, got, want)
 		}
+	}
+}
+
+func TestHarnessCompatScheduleAndNoPullRequestTrigger(t *testing.T) {
+	w := readCompatWorkflow(t)
+	on := w[:strings.Index(w, "\npermissions:")]
+	if !regexp.MustCompile(`(?m)^  schedule:\n    - cron: "[^"]+"`).MatchString(on) {
+		t.Errorf("workflow needs a schedule trigger with a cron:\n%s", on)
+	}
+	if !strings.Contains(on, "workflow_dispatch:") {
+		t.Error("workflow_dispatch stays")
+	}
+	if strings.Contains(on, "pull_request") {
+		t.Error("no pull_request or pull_request_target trigger")
+	}
+	if !strings.Contains(w, "HARNESS: ${{ inputs.harness || 'all' }}") {
+		t.Error("a scheduled run has no inputs, so the harness must default to all")
+	}
+}
+
+func TestHarnessCompatBumpAndIssueKeyOnReportResults(t *testing.T) {
+	jobs := workflowJobs(readCompatWorkflow(t))
+	for _, name := range []string{"bump", "issue"} {
+		body := jobs[name]
+		for _, want := range []string{"needs: [check-updates, report]", "if: always() &&", "needs.report.outputs.results"} {
+			if !strings.Contains(body, want) {
+				t.Errorf("job %s lacks %q", name, want)
+			}
+		}
+		for _, bad := range []string{"download-artifact", "npm install", "needs.harness", "matrix.", "OPENROUTER", "go test", "go build"} {
+			if strings.Contains(body, bad) {
+				t.Errorf("job %s must not contain %q: it runs no harness code and reads no runner-written file", name, bad)
+			}
+		}
+	}
+	bump := jobs["bump"]
+	for _, want := range []string{"environment: harness-compat-bump\n", "actions/create-github-app-token@v3", "land-bump", "persist-credentials: false"} {
+		if !strings.Contains(bump, want) {
+			t.Errorf("bump lacks %q", want)
+		}
+	}
+	if strings.Contains(jobs["issue"], "environment:") || strings.Contains(jobs["issue"], "create-github-app-token") || !strings.Contains(jobs["issue"], "issues: write") {
+		t.Error("issue runs on GITHUB_TOKEN with issues: write and no environment or App key")
+	}
+	for name, body := range jobs {
+		if name != "bump" && (strings.Contains(body, "RELEASE_APP") || strings.Contains(body, "app.outputs.token")) {
+			t.Errorf("job %s must not hold the App key", name)
+		}
+	}
+}
+
+const compatResults = `{"codex":{"version":"0.172.0","pass":true,"legs":{}},"claude-code":{"version":"2.1.330","pass":false,"legs":{}}}`
+
+func TestHarnessCompatPassingFailingAndBumpRecord(t *testing.T) {
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not on PATH")
+	}
+	root := releaseRepoRoot(t)
+	sc := filepath.Join(root, "scripts", "harness-compat.sh")
+	run := func(args ...string) (string, error) {
+		out, err := exec.Command(sc, args...).CombinedOutput()
+		return strings.TrimSpace(string(out)), err
+	}
+	if out, err := run("passing", compatResults); err != nil || out != "codex 0.172.0" {
+		t.Errorf("passing = %q, %v", out, err)
+	}
+	if out, err := run("failing", compatResults); err != nil || out != "claude-code 2.1.330" {
+		t.Errorf("failing = %q, %v", out, err)
+	}
+	rec := filepath.Join(t.TempDir(), "rec.json")
+	orig := `{
+  "codex": {"tested": "unverified", "checked": "2026-11-20"},
+  "claude-code": {"tested": "2.1.329", "checked": "2026-11-20"}
+}
+`
+	if err := os.WriteFile(rec, []byte(orig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := run("bump-record", rec, "codex", "0.172.0", "2026-11-21"); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	got, _ := os.ReadFile(rec)
+	want := strings.Replace(orig, `"codex": {"tested": "unverified", "checked": "2026-11-20"}`, `"codex": {"tested": "0.172.0", "checked": "2026-11-21"}`, 1)
+	if string(got) != want {
+		t.Errorf("record changed more than the codex entry:\n%s", got)
+	}
+	for _, bad := range [][]string{
+		{"bump-record", rec, "cursor", "1.2.3", "2026-11-21"},
+		{"bump-record", rec, "codex", "1.2.3; rm -rf /", "2026-11-21"},
+		{"bump-record", rec, "codex", "1.2.3", "yesterday"},
+	} {
+		if out, err := run(bad...); err == nil {
+			t.Errorf("%v accepted: %s", bad, out)
+		}
+	}
+	if after, _ := os.ReadFile(rec); string(after) != want {
+		t.Error("a refused bump changed the record")
+	}
+}
+
+const fakeIssueGH = `#!/bin/sh
+echo "gh $*" >> "$FAKE_DIR/log"
+case "$1 $2" in
+"issue list") cat "$FAKE_DIR/open_issues" 2>/dev/null || echo '[]' ;;
+"issue create")
+	printf '%s\n' "$*" >> "$FAKE_DIR/created"
+	echo "https://example.test/issues/9"
+	[ -e "$FAKE_DIR/nolabel" ] && case "$*" in *--label*) echo "could not add label" >&2; exit 1 ;; esac
+	;;
+esac
+exit 0
+`
+
+func fileIssue(t *testing.T, fake, bin, jobs string) (string, error) {
+	t.Helper()
+	cmd := exec.Command(filepath.Join(releaseRepoRoot(t), "scripts", "harness-compat.sh"), "file-issue", "Owner/Repo", "claude-code", "2.1.330", "https://github.com/Owner/Repo/actions/runs/7", jobs)
+	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "FAKE_DIR="+fake)
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+func TestHarnessCompatIssueIsReusedAndHasNoIdentifyingText(t *testing.T) {
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not on PATH")
+	}
+	fake, bin := t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "gh"), []byte(fakeIssueGH), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	jobs := filepath.Join(fake, "jobs.json")
+	jobsJSON := `{"name":"harness-claude-macos","conclusion":"failure","steps":[{"name":"Run the leg","conclusion":"failure"}]}
+{"name":"harness-codex-linux","conclusion":"failure","steps":[{"name":"Run the leg","conclusion":"failure"}]}
+`
+	if err := os.WriteFile(jobs, []byte(jobsJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := fileIssue(t, fake, bin, jobs); err != nil {
+		t.Fatalf("first failure: %v\n%s", err, out)
+	}
+	created, _ := os.ReadFile(filepath.Join(fake, "created"))
+	c := string(created)
+	for _, want := range []string{"--label harness-compat", "harness-compat: claude-code 2.1.330 did not pass", "version 2.1.330", "harness-claude-macos: Run the leg", "https://github.com/Owner/Repo/actions/runs/7"} {
+		if !strings.Contains(c, want) {
+			t.Errorf("issue lacks %q:\n%s", want, c)
+		}
+	}
+	if strings.Contains(c, "codex") && strings.Contains(c, "harness-codex-linux") {
+		t.Errorf("a claude-code issue lists a codex job:\n%s", c)
+	}
+	home, _ := os.UserHomeDir()
+	host, _ := os.Hostname()
+	for _, id := range []string{home, os.Getenv("USER"), host, "/Users/", "/home/"} {
+		if id != "" && strings.Contains(c, id) {
+			t.Errorf("issue text contains identifying %q:\n%s", id, c)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(fake, "open_issues"), []byte(`[{"number":9,"title":"harness-compat: claude-code 2.1.330 did not pass"}]`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := fileIssue(t, fake, bin, jobs); err != nil || !strings.Contains(out, "reusing issue #9") {
+		t.Fatalf("second failure: %v\n%s", err, out)
+	}
+	created, _ = os.ReadFile(filepath.Join(fake, "created"))
+	if n := strings.Count(string(created), "issue create"); n != 1 {
+		t.Errorf("issue create ran %d times across two failures, want 1", n)
+	}
+	if err := os.WriteFile(filepath.Join(fake, "open_issues"), []byte(`[{"number":4,"title":"harness-compat: claude-code 2.1.329 did not pass"}]`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := fileIssue(t, fake, bin, jobs); err != nil {
+		t.Fatalf("other version open: %v\n%s", err, out)
+	}
+	created, _ = os.ReadFile(filepath.Join(fake, "created"))
+	if n := strings.Count(string(created), "issue create"); n != 2 {
+		t.Errorf("an open issue for another version must not suppress this one; creates = %d", n)
 	}
 }

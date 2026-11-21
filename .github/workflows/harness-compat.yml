@@ -1,6 +1,8 @@
 name: harness-compat
 
 on:
+  schedule:
+    - cron: "17 6 * * *"
   workflow_dispatch:
     inputs:
       harness:
@@ -42,7 +44,7 @@ jobs:
           persist-credentials: false
       - id: check
         env:
-          HARNESS: ${{ inputs.harness }}
+          HARNESS: ${{ inputs.harness || 'all' }}
           VERSION: ${{ inputs.version }}
           FORCE: ${{ inputs.force }}
           RECORDED: ${{ inputs.recorded }}
@@ -247,3 +249,74 @@ jobs:
           RESULTS: ${{ steps.report.outputs.results }}
         run: |
           printf '%s' "$RESULTS" | jq -e 'all(.[]; .pass)' >/dev/null || { echo "::error::a harness did not pass"; exit 1; }
+
+  bump:
+    name: Record passing versions
+    needs: [check-updates, report]
+    if: always() && needs.check-updates.outputs.changed != '[]' && needs.report.outputs.results != ''
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    environment: harness-compat-bump
+    steps:
+      - name: Mint App token
+        id: app
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          owner: GoodOlClint
+          repositories: CrossTalk
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          persist-credentials: false
+      - name: Bump the record and land it
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          RESULTS: ${{ needs.report.outputs.results }}
+          GIT_CONFIG_COUNT: "1"
+          GIT_CONFIG_KEY_0: credential.helper
+          GIT_CONFIG_VALUE_0: '!f() { echo username=x-access-token; echo "password=$GH_TOKEN"; }; f'
+        run: |
+          set -eu
+          git remote add upstream "https://github.com/$GITHUB_REPOSITORY.git"
+          scripts/harness-compat.sh passing "$RESULTS" | while read -r h v; do
+            branch="harness-compat-$h-$v"
+            git fetch -q upstream main
+            git checkout -q -B "$branch" upstream/main
+            scripts/harness-compat.sh bump-record .github/harness-compat.json "$h" "$v" "$(date -u +%F)"
+            if git diff --quiet -- .github/harness-compat.json; then
+              echo "record already holds $h $v"
+              continue
+            fi
+            git -c user.name='crosstalk-release[bot]' -c user.email='crosstalk-release[bot]@users.noreply.github.com' \
+              commit -q -m "harness-compat: record $h $v as tested" .github/harness-compat.json
+            scripts/release-build.sh land-bump "$GITHUB_REPOSITORY" "$branch" "harness-compat: record $h $v as tested" .github/harness-compat.json "$h" "$v"
+          done
+
+  issue:
+    name: Open issues for failures
+    needs: [check-updates, report]
+    if: always() && needs.check-updates.outputs.changed != '[]' && needs.report.outputs.results != ''
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: File one issue per failing harness version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESULTS: ${{ needs.report.outputs.results }}
+        run: |
+          set -eu
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs" --paginate --jq '.jobs[]' > "$RUNNER_TEMP/jobs.json"
+          scripts/harness-compat.sh failing "$RESULTS" | while read -r h v; do
+            scripts/harness-compat.sh file-issue "$GITHUB_REPOSITORY" "$h" "$v" "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" "$RUNNER_TEMP/jobs.json"
+          done
