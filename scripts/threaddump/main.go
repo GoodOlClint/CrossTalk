@@ -10,14 +10,65 @@ import (
 	"github.com/GoodOlClint/crosstalk/internal/harness/codex/appserver"
 )
 
-var keep = []string{"id", "status", "source", "ephemeral", "parentThreadId", "sessionId"}
+var keep = []string{"id", "ephemeral", "parentThreadId", "sessionId"}
 
-func pick(thread map[string]json.RawMessage) map[string]json.RawMessage {
-	out := map[string]json.RawMessage{}
+// kinds reduces a thread source to a category and a helper subtype. Names, paths and free text inside the source are dropped.
+func kinds(raw json.RawMessage) (kind, sub string) {
+	var str string
+	if json.Unmarshal(raw, &str) == nil {
+		return word(str), ""
+	}
+	var obj map[string]json.RawMessage
+	if json.Unmarshal(raw, &obj) != nil {
+		return "other", ""
+	}
+	for k, v := range obj {
+		kind = word(k)
+		if k != "subAgent" {
+			return kind, ""
+		}
+		var s string
+		if json.Unmarshal(v, &s) == nil {
+			return kind, word(s)
+		}
+		var inner map[string]json.RawMessage
+		if json.Unmarshal(v, &inner) == nil {
+			for ik := range inner {
+				return kind, word(ik)
+			}
+		}
+		return kind, ""
+	}
+	return "other", ""
+}
+
+func word(s string) string {
+	if len(s) == 0 || len(s) > 24 {
+		return "other"
+	}
+	for _, r := range s {
+		if !(r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r == '_') {
+			return "other"
+		}
+	}
+	return s
+}
+
+func pick(thread map[string]json.RawMessage) map[string]any {
+	out := map[string]any{}
 	for _, k := range keep {
 		if v, ok := thread[k]; ok {
 			out[k] = v
 		}
+	}
+	if raw, ok := thread["source"]; ok {
+		out["sourceKind"], out["subAgentKind"] = kinds(raw)
+	}
+	var st struct {
+		Type string `json:"type"`
+	}
+	if json.Unmarshal(thread["status"], &st) == nil && st.Type != "" {
+		out["statusType"] = word(st.Type)
 	}
 	return out
 }

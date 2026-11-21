@@ -144,22 +144,28 @@ func TestHarnessCompatAssertOneCodexRow(t *testing.T) {
 	if _, err := exec.LookPath("python3"); err != nil {
 		t.Skip("python3 not on PATH")
 	}
-	rollout := func(agents ...string) string {
+	line := func(payload map[string]any) string {
+		b, _ := json.Marshal(map[string]any{"payload": payload})
+		return string(b) + "\n"
+	}
+	listing := func(callID string, harnesses ...string) string {
 		var rows []string
-		for _, h := range agents {
+		for _, h := range harnesses {
 			rows = append(rows, `{"harness":"`+h+`","crosstalk":true}`)
 		}
-		line, _ := json.Marshal(map[string]any{"payload": map[string]any{"type": "function_call_output", "output": `{"agents":[` + strings.Join(rows, ",") + `]}`}})
-		return string(line) + "\n"
+		return line(map[string]any{"type": "function_call", "name": "list_agents", "call_id": callID}) +
+			line(map[string]any{"type": "function_call_output", "call_id": callID, "output": `{"agents":[` + strings.Join(rows, ",") + `]}`})
 	}
 	cases := []struct {
-		name string
-		body string
-		ok   bool
+		name  string
+		files map[string]string
+		want  int
 	}{
-		{"lone codex row", rollout("codex", "claude"), true},
-		{"helper thread shows as a second row", rollout("codex", "codex"), false},
-		{"no list_agents output", `{"payload":{"type":"message"}}` + "\n", false},
+		{"lone codex row", map[string]string{"recv": listing("c1", "codex", "claude")}, 0},
+		{"helper thread shows as a second row", map[string]string{"recv": listing("c1", "codex", "codex")}, 1},
+		{"another thread's one-row listing does not count", map[string]string{"recv": listing("c1", "codex", "codex"), "other": listing("c2", "codex")}, 1},
+		{"receiver has no rollout yet", map[string]string{"other": listing("c2", "codex")}, 2},
+		{"agents text from some other tool is not a list_agents result", map[string]string{"recv": line(map[string]any{"type": "function_call_output", "call_id": "x", "output": `{"agents":[{"harness":"codex"}]}`})}, 2},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -167,13 +173,21 @@ func TestHarnessCompatAssertOneCodexRow(t *testing.T) {
 			if err := os.MkdirAll(dir, 0o755); err != nil {
 				t.Fatal(err)
 			}
-			if err := os.WriteFile(filepath.Join(dir, "rollout-2026-11-21T01-00-00-abc.jsonl"), []byte(c.body), 0o644); err != nil {
-				t.Fatal(err)
+			for ref, body := range c.files {
+				if err := os.WriteFile(filepath.Join(dir, "rollout-2026-11-21T01-00-00-"+ref+".jsonl"), []byte(body), 0o644); err != nil {
+					t.Fatal(err)
+				}
 			}
 			root := filepath.Dir(filepath.Dir(filepath.Dir(dir)))
-			out, err := exec.Command(filepath.Join(releaseRepoRoot(t), "scripts", "harness-compat-live.sh"), "assert-one-codex-row", root).CombinedOutput()
-			if (err == nil) != c.ok {
-				t.Fatalf("err = %v, want ok=%v\n%s", err, c.ok, out)
+			err := exec.Command(filepath.Join(releaseRepoRoot(t), "scripts", "harness-compat-live.sh"), "assert-one-codex-row", root, "recv").Run()
+			got := 0
+			if ee, ok := err.(*exec.ExitError); ok {
+				got = ee.ExitCode()
+			} else if err != nil {
+				t.Fatal(err)
+			}
+			if got != c.want {
+				t.Fatalf("exit %d, want %d", got, c.want)
 			}
 		})
 	}

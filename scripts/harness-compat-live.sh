@@ -72,22 +72,58 @@ agent-id)
 	printf '%s\n' "$ids"
 	;;
 assert-one-codex-row)
-	python3 -I - "${2:?usage: harness-compat-live.sh assert-one-codex-row ROLLOUT_DIR}" <<'PY'
-import glob, json, re, sys
-files = sorted(glob.glob(sys.argv[1] + "/**/rollout-*.jsonl", recursive=True))
-for f in files:
-    for line in open(f, errors="replace"):
+	python3 -I - "${2:?usage: harness-compat-live.sh assert-one-codex-row ROLLOUT_DIR SESSION_REF}" "${3:?}" <<'PY'
+import glob, json, sys
+root, ref = sys.argv[1], sys.argv[2]
+files = [f for f in glob.glob(root + "/**/rollout-*.jsonl", recursive=True) if f.endswith("-" + ref + ".jsonl")]
+if len(files) != 1:
+    print("WAIT one-row: " + str(len(files)) + " rollout file(s) for session " + ref)
+    sys.exit(2)
+
+def agents_of(v):
+    if isinstance(v, dict):
+        if isinstance(v.get("agents"), list):
+            return v["agents"]
+        for x in v.values():
+            r = agents_of(x)
+            if r is not None:
+                return r
+    elif isinstance(v, list):
+        for x in v:
+            r = agents_of(x)
+            if r is not None:
+                return r
+    elif isinstance(v, str):
         try:
-            p = json.loads(line).get("payload", {})
+            return agents_of(json.loads(v))
         except ValueError:
+            return None
+    return None
+
+calls, outputs = set(), {}
+for line in open(files[0], errors="replace"):
+    try:
+        p = json.loads(line).get("payload", {})
+    except ValueError:
+        continue
+    if p.get("type") == "function_call" and p.get("name") == "list_agents":
+        calls.add(p.get("call_id"))
+    elif p.get("type") == "function_call_output" and p.get("call_id"):
+        outputs.setdefault(p["call_id"], p.get("output"))
+for line in open(files[0], errors="replace"):
+    try:
+        p = json.loads(line).get("payload", {})
+    except ValueError:
+        continue
+    if p.get("type") == "function_call" and p.get("name") == "list_agents" and p.get("call_id") in outputs:
+        agents = agents_of(outputs[p["call_id"]])
+        if agents is None:
             continue
-        out = p.get("output") if p.get("type") == "function_call_output" else None
-        if isinstance(out, str) and '"agents"' in out:
-            n = len(re.findall(r'"harness"\s*:\s*"codex"', out))
-            print(("PASS" if n == 1 else "FAIL") + " one-row: the first list_agents output in " + f.rsplit("/", 1)[-1] + " shows " + str(n) + " codex row(s)")
-            sys.exit(0 if n == 1 else 1)
-print("FAIL one-row: no list_agents output found in " + str(len(files)) + " rollout file(s)")
-sys.exit(1)
+        n = sum(1 for a in agents if isinstance(a, dict) and a.get("harness") == "codex")
+        print(("PASS" if n == 1 else "FAIL") + " one-row: the receiver's first list_agents shows " + str(n) + " codex row(s)")
+        sys.exit(0 if n == 1 else 1)
+print("WAIT one-row: no completed list_agents call yet")
+sys.exit(2)
 PY
 	;;
 assert-pair)
@@ -251,10 +287,18 @@ leg)
 		[ -n "${THREADDUMP_BIN:-}" ] || return 0
 		"$THREADDUMP_BIN" >"$logs/threads-$1.jsonl" 2>"$logs/threads-$1.err.log" || echo "thread dump $1 failed; see threads-$1.err.log"
 	}
-	one_row_check() {
-		if "$0" assert-one-codex-row "$home/.codex/sessions"; then return 0; fi
-		[ "${ONE_ROW_STRICT:-}" != 1 ] || return 1
-		echo "one-row check failed; not fatal until ONE_ROW_STRICT=1 (see threads-*.jsonl)"
+	session_of() { cat "$state"/agents/*.json | jq -rs --arg id "$1" '.[] | select(.agent_id == $id) | .session_ref'; }
+	one_row_check() { # agent_id
+		ref="$(session_of "$1")"
+		w=0
+		while :; do
+			rc=0
+			"$0" assert-one-codex-row "$home/.codex/sessions" "$ref" || rc=$?
+			[ "$rc" -eq 2 ] || return "$rc"
+			w=$((w + 1))
+			[ "$w" -lt 24 ] || return 1
+			sleep 5
+		done
 	}
 	install_claude() { "$xt" install claude --yes </dev/null >"$logs/install-claude.log" 2>&1; }
 	install_codex() {
@@ -290,12 +334,12 @@ PY
 		wait_n codex 1
 		recv="$(only_id codex)"
 		dump_threads lone
+		one_row_check "$recv"
 		start_codex ask 9 "$auth Call the crosstalk list_agents tool first and confirm that agent_id $recv appears. Then use the crosstalk ask tool to ask the agent whose agent_id is $recv: compat-D, reply with the single word PONG. Then wait for its reply."
 		wait_n codex 2
 		asker="$(other_id codex "$recv")"
 		await_pair "$asker" "$recv"
 		dump_threads end
-		one_row_check
 		;;
 	cross)
 		install_claude
@@ -312,7 +356,7 @@ PY
 		await_pair "$claude_id" "$codex_id"
 		"$0" assert-discovery "$logs/claude-recv.jsonl" "$codex_id"
 		dump_threads end
-		one_row_check
+		one_row_check "$codex_id"
 		;;
 	*)
 		echo "unknown leg: $leg" >&2
