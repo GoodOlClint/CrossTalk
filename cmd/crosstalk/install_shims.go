@@ -21,6 +21,7 @@ type shimProc struct {
 	ParentCmd  string
 	ParentPPID int
 	Current    bool
+	Unknown    bool // the executable could not be identified; Current is false
 }
 
 // shimLister lists every running `crosstalk mcp` process, judged against the
@@ -130,15 +131,18 @@ func inodeOf(fi os.FileInfo) uint64 {
 	return 0
 }
 
-// procRunsBin reports whether pid executes the file at bin. A process whose
-// file cannot be read counts as current: no warning on a guess.
-func procRunsBin(pid int, bin string) bool {
+// procRunsBin reports whether pid executes the file at bin; known is false
+// when the process or the file could not be inspected.
+func procRunsBin(pid int, bin string) (runs, known bool) {
 	fi, err := os.Stat(bin)
 	if err != nil {
-		return true
+		return false, false
 	}
 	ino, ok := procInode(pid)
-	return !ok || ino == inodeOf(fi)
+	if !ok {
+		return false, false
+	}
+	return ino == inodeOf(fi), true
 }
 
 func listShims(bin string) ([]shimProc, error) {
@@ -151,13 +155,14 @@ func listShims(bin string) ([]shimProc, error) {
 	}
 	shims := parseShimTable(string(out))
 	for i := range shims {
-		shims[i].Current = procRunsBin(shims[i].PID, bin)
+		runs, known := procRunsBin(shims[i].PID, bin)
+		shims[i].Current, shims[i].Unknown = runs, !known
 	}
 	return shims, nil
 }
 
 var shimGroupText = map[shimParentKind]struct{ who, fix string }{
-	parentDaemon:    {"the managed Codex daemon", "run: codex app-server daemon restart (it interrupts running Codex turns)"},
+	parentDaemon:    {"the managed Codex daemon", "run: codex app-server daemon restart (it interrupts running Codex turns); an app-server you started yourself whose launcher has exited looks the same, so for that one end it and start it again instead"},
 	parentAppServer: {"standalone Codex app-servers", "end each of those Codex sessions and start it again; its app-server then starts a new shim"},
 	parentClaude:    {"Claude Code sessions", "restart each session (in Claude, /mcp and reconnect also works)"},
 	parentOther:     {"other parents", "restart the process that started each one"},
@@ -173,16 +178,23 @@ func installShimChecks(bin string) []harness.CheckResult {
 		return nil
 	}
 	groups := map[shimParentKind][]shimProc{}
+	var unknown []string
 	for _, s := range shims {
-		if !s.Current {
+		if s.Unknown {
+			unknown = append(unknown, strconv.Itoa(s.PID))
+		} else if !s.Current {
 			k := classifyShimParent(s.ParentCmd, s.ParentPPID)
 			groups[k] = append(groups[k], s)
 		}
 	}
-	if len(groups) == 0 {
+	var rs []harness.CheckResult
+	if len(unknown) > 0 {
+		rs = append(rs, harness.CheckResult{ID: "K11", WarnOnly: true, Detail: fmt.Sprintf(
+			"could not tell which binary %d crosstalk mcp process(es) run (pids %s; lsof or /proc unavailable); restart them after an upgrade", len(unknown), capList(unknown))})
+	}
+	if len(groups) == 0 && len(rs) == 0 {
 		return []harness.CheckResult{{ID: "K11", OK: true, WarnOnly: true, Detail: fmt.Sprintf("%d running crosstalk mcp process(es), all on %s", len(shims), bin)}}
 	}
-	var rs []harness.CheckResult
 	for k := parentDaemon; k <= parentOther; k++ {
 		g := groups[k]
 		if len(g) == 0 {

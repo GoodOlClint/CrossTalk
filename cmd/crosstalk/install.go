@@ -251,7 +251,7 @@ func runInstall(mode string, args []string, in io.Reader, tty bool, stdout, stde
 	}
 	if mode != "uninstall" {
 		if _, _, present, owned, _ := unitOwnership(home, cfgDir); present && owned {
-			groups = append(groups, group{"gateway", []harness.Step{gatewayRestartStep(stateDir, env.Bin, stdout)}})
+			groups = append(groups, group{"gateway", []harness.Step{gatewayRestartStep(home, cfgDir, stateDir, env.Bin, stdout)}})
 		}
 	}
 	if stopFirst {
@@ -497,8 +497,13 @@ func installBinary(src, dst string) (skipped bool, err error) {
 	if err != nil {
 		return false, err
 	}
-	if di, err := os.Stat(dst); err == nil && os.SameFile(si, di) {
-		return true, nil
+	if di, err := os.Stat(dst); err == nil {
+		if os.SameFile(si, di) {
+			return true, nil
+		}
+		if di.Mode().IsRegular() && di.Mode().Perm() == 0o755 && di.Size() == si.Size() && sameBytes(src, dst) {
+			return true, nil
+		}
 	}
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return false, err
@@ -527,6 +532,12 @@ func installBinary(src, dst string) (skipped bool, err error) {
 		err = os.Rename(tmp.Name(), dst)
 	}
 	return false, err
+}
+
+func sameBytes(a, b string) bool {
+	x, err1 := os.ReadFile(a)
+	y, err2 := os.ReadFile(b)
+	return err1 == nil && err2 == nil && bytes.Equal(x, y)
 }
 
 // installHomebrew reports whether exe is a Homebrew keg binary

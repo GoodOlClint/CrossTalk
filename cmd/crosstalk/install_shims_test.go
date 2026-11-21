@@ -364,7 +364,7 @@ func TestK8StateStringsUnchanged(t *testing.T) {
 func gatewayRunning(t *testing.T, running bool) {
 	t.Helper()
 	old := gatewayRunsBin
-	gatewayRunsBin = func(int, string) bool { return running }
+	gatewayRunsBin = func(int, string) (bool, bool) { return running, true }
 	t.Cleanup(func() { gatewayRunsBin = old })
 }
 
@@ -386,6 +386,75 @@ func TestInstallRestartsGatewayWhenUnitExistsAndStale(t *testing.T) {
 	code, out := installRunCmd(t, "install", args...)
 	if code != 0 || rec.count("systemctl --user restart")-before != 1 || !strings.Contains(out, "restarted the gateway on the installed binary") {
 		t.Errorf("exit %d, restarts %d:\n%s", code, rec.count("systemctl --user restart")-before, out)
+	}
+}
+
+func TestInstallRestartsGatewayWhenBinaryUnknown(t *testing.T) {
+	_, rec, args := installWithUnit(t)
+	old := gatewayRunsBin
+	gatewayRunsBin = func(int, string) (bool, bool) { return false, false }
+	t.Cleanup(func() { gatewayRunsBin = old })
+	before := rec.count("systemctl --user restart")
+	code, out := installRunCmd(t, "install", args...)
+	if code != 0 || rec.count("systemctl --user restart")-before != 1 || strings.Contains(out, "already runs") {
+		t.Errorf("exit %d:\n%s", code, out)
+	}
+}
+
+func TestInstallLeavesGatewayWhenUnitRunsOtherBinary(t *testing.T) {
+	home, rec, args := installWithUnit(t)
+	gatewayRunning(t, false)
+	other := filepath.Join(home, "elsewhere", "crosstalk")
+	p := remoteUnitPath(home)
+	if err := os.WriteFile(p, unitContent(remoteGOOS, other, home), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := setUnitHash(filepath.Join(home, ".config", "crosstalk"), sha256Hex(unitContent(remoteGOOS, other, home))); err != nil {
+		t.Fatal(err)
+	}
+	before := rec.count("systemctl --user restart")
+	_, out := installRunCmd(t, "install", args...)
+	if rec.count("systemctl --user restart") != before || !strings.Contains(out, "runs a binary other than") {
+		t.Errorf("restarted a unit that runs another binary:\n%s", out)
+	}
+}
+
+func TestInstallBinaryKeepsIdenticalCopy(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	dst := filepath.Join(dir, "bin", "crosstalk")
+	if err := os.WriteFile(src, []byte("binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if skipped, err := installBinary(src, dst); err != nil || skipped {
+		t.Fatalf("first copy: skipped=%v err=%v", skipped, err)
+	}
+	before, _ := os.Stat(dst)
+	if skipped, err := installBinary(src, dst); err != nil || !skipped {
+		t.Fatalf("second copy: skipped=%v err=%v", skipped, err)
+	}
+	if after, _ := os.Stat(dst); !os.SameFile(before, after) {
+		t.Error("an identical binary was replaced by a new inode")
+	}
+	os.WriteFile(src, []byte("binary2"), 0o755)
+	if skipped, err := installBinary(src, dst); err != nil || skipped {
+		t.Fatalf("changed source: skipped=%v err=%v", skipped, err)
+	}
+}
+
+func TestK11ReportsUnidentifiedProcesses(t *testing.T) {
+	fakeShims(t, shimProc{PID: 41, PPID: 2, ParentCmd: claudeCmd, ParentPPID: 1, Unknown: true})
+	rs := installShimChecks("/bin/crosstalk")
+	if len(rs) != 1 || rs[0].OK || !strings.Contains(rs[0].Detail, "could not tell") || !strings.Contains(rs[0].Detail, "pids 41") {
+		t.Errorf("got %v", k11Lines(rs))
+	}
+}
+
+func TestK11DaemonAdviceCoversOrphanedAppServer(t *testing.T) {
+	fakeShims(t, shimProc{PID: 21, PPID: 2, ParentCmd: daemonCmd, ParentPPID: 1})
+	rs := installShimChecks("/bin/crosstalk")
+	if len(rs) != 1 || !strings.Contains(rs[0].Detail, "you started yourself") {
+		t.Errorf("got %v", k11Lines(rs))
 	}
 }
 

@@ -31,3 +31,5 @@ K8:
 - `TestK8StateStringsUnchanged`: `service running, port not bound` stays the `GatewayStatus` state.
 
 Docs: `TestSetupDocCoversStaleShims` pins the Upgrade note and the K11 and new K8 Troubleshooting text.
+
+Added after the Codex review: `TestInstallLeavesGatewayWhenUnitRunsOtherBinary`, `TestInstallBinaryKeepsIdenticalCopy`, `TestInstallRestartsGatewayWhenBinaryUnknown`, `TestK11ReportsUnidentifiedProcesses`, `TestK11DaemonAdviceCoversOrphanedAppServer`.
