@@ -57,12 +57,14 @@ func (f uninstallFixture) assertRemoved(t *testing.T) {
 	if hasHook(f.hp) {
 		t.Errorf("hook kept")
 	}
-	if b, _ := os.ReadFile(f.cp); strings.Contains(string(b), "sha256:ours") {
-		t.Errorf("trust record kept:\n%s", b)
+	if b, err := os.ReadFile(f.cp); err != nil || string(b) != orderUnrelated {
+		t.Errorf("config.toml = %q, %v; want only the unrelated table", b, err)
 	}
 }
 
-const orderRecord = `[hooks.state."HOOKS:session_start:0:0"]` + "\ntrusted_hash = \"sha256:ours\"\n"
+const orderUnrelated = "\n[projects.work]\ntrust_level = \"trusted\"\n"
+
+const orderRecord = `[hooks.state."HOOKS:session_start:0:0"]` + "\ntrusted_hash = \"sha256:ours\"\n" + orderUnrelated
 
 func TestUninstallOrder_UnclosedRecordThenFixed_RefusedUntouchedThenRemoved(t *testing.T) {
 	f := newUninstallFixture(t, `[hooks.state."HOOKS:session_start:0:0"]`+"\nargs = [\n\n[projects.work]\ntrust_level = \"trusted\"\n")
@@ -71,6 +73,7 @@ func TestUninstallOrder_UnclosedRecordThenFixed_RefusedUntouchedThenRemoved(t *t
 	}
 	f.assertUnchanged(t)
 	fixed := strings.ReplaceAll(orderRecord, "HOOKS", f.hp)
+	f.config = fixed
 	if err := os.WriteFile(f.cp, []byte(fixed), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -115,6 +118,57 @@ func TestUninstallOrder_ConfigWriteFails_NothingTouchedThenRemovedOnRetry(t *tes
 	}
 	f.assertUnchanged(t)
 	restore()
+	if err := queueWakeRemoveStep(f.env).Apply(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	f.assertRemoved(t)
+}
+
+func TestUninstallOrder_HooksWriteFailsAfterConfigRewrite_BothRestored(t *testing.T) {
+	f := newUninstallFixture(t, strings.Replace(orderRecord, "session_start:0:0", "session_start:1:0", 1))
+	scratch := filepath.Join(t.TempDir(), "hooks.json")
+	other := `{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"echo user"}]}]}}`
+	if err := os.WriteFile(scratch, []byte(other), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := addHook(scratch, f.env.Bin); err != nil {
+		t.Fatal(err)
+	}
+	b, _ := os.ReadFile(scratch)
+	if err := os.WriteFile(f.hp, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f.hooks = string(b)
+	os.Remove(f.hp + ".crosstalk-backup")
+	if err := os.Mkdir(f.hp+".crosstalk-backup", 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := queueWakeRemoveStep(f.env).Apply(t.Context()); err == nil {
+		t.Fatal("expected the hooks.json write to fail")
+	}
+	f.assertUnchanged(t)
+	os.Remove(f.hp + ".crosstalk-backup")
+	if err := queueWakeRemoveStep(f.env).Apply(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	f.assertRemoved(t)
+}
+
+func TestUninstallOrder_SettingFileDeleteFails_BothRestored(t *testing.T) {
+	f := newUninstallFixture(t, orderRecord)
+	dir := filepath.Dir(f.sp)
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chmod(dir, 0o700)
+	if err := os.Remove(filepath.Join(dir, "no-such-file")); err == nil || os.IsNotExist(err) == false {
+		t.Skip("directory permissions do not stop deletes here")
+	}
+	if err := queueWakeRemoveStep(f.env).Apply(t.Context()); err == nil {
+		t.Fatal("expected the setting file delete to fail")
+	}
+	f.assertUnchanged(t)
+	os.Chmod(dir, 0o700)
 	if err := queueWakeRemoveStep(f.env).Apply(t.Context()); err != nil {
 		t.Fatal(err)
 	}

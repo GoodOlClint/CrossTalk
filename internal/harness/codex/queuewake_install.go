@@ -248,17 +248,33 @@ func queueWakeRemoveStep(env harness.InstallEnv) harness.Step {
 			if err != nil {
 				return err
 			}
-			if writeTrust != nil {
-				if err := writeTrust(); err != nil {
-					return err
+			cp := configPath(env.Home)
+			origCfg, cfgErr := os.ReadFile(cp)
+			origHooks, hooksErr := os.ReadFile(hp)
+			restore := func() {
+				for _, f := range []struct {
+					path string
+					b    []byte
+					err  error
+				}{{cp, origCfg, cfgErr}, {hp, origHooks, hooksErr}} {
+					if f.err == nil {
+						_ = harness.ReplaceFile(f.path, f.b)
+					} else if errors.Is(f.err, os.ErrNotExist) {
+						_ = os.Remove(f.path)
+					}
 				}
 			}
-			if writeHook != nil {
-				if err := writeHook(); err != nil {
+			for _, w := range []func() error{writeTrust, writeHook} {
+				if w == nil {
+					continue
+				}
+				if err := w(); err != nil {
+					restore()
 					return err
 				}
 			}
 			if err := os.Remove(sp); err != nil && !errors.Is(err, os.ErrNotExist) {
+				restore()
 				return err
 			}
 			return nil
