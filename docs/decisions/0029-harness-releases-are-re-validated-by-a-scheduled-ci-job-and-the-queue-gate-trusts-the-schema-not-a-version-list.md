@@ -1,6 +1,6 @@
 # ADR 0029 — Harness releases are re-validated by a scheduled CI job, and the queue gate trusts the schema, not a version list
 
-- **Status:** Provisional (operator 2026-11-20; amended 2026-11-21 for the leg matrix, ruling R229, and again 2026-11-21 for the job renames, the four legs and the single usage read; record, detect, tier 0 and the Linux round trip are built, the restructure and the rest are not)
+- **Status:** Provisional (operator 2026-11-20; amended 2026-11-21 for the leg matrix, ruling R229, and again 2026-11-21 for the job renames, the four legs and the single usage read; record, detect, tier 0, the Linux round trip, the leg matrix and the gate floor (step 4) are built; the bump, the issue job and the schedule are not)
 - **Date:** 2026-11-20
 - **Deciders:** operator (rulings 2026-11-20, amendment on macOS runners the same day) + Claude (Opus 5.5)
 - **Context source:** [change plan](https://github.com/GoodOlClint/CrossTalk/blob/main/docs/plans/harness-compat-ci.md); ADR 0015, 0019, 0028
