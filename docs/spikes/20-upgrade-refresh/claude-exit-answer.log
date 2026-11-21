@@ -1,0 +1,13 @@
+Checking step 4: `mcp__probe__probe_new` isn't in my tool list, so there's nothing to call. Here are the results.
+
+**Tool results (verbatim):**
+1. `probe_ping`: `pid=43359 gen=1 tool=probe_ping`
+2. `probe_restart`: `pid=43359 gen=1 tool=probe_restart`
+3. `probe_ping`: `pid=43447 gen=1 tool=probe_ping`
+4. `ToolSearch select:mcp__probe__probe_new`: `No matching deferred tools found`
+
+**Errors:** None from the probe tools.
+
+**Step 4:** `mcp__probe__probe_new` is not in my tool list. It wasn't in the deferred list at the start. No tool-list update appeared after the restart, and the ToolSearch lookup found nothing, so I didn't call it.
+
+**What the restart did:** The pid changed from 43359 to 43447, so the server restarted. `gen` stayed at 1, and the tool list didn't refresh.

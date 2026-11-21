@@ -1,0 +1,7 @@
+NOTE tools before: ['probe_ping', 'probe_restart']
+NOTE ping 1: {'content': [{'type': 'text', 'text': 'pid=43759 gen=1 tool=probe_ping'}]}
+NOTE restart: {'content': [{'type': 'text', 'text': 'pid=43759 gen=1 tool=probe_restart'}]}
+NOTE ping 2: {'content': [{'type': 'text', 'text': 'pid=43759 gen=2 tool=probe_ping'}]}
+NOTE tools after: ['probe_ping', 'probe_restart']
+NOTE probe_new: {'content': [{'type': 'text', 'text': 'pid=43759 gen=2 tool=probe_new'}]}
+NOTE new thread ping: {'content': [{'type': 'text', 'text': 'pid=43822 gen=1 tool=probe_ping'}]}

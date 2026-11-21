@@ -1,0 +1,7 @@
+NOTE tools before: ['probe_ping', 'probe_restart']
+NOTE ping 1: {'content': [{'type': 'text', 'text': 'pid=43887 gen=1 tool=probe_ping'}]}
+NOTE restart: {'content': [{'type': 'text', 'text': 'pid=43887 gen=1 tool=probe_restart'}]}
+NOTE ping 2: {'code': -32603, 'message': 'tool call failed for `probe/probe_ping`: Transport closed'}
+NOTE tools after: ['probe_ping', 'probe_restart']
+NOTE probe_new: {'code': -32603, 'message': 'tool call failed for `probe/probe_new`: Transport closed'}
+NOTE new thread ping: {'content': [{'type': 'text', 'text': 'pid=43955 gen=1 tool=probe_ping'}]}
