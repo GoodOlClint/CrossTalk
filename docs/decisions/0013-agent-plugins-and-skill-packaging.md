@@ -12,13 +12,13 @@ A manual MCP install gave models the tools but not the knowledge to use them: th
 
 ## Decision
 
-- Fix tool output first: `you: true` on the caller's row, `from-harness` on the Claude envelope and `from_harness` in the Codex render, a no-authority `notice` on the Claude envelope, `hint` text for `no_such_agent`, `self`, `agent_held`, `unbound`, `not_ready` and `no_such_message`, and `crosstalk version`.
-- MCP `instructions` (at most 512 bytes, in Go, so a manual install gets them) carry the minimum.
+- Fix tool output first: `you: true` on the caller's row, `from-harness` on the Claude envelope and `from_harness` in the Codex render, a `notice` on the Claude envelope that names the sender's harness and states the teammate rule (ADR 0004), `hint` text for `no_such_agent`, `self`, `agent_held`, `unbound`, `not_ready` and `no_such_message`, and `crosstalk version`.
+- MCP `instructions` (at most 656 bytes, in Go, so a manual install gets them) carry the minimum.
 - One skill, `plugins/crosstalk/skills/crosstalk/SKILL.md`, serves both harnesses with bare tool names. A Go test fails when it names a code the source lacks or omits a state or hinted reason.
 - One plugin directory with `.claude-plugin/` and `.codex-plugin/` manifests and two marketplace files that pin the plugin to a release tag. The plugin declares no MCP server; `crosstalk install` registers one under the key `crosstalk` (ADR 0016). Versions equal `mcpserver.Version` (test).
 - Install from the signed release binary ([ADR 0015](0015-signed-macos-release-in-ci.md)) or `go install`, then `crosstalk install`, which copies the binary to `~/.local/bin`, installs the plugin, registers the server at that absolute path, adds the Claude allow rule `mcp__crosstalk__*` and sets the Codex `default_tools_approval_mode = "approve"` (ADR 0016). A Homebrew install (ADR 0018) skips the copy and registers `<prefix>/bin/crosstalk`.
 - No hooks, commands or agents in the plugin; hooks stay v1.1.
-- The skill's Security section has one exception to "ask the user first": a peer may ask whether this session is online, its working directory, git branch or harness, and the model answers with `reply` without approval (operator ruling 2026-11-04). The clean run showed a Codex peer declining a harmless ask, which breaks the setup test. The exception is narrow because reading files, listings, environment, command output or what the user said is a tool action taken on a peer's word, even where the session's permissions allow it. The skill wording is a hypothesis for the Codex decline, not its measured cause: a Claude peer answered under the older wording.
+- The skill's Security section follows ADR 0004's teammate rule. Superseded in place (2026-11-21): the earlier narrow exception list (online, working directory, git branch, harness) is gone; the model acts on a peer's request within its own permissions.
 
 ## Rejected alternatives
 
