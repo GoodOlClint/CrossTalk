@@ -12,6 +12,16 @@ import (
 	"github.com/GoodOlClint/crosstalk/internal/registry"
 )
 
+type listCounter struct {
+	*registry.Registry
+	n atomic.Int64
+}
+
+func (l *listCounter) List() ([]registry.Descriptor, error) {
+	l.n.Add(1)
+	return l.Registry.List()
+}
+
 type countingRegistrar struct {
 	harness.SessionRegistrar
 	n atomic.Int64
@@ -27,9 +37,10 @@ func (c *countingRegistrar) RegisterSession(ctx context.Context, req harness.Req
 // the poll does not re-register it every tick (ADR 0027).
 func TestServeClaims_PinnedNameHeldAgainstRealServer(t *testing.T) {
 	stateDir := t.TempDir()
+	dir := &listCounter{Registry: registry.New(stateDir)}
 	e := &env{t: t, stateDir: stateDir, sessionDir: t.TempDir(), fb: NewFakeBackend()}
 	e.tune = []func(*claude.HarnessOptions){func(o *claude.HarnessOptions) {
-		o.Directory = registry.New(stateDir)
+		o.Directory = dir
 		o.StateDir = stateDir
 		o.PPID = 4242
 		o.PollInterval = time.Millisecond
@@ -66,40 +77,61 @@ func TestServeClaims_PinnedNameHeldAgainstRealServer(t *testing.T) {
 	if d := e.descriptor(claudeID("c-1")); d.Name != "pinned" {
 		t.Fatalf("alias after rename %q", d.Name)
 	}
-	time.Sleep(20 * time.Millisecond)
+	// Directory.List runs once per poll: wait for polls that began after the rename.
 	before := reg.n.Load()
-	time.Sleep(100 * time.Millisecond)
+	for l0 := dir.n.Load(); dir.n.Load() < l0+30; {
+		if time.Now().After(deadline) {
+			t.Fatal("ServeClaims stopped polling")
+		}
+		time.Sleep(time.Millisecond)
+	}
 	if after := reg.n.Load(); after != before {
 		t.Fatalf("session held under its pin was registered %d more times", after-before)
 	}
 }
 
 // The notice is held before ready closes, so a call that sees the agent ready
-// also sees the notice. With the agent's lock held by the test, registration
-// parks at the hold: ready must stay open until the lock is released.
+// also sees the notice. The backend's Published hook runs on the registering
+// goroutine just before the notice is built; the test takes the agent's lock
+// there, so registration parks at the hold and ready must stay open.
+type publishHook struct {
+	Backend
+	f func(*Agent)
+}
+
+func (p publishHook) Published(a *Agent) { p.f(a) }
+
 func TestAgent_ReadyClosesOnlyAfterNoticeHeld(t *testing.T) {
 	fb := NewFakeBackend()
 	fb.SetSessions(
 		Session{Harness: "codex", SessionRef: "owner", Name: "dup", Cwd: "/w"},
 		Session{Harness: "codex", SessionRef: "late", Name: "dup", Cwd: "/w"},
 	)
-	e := newEnv(t, 999999, fb)
+	var late atomic.Pointer[Agent]
+	published := make(chan struct{})
+	e := &env{t: t, stateDir: t.TempDir(), sessionDir: t.TempDir(), fb: fb}
+	e.wrap = func(b Backend) Backend {
+		return publishHook{b, func(a *Agent) {
+			if a.id == codexID("late") {
+				a.mu.Lock()
+				late.Store(a)
+				close(published)
+			}
+		}}
+	}
+	e.start(999999)
 	e.mustOK(thread("owner"), "send_message", sendArgs("x", "0"))
 
 	errc := make(chan error, 1)
 	go func() {
 		errc <- e.srv.RegisterSession(context.Background(), harness.RequestContext{Meta: thread("late")}, "/w")
 	}()
-	var a *Agent
-	for deadline := time.Now().Add(5 * time.Second); a == nil; {
-		if time.Now().After(deadline) {
-			t.Fatal("registration never started")
-		}
-		e.srv.mu.Lock()
-		a = e.srv.agents[codexID("late")]
-		e.srv.mu.Unlock()
+	select {
+	case <-published:
+	case <-time.After(5 * time.Second):
+		t.Fatal("registration never reached Published")
 	}
-	a.mu.Lock()
+	a := late.Load()
 	select {
 	case <-a.ready:
 		a.mu.Unlock()

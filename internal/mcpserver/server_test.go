@@ -33,6 +33,7 @@ type env struct {
 	srv        *Server
 	cs         *mcp.ClientSession
 	tune       []func(*claude.HarnessOptions)
+	wrap       func(Backend) Backend
 }
 
 func newEnv(t *testing.T, ppid int, fb *FakeBackend) *env {
@@ -53,7 +54,11 @@ func (e *env) start(ppid int) {
 	e.reg = registry.New(e.stateDir)
 	hs := testHarnesses(t, e.sessionDir, e.tune...)
 	e.fb.Harnesses = hs[1:]
-	e.srv = New(Options{Backend: e.fb.AsBackend(), Registry: e.reg, Harnesses: hs, PPID: ppid})
+	var be Backend = e.fb.AsBackend()
+	if e.wrap != nil {
+		be = e.wrap(be)
+	}
+	e.srv = New(Options{Backend: be, Registry: e.reg, Harnesses: hs, PPID: ppid})
 	st, ct := mcp.NewInMemoryTransports()
 	ctx := context.Background()
 	if _, err := e.srv.MCP().Connect(ctx, st, nil); err != nil {
