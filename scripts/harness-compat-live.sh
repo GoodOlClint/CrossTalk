@@ -274,6 +274,21 @@ leg)
 	leg="${2:?usage: harness-compat-live.sh leg claude|codex-linux|cross HOME}"
 	home="${3:?usage: harness-compat-live.sh leg LEG HOME}"
 	: "${OPENROUTER_API_KEY:?}" "${CLAUDE_MODEL:?}" "${CODEX_MODEL:?}"
+	if [ "$leg" = codex-macos ]; then
+		# This leg runs Codex with hook trust bypassed: refuse before creating, copying or installing anything unless the home is a fresh, empty directory under /tmp.
+		real="$(cd "$home" 2>/dev/null && pwd -P)" || real=
+		case "$real" in
+		"$(cd /tmp && pwd -P)"/*) ;;
+		*)
+			echo "codex-macos needs a scratch directory under /tmp as its home, not '$home'" >&2
+			exit 1
+			;;
+		esac
+		[ -z "$(ls -A "$real")" ] || {
+			echo "codex-macos needs an empty scratch home, '$home' has content" >&2
+			exit 1
+		}
+	fi
 	export HOME="$home"
 	state="$home/.local/state/crosstalk"
 	logs="$home/raw"
@@ -330,7 +345,7 @@ leg)
 		eval "exec $2<>\"\$fifo\""
 		(
 			cd "$home/work"
-			exec python3 "${PTYRUN:?}" "$logs/codex-$1.log" "$fifo" codex --no-daemon --dangerously-bypass-approvals-and-sandbox "$3"
+			exec python3 "${PTYRUN:?}" "$logs/codex-$1.log" "$fifo" codex --no-daemon --dangerously-bypass-hook-trust --dangerously-bypass-approvals-and-sandbox "$3"
 		) &
 		pids="$pids $!"
 	}
