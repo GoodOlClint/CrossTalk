@@ -124,40 +124,48 @@ var ErrPathTooLong = errors.New("unix socket path too long")
 // Listen binds Path. A leftover socket with no listener is replaced; the
 // caller holds the agent record lock, so no other registration owns it.
 func (s *Server) Listen() error {
-	if s.KeyPath == "" {
-		s.KeyPath = KeyPath(s.Path)
-	}
-	if len(s.Path) > MaxSockPath {
-		return fmt.Errorf("%w: %d bytes, limit %d: %s (shorten HOME or the state directory)", ErrPathTooLong, len(s.Path), MaxSockPath, s.Path)
-	}
-	tok, err := EnsureKey(s.KeyPath)
+	ln, tok, err := s.listen()
 	if err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(s.Path), 0o700); err != nil {
-		return err
-	}
-	if _, err := os.Lstat(s.Path); err == nil {
-		if c, err := net.DialTimeout("unix", s.Path, time.Second); err == nil {
-			c.Close()
-			return fmt.Errorf("%w: %s", ErrInUse, s.Path)
-		}
-		if err := os.Remove(s.Path); err != nil {
-			return err
-		}
-	}
-	ln, err := net.ListenUnix("unix", &net.UnixAddr{Name: s.Path, Net: "unix"})
-	if err != nil {
-		return err
-	}
-	if err := os.Chmod(s.Path, 0o600); err != nil {
-		ln.Close()
 		return err
 	}
 	s.mu.Lock()
 	s.ln, s.token = ln, tok
 	s.mu.Unlock()
 	return nil
+}
+
+func (s *Server) listen() (*net.UnixListener, string, error) {
+	if s.KeyPath == "" {
+		s.KeyPath = KeyPath(s.Path)
+	}
+	if len(s.Path) > MaxSockPath {
+		return nil, "", fmt.Errorf("%w: %d bytes, limit %d: %s (shorten HOME or the state directory)", ErrPathTooLong, len(s.Path), MaxSockPath, s.Path)
+	}
+	tok, err := EnsureKey(s.KeyPath)
+	if err != nil {
+		return nil, "", err
+	}
+	if err := os.MkdirAll(filepath.Dir(s.Path), 0o700); err != nil {
+		return nil, "", err
+	}
+	if _, err := os.Lstat(s.Path); err == nil {
+		if c, err := net.DialTimeout("unix", s.Path, time.Second); err == nil {
+			c.Close()
+			return nil, "", fmt.Errorf("%w: %s", ErrInUse, s.Path)
+		}
+		if err := os.Remove(s.Path); err != nil {
+			return nil, "", err
+		}
+	}
+	ln, err := net.ListenUnix("unix", &net.UnixAddr{Name: s.Path, Net: "unix"})
+	if err != nil {
+		return nil, "", err
+	}
+	if err := os.Chmod(s.Path, 0o600); err != nil {
+		ln.Close()
+		return nil, "", err
+	}
+	return ln, tok, nil
 }
 
 // Serve accepts connections until ctx ends or Close is called.
@@ -173,7 +181,7 @@ func (s *Server) Serve(ctx context.Context) error {
 	for {
 		c, err := ln.AcceptUnix()
 		if err != nil {
-			if next := s.unpaused(ctx); next != nil {
+			if next := s.unpaused(ctx, ln); next != nil {
 				ln = next
 				continue
 			}
@@ -195,26 +203,28 @@ func (s *Server) Serve(ctx context.Context) error {
 	}
 }
 
-// unpaused waits out a pause and returns the new listener, or nil when the
-// server is not paused or closes meanwhile.
-func (s *Server) unpaused(ctx context.Context) *net.UnixListener {
-	s.mu.Lock()
-	ch := s.paused
-	s.mu.Unlock()
-	if ch == nil {
-		return nil
+// unpaused waits out a pause and returns the listener to accept on after
+// old failed, or nil when Serve should stop.
+func (s *Server) unpaused(ctx context.Context, old *net.UnixListener) *net.UnixListener {
+	for {
+		s.mu.Lock()
+		closing, ch, ln := s.closing, s.paused, s.ln
+		s.mu.Unlock()
+		switch {
+		case closing:
+			return nil
+		case ch != nil:
+			select {
+			case <-ch:
+			case <-ctx.Done():
+				return nil
+			}
+		case ln != old:
+			return ln
+		default:
+			return nil
+		}
 	}
-	select {
-	case <-ch:
-	case <-ctx.Done():
-		return nil
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.closing || s.paused != nil {
-		return nil
-	}
-	return s.ln
 }
 
 // Pause closes the listener, so a dial to Path fails as for a stopped
@@ -231,7 +241,8 @@ func (s *Server) Pause() error {
 	return ln.Close()
 }
 
-// Unpause listens on Path again and lets Serve accept on it.
+// Unpause listens on Path again and lets Serve accept on it. Whoever clears
+// s.paused closes its channel: Unpause here, or Close.
 func (s *Server) Unpause() error {
 	s.mu.Lock()
 	ch := s.paused
@@ -239,12 +250,19 @@ func (s *Server) Unpause() error {
 	if ch == nil {
 		return nil
 	}
-	err := s.Listen()
+	ln, _, err := s.listen()
 	s.mu.Lock()
-	if err == nil {
-		s.paused = nil
+	defer s.mu.Unlock()
+	if s.paused != ch {
+		if ln != nil {
+			ln.Close()
+		}
+		return nil
 	}
-	s.mu.Unlock()
+	if err == nil {
+		s.ln = ln
+	}
+	s.paused = nil
 	close(ch)
 	return err
 }

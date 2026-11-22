@@ -17,6 +17,11 @@ import (
 	"github.com/GoodOlClint/crosstalk/internal/mcpserver"
 )
 
+// ErrExecFailed marks an Exec error from exec itself: the candidate file is
+// not tried again until the path changes once more. Any other Exec error is
+// tried again on the next tick.
+var ErrExecFailed = errors.New("refresh: exec failed")
+
 // OffEnv set to anything but "" or "0" turns refresh off.
 const OffEnv = "CROSSTALK_NO_AUTO_REFRESH"
 
@@ -118,8 +123,10 @@ func (w *Watcher) Tick(ctx context.Context) {
 	}
 	err = w.Exec(cur)
 	undo()
-	w.bad = cur
-	w.log().Warn("refresh: exec failed; staying on this binary", "path", w.Path, "err", err)
+	if errors.Is(err, ErrExecFailed) {
+		w.bad = cur
+	}
+	w.log().Warn("refresh: not exec'd; staying on this binary", "path", w.Path, "err", err)
 }
 
 func orDefault(d, def time.Duration) time.Duration {

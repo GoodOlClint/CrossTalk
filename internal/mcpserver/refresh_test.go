@@ -389,3 +389,35 @@ func TestResumeDefersAgentsTheHarnessProves(t *testing.T) {
 		t.Fatalf("pending notices after the proof = %v, want the carried one", notices)
 	}
 }
+
+// A carried agent still waiting to resume, or to be proven by its harness,
+// is carried into the next handoff, so a second refresh in that interval
+// loses neither; a deferred agent its harness then drops is not carried on.
+func TestHandoffCarriesPendingRestorations(t *testing.T) {
+	stateDir, sessions := t.TempDir(), t.TempDir()
+	ho := roundTrip(t, &Handoff{RefreshHandoff: HandoffFormat, Agents: []AgentHandoff{
+		{ID: claudeID("gone-sess"), Harness: "claude", SessionRef: "gone-sess", PendingNotice: []string{"kept"}},
+		{ID: claudeID("proof-sess"), Harness: "claude", SessionRef: "proof-sess"},
+		{ID: claudeID("dropped-sess"), Harness: "claude", SessionRef: "dropped-sess"},
+	}, Harness: map[string]json.RawMessage{"claude": json.RawMessage(`{}`)}})
+	hs := testHarnesses(t, sessions)
+	hs[1] = provingHarness{Harness: hs[1], refs: []string{"proof-sess", "dropped-sess"}}
+	fb := NewFakeBackend()
+	fb.Harnesses = hs[1:]
+	srv := New(Options{Backend: fb.AsBackend(), Registry: registry.New(stateDir), Harnesses: hs, PPID: 4242, SupersedeInterval: time.Hour})
+	t.Cleanup(func() { srv.Close() })
+	srv.Resume(context.Background(), ho)
+	writeClaudeSession(t, sessions, 4242, "dropped-sess", "x", "/w")
+	srv.RetireSession(context.Background(), harnessReq(4242))
+	next := srv.Handoff(SessionState{}, BinaryIdentity{})
+	var ids []string
+	for _, a := range next.Agents {
+		ids = append(ids, a.SessionRef)
+		if a.SessionRef == "gone-sess" && !slices.Equal(a.PendingNotice, []string{"kept"}) {
+			t.Errorf("pending agent's notices = %v", a.PendingNotice)
+		}
+	}
+	if !slices.Equal(ids, []string{"gone-sess", "proof-sess"}) && !slices.Equal(ids, []string{"proof-sess", "gone-sess"}) {
+		t.Fatalf("next handoff agents = %v, want the pending and the still-deferred one", ids)
+	}
+}

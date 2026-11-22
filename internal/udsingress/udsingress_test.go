@@ -522,3 +522,43 @@ func TestNativeShapeRejectionsWriteNothing(t *testing.T) {
 func envMsg(id, body string) msg.Message {
 	return msg.Message{MessageID: id, Kind: msg.Inform, Parts: []msg.Part{{Type: "text", Text: body}}}
 }
+
+// An unpause right after the pause, before Serve sees the close, still
+// serves at the same path.
+func TestPauseUnpauseRaceKeepsServing(t *testing.T) {
+	rcv := &recordingReceiver{}
+	s, tok := start(t, staticDir(nil), rcv)
+	for range 20 {
+		s.Pause()
+		if err := s.Unpause(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if a := ackOf(t, send(t, s.Path, tok, userLineJSON("hello", nil))); a.State != "accepted" {
+		t.Fatalf("%+v", a)
+	}
+}
+
+// A failed rebind or a Close during a pause leaves Unpause safe to call
+// again: no double close of the pause channel.
+func TestUnpauseAfterFailedRebindAndClose(t *testing.T) {
+	s, _ := start(t, staticDir(nil), &recordingReceiver{})
+	s.Pause()
+	occ, err := net.Listen("unix", s.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer occ.Close()
+	if err := s.Unpause(); err == nil {
+		t.Fatal("rebind over a live socket succeeded")
+	}
+	if err := s.Unpause(); err != nil {
+		t.Fatal(err)
+	}
+	s2, _ := start(t, staticDir(nil), &recordingReceiver{})
+	s2.Pause()
+	s2.Close()
+	if err := s2.Unpause(); err != nil {
+		t.Fatal(err)
+	}
+}

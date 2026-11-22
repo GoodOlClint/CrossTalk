@@ -411,6 +411,25 @@ func (h *Harness) UninstallSteps(env harness.InstallEnv) []harness.Step {
 	}
 }
 
+// RegisteredCommands lists the command of the crosstalk server entry, as
+// written.
+func (h *Harness) RegisteredCommands(env harness.InstallEnv) ([]string, error) {
+	b, err := os.ReadFile(configPath(env.Home))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if otherForm(strings.Split(string(b), "\n")) {
+		return nil, fmt.Errorf("%s declares the crosstalk server in a form install does not read", configPath(env.Home))
+	}
+	if e, ok := readEntry(string(b)); ok {
+		return []string{e.command}, nil
+	}
+	return nil, nil
+}
+
 func (h *Harness) Registered(env harness.InstallEnv) (bool, error) {
 	b, err := os.ReadFile(configPath(env.Home))
 	if errors.Is(err, os.ErrNotExist) {

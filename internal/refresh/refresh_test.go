@@ -2,6 +2,7 @@ package refresh
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -95,5 +96,26 @@ func TestRefreshInodeChangedAfterProbe(t *testing.T) {
 	w.Tick(context.Background())
 	if r.probes != 2 || r.probed[0] != v2.Ino || r.probed[1] != v3.Ino || r.execs != 1 {
 		t.Fatalf("second tick: %+v, want the newer file (ino %d after %d) probed and exec'd", r, v3.Ino, v2.Ino)
+	}
+}
+
+// A handoff error before exec is tried again on the next tick; an exec
+// failure rules the file out until the path changes.
+func TestRefreshRetriesAfterTransientExecError(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "crosstalk")
+	os.WriteFile(bin, []byte("v1"), 0o755)
+	id, _ := mcpserver.IdentityOf(bin)
+	os.WriteFile(bin+".n", []byte("v2"), 0o755)
+	os.Rename(bin+".n", bin)
+	var r rec
+	w := r.watcher(bin, id, mcpserver.IdentityOf)
+	errs := []error{errors.New("disk full"), ErrExecFailed}
+	w.Exec = func(mcpserver.BinaryIdentity) error { r.execs++; e := errs[0]; errs = errs[1:]; return e }
+	for range 3 {
+		w.Tick(context.Background())
+	}
+	if r.execs != 2 || r.probes != 2 {
+		t.Fatalf("%+v, want a retry after the transient error and none after the exec failure", r)
 	}
 }

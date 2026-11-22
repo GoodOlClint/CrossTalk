@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -21,19 +22,25 @@ import (
 	"github.com/GoodOlClint/crosstalk/internal/refresh"
 )
 
-// refreshArmed reports whether argv0 is a binary path a harness registration
-// in home runs, with refresh not turned off (ADR 0030).
+type commandLister interface {
+	RegisteredCommands(env harness.InstallEnv) ([]string, error)
+}
+
+// refreshArmed reports whether argv0 is, exactly, the command a harness
+// registration in home names, with refresh not turned off (ADR 0030). A
+// relative or symlink-equivalent command does not count.
 func refreshArmed(argv0, home string, hs []harness.Harness) bool {
 	if refresh.Off() || home == "" {
 		return false
 	}
 	return refresh.Trusted(argv0, func(bin string) bool {
 		for _, h := range hs {
-			in, ok := h.(harness.Installer)
+			cl, ok := h.(commandLister)
 			if !ok {
 				continue
 			}
-			if reg, err := in.Registered(harness.InstallEnv{Bin: bin, Home: home}); err == nil && reg {
+			cmds, _ := cl.RegisteredCommands(harness.InstallEnv{Bin: bin, Home: home})
+			if slices.Contains(cmds, bin) {
 				return true
 			}
 		}
@@ -41,17 +48,33 @@ func refreshArmed(argv0, home string, hs []harness.Harness) bool {
 	})
 }
 
-// pollableStdin returns fd 0 in non-blocking mode, so a read waiting on it
-// can be interrupted by a deadline without consuming a byte.
+// stdinFlags are fd 0's file status flags before pollableStdin changed them.
+var stdinFlags = -1
+
+// pollableStdin returns a close-on-exec duplicate of fd 0 in non-blocking
+// mode, so a read waiting on it can be interrupted by a deadline without
+// consuming a byte. O_NONBLOCK is shared with fd 0; on failure the flags are
+// restored and only the duplicate is closed.
 func pollableStdin() (*os.File, error) {
-	if err := syscall.SetNonblock(0, true); err != nil {
+	fl, err := unix.FcntlInt(0, unix.F_GETFL, 0)
+	if err != nil {
 		return nil, err
 	}
-	f := os.NewFile(0, "/dev/stdin")
+	fd, err := unix.FcntlInt(0, unix.F_DUPFD_CLOEXEC, 3)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.SetNonblock(fd, true); err != nil {
+		syscall.Close(fd)
+		return nil, err
+	}
+	f := os.NewFile(uintptr(fd), "/dev/stdin")
 	if err := f.SetReadDeadline(time.Time{}); err != nil {
-		syscall.SetNonblock(0, false)
+		f.Close()
+		unix.FcntlInt(0, unix.F_SETFL, fl)
 		return nil, err
 	}
+	stdinFlags = fl
 	return f, nil
 }
 
@@ -101,29 +124,44 @@ var expired = func() context.Context {
 	return ctx
 }()
 
-// execHandoff writes the handoff to an inherited descriptor and execs path
-// with the same argv; it returns only when exec fails.
+// errChanged: the file at the trusted path changed again while the handoff
+// was prepared; the next tick probes it.
+var errChanged = errors.New("refresh: binary replaced again before exec")
+
+// execHandoff writes the handoff to a descriptor the new image inherits,
+// checks that path is still the probed file, and execs it with the same
+// argv; it returns only when it did not exec. While close-on-exec is clear on
+// the handoff descriptor, syscall.ForkLock is held, so no child forked
+// meanwhile inherits it.
 func execHandoff(srv *mcpserver.Server, conn *mcpserver.Conn, path string, id mcpserver.BinaryIdentity) error {
 	f, err := mcpserver.WriteHandoff(srv.Handoff(conn.State(), id))
 	if err != nil {
 		return err
 	}
 	defer f.Close()
-	fd := int(f.Fd())
-	if _, err := unix.FcntlInt(uintptr(fd), unix.F_SETFD, 0); err != nil {
-		return err
+	if cur, err := mcpserver.IdentityOf(path); err != nil || cur.Dev != id.Dev || cur.Ino != id.Ino {
+		return errChanged
 	}
-	env := []string{mcpserver.HandoffFDEnv + "=" + strconv.Itoa(fd)}
+	fd := f.Fd()
+	env := []string{mcpserver.HandoffFDEnv + "=" + strconv.Itoa(int(fd))}
 	for _, e := range os.Environ() {
 		if !strings.HasPrefix(e, mcpserver.HandoffFDEnv+"=") {
 			env = append(env, e)
 		}
 	}
-	syscall.SetNonblock(0, false)
+	syscall.ForkLock.RLock()
+	defer syscall.ForkLock.RUnlock()
+	if _, err := unix.FcntlInt(fd, unix.F_SETFD, 0); err != nil {
+		return err
+	}
+	defer unix.FcntlInt(fd, unix.F_SETFD, unix.FD_CLOEXEC)
+	if stdinFlags >= 0 {
+		unix.FcntlInt(0, unix.F_SETFL, stdinFlags)
+	}
 	err = syscall.Exec(path, os.Args, env)
 	syscall.SetNonblock(0, true)
 	runtime.KeepAlive(f)
-	return fmt.Errorf("exec %s: %w", path, err)
+	return fmt.Errorf("%w: exec %s: %w", refresh.ErrExecFailed, path, err)
 }
 
 // startRefresh arms the watcher when argv0 is trusted and returns the input

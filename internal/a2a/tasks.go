@@ -798,12 +798,14 @@ func (s *Server) armDeadline(t *task) {
 	if t.deadline.IsZero() {
 		return
 	}
-	expire := func() {
-		done, ok := quiesce.Hold(s.base)
-		if !ok {
-			return
+	expire := func(hold bool) {
+		if hold {
+			done, ok := quiesce.Hold(s.base)
+			if !ok {
+				return
+			}
+			defer done()
 		}
-		defer done()
 		if !s.admit() {
 			return
 		}
@@ -813,9 +815,9 @@ func (s *Server) armDeadline(t *task) {
 		}
 	}
 	if d := time.Until(t.deadline); d > 0 {
-		s.tasks.setTimer(t, d, expire)
+		s.tasks.setTimer(t, d, func() { expire(true) })
 	} else {
-		expire()
+		expire(false)
 	}
 }
 

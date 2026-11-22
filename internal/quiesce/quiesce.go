@@ -29,6 +29,22 @@ func Enter() func() {
 	return leave()
 }
 
+// Inc counts one unit of work that ends with a matching Dec, for a counter
+// that has no place to keep Enter's func.
+func Inc() {
+	g.mu.Lock()
+	g.busy++
+	g.mu.Unlock()
+}
+
+// Dec ends one unit counted by Inc.
+func Dec() {
+	g.mu.Lock()
+	g.busy--
+	changed()
+	g.mu.Unlock()
+}
+
 // TryEnter is Enter that refuses while paused, for a new request at an
 // ingress front door.
 func TryEnter() (func(), bool) {

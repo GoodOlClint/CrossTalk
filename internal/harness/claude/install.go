@@ -582,6 +582,20 @@ func entriesAnyScope(home string) (user *mcpEntry, other []scopedEntry, err erro
 	return user, out, errors.Join(errs...)
 }
 
+// RegisteredCommands lists the command of every crosstalk server entry, in
+// any scope, as written.
+func (h *Harness) RegisteredCommands(env harness.InstallEnv) ([]string, error) {
+	u, es, err := entriesAnyScope(env.Home)
+	if u != nil {
+		es = append(es, scopedEntry{u, "user scope"})
+	}
+	var out []string
+	for _, e := range es {
+		out = append(out, e.Command)
+	}
+	return out, err
+}
+
 func (h *Harness) Registered(env harness.InstallEnv) (bool, error) {
 	u, es, err := entriesAnyScope(env.Home)
 	if u != nil {

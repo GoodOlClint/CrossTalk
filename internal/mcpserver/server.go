@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
+	"slices"
 	"sync"
 	"time"
 
@@ -72,6 +74,9 @@ type Server struct {
 	// deferred holds carried agents a harness registers itself after its
 	// own proof; RegisterSession applies the carried values then.
 	deferred map[string]AgentHandoff
+	// pending holds carried agents Resume is still trying again; a handoff
+	// carries them and deferred ones forward.
+	pending map[string]AgentHandoff
 	// timedOut keeps retired agents reachable: a collected *os.File's finalizer
 	// would drop the agent flock before process exit.
 	timedOut []*Agent
@@ -205,7 +210,7 @@ func (s *Server) Resume(ctx context.Context, h *Handoff) {
 			}
 		}
 	}
-	var failed []AgentHandoff
+	failed := false
 	for _, ah := range h.Agents {
 		if deferred[ah.ID] && !ah.ViaCall {
 			s.mu.Lock()
@@ -220,11 +225,17 @@ func (s *Server) Resume(ctx context.Context, h *Handoff) {
 		if err := s.resumeAgent(ctx, ah); err != nil {
 			slog.Warn("mcpserver: resuming agent; retrying", "agent", ah.ID, "err", err)
 			s.dropStale(ah.ID)
-			failed = append(failed, ah)
+			s.mu.Lock()
+			if s.pending == nil {
+				s.pending = map[string]AgentHandoff{}
+			}
+			s.pending[ah.ID] = ah
+			s.mu.Unlock()
+			failed = true
 		}
 	}
-	if len(failed) > 0 {
-		go s.retryResume(ctx, failed)
+	if failed {
+		go s.retryResume(ctx)
 	}
 }
 
@@ -232,7 +243,7 @@ func (s *Server) Resume(ctx context.Context, h *Handoff) {
 // interval, an agent whose session did not resolve at resume.
 const ResumeRetries = 15
 
-func (s *Server) retryResume(ctx context.Context, left []AgentHandoff) {
+func (s *Server) retryResume(ctx context.Context) {
 	t := time.NewTicker(s.interval)
 	defer t.Stop()
 	for range ResumeRetries {
@@ -245,20 +256,30 @@ func (s *Server) retryResume(ctx context.Context, left []AgentHandoff) {
 		if !ok {
 			return
 		}
-		var still []AgentHandoff
+		s.mu.Lock()
+		left := slices.Collect(maps.Values(s.pending))
+		s.mu.Unlock()
 		for _, ah := range left {
-			if err := s.resumeAgent(ctx, ah); err != nil {
-				still = append(still, ah)
+			if s.resumeAgent(ctx, ah) == nil {
+				s.mu.Lock()
+				delete(s.pending, ah.ID)
+				s.mu.Unlock()
 			}
 		}
+		s.mu.Lock()
+		n := len(s.pending)
+		s.mu.Unlock()
 		done()
-		if left = still; len(left) == 0 {
+		if n == 0 {
 			return
 		}
 	}
-	for _, ah := range left {
-		slog.Warn("mcpserver: carried agent not resumed; it binds again on its next call", "agent", ah.ID)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id := range s.pending {
+		slog.Warn("mcpserver: carried agent not resumed; it binds again on its next call", "agent", id)
 	}
+	s.pending = nil
 }
 
 // dropStale removes the descriptor the previous image of this process left
@@ -382,6 +403,7 @@ func (s *Server) RetireSession(ctx context.Context, req harness.RequestContext) 
 	}
 	id := identity.AgentID(string(c.harness), c.sessionRef)
 	s.mu.Lock()
+	delete(s.deferred, id)
 	a := s.agents[id]
 	mine := a != nil && a.isReady() && !a.viaCall
 	if mine {

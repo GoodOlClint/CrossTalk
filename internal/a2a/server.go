@@ -347,8 +347,13 @@ func (s *Server) Serve(ctx context.Context) error {
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
 		}
-		if ln = s.unpaused(); ln == nil {
-			return err
+		if ln = s.unpaused(ln); ln == nil {
+			select {
+			case <-s.closed:
+				return nil
+			default:
+				return err
+			}
 		}
 	}
 }
@@ -357,26 +362,31 @@ func (s *Server) Serve(ctx context.Context) error {
 // request waiting for its task holds no work a refresh must wait for.
 type idleKey struct{}
 
-// unpaused waits out a pause and returns the new listener, or nil when the
-// server is not paused, closes meanwhile, or could not listen again.
-func (s *Server) unpaused() net.Listener {
-	s.mu.Lock()
-	ch := s.paused
-	s.mu.Unlock()
-	if ch == nil {
-		return nil
+// unpaused waits out a pause and returns the listener to serve after old
+// failed, or nil when Serve should stop.
+func (s *Server) unpaused(old net.Listener) net.Listener {
+	for {
+		s.mu.Lock()
+		ch, ln := s.paused, s.ln
+		s.mu.Unlock()
+		select {
+		case <-s.closed:
+			return nil
+		default:
+		}
+		switch {
+		case ch != nil:
+			select {
+			case <-ch:
+			case <-s.closed:
+				return nil
+			}
+		case ln != old:
+			return ln
+		default:
+			return nil
+		}
 	}
-	select {
-	case <-ch:
-	case <-s.closed:
-		return nil
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.paused != nil {
-		return nil
-	}
-	return s.ln
 }
 
 // Pause closes the listener, so a peer's dial is refused (unreachable), and
@@ -404,19 +414,40 @@ func (s *Server) Pause() error {
 // valid, and lets Serve accept on it.
 func (s *Server) Unpause() error {
 	s.mu.Lock()
-	ch, addr, srv := s.paused, s.ln.Addr().String(), s.srv
+	ch, srv := s.paused, s.srv
+	var addr string
+	if ch != nil {
+		addr = s.ln.Addr().String()
+	}
 	s.mu.Unlock()
 	if ch == nil {
 		return nil
 	}
 	ln, err := net.Listen("tcp", addr)
 	s.mu.Lock()
-	if err == nil {
-		s.ln, s.paused = ln, nil
+	defer s.mu.Unlock()
+	select {
+	case <-s.closed:
+		if ln != nil {
+			ln.Close()
+		}
+		s.paused = nil
+		close(ch)
+		return nil
+	default:
 	}
-	s.mu.Unlock()
-	srv.SetKeepAlivesEnabled(true)
+	if s.paused != ch {
+		if ln != nil {
+			ln.Close()
+		}
+		return nil
+	}
+	if err == nil {
+		s.ln = ln
+	}
+	s.paused = nil
 	close(ch)
+	srv.SetKeepAlivesEnabled(true)
 	return err
 }
 

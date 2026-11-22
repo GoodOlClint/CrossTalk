@@ -109,6 +109,21 @@ func (s *Server) Handoff(st SessionState, bin BinaryIdentity) *Handoff {
 		}
 		h.Agents = append(h.Agents, ah)
 	}
+	s.mu.Lock()
+	have := map[string]bool{}
+	for _, ah := range h.Agents {
+		have[ah.ID] = true
+	}
+	for _, m := range []map[string]AgentHandoff{s.pending, s.deferred} {
+		for id, ah := range m {
+			if !have[id] {
+				h.Agents = append(h.Agents, ah)
+				have[id] = true
+			}
+		}
+	}
+	s.mu.Unlock()
+	slices.SortFunc(h.Agents, func(a, b AgentHandoff) int { return strings.Compare(a.ID, b.ID) })
 	for _, hh := range s.harnesses {
 		if rf, ok := hh.(harness.Refreshable); ok {
 			if raw := rf.RefreshState(); len(raw) > 0 {

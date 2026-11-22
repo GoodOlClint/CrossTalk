@@ -230,6 +230,7 @@ func (c *Claims) AcceptDurable(ctx context.Context, cl Claim) error {
 }
 
 func (c *Claims) accept(ctx context.Context, cl Claim, live bool) error {
+	defer quiesce.Enter()()
 	if err := c.proveTarget(cl.SessionID); err != nil {
 		return err
 	}
@@ -288,6 +289,7 @@ func (c *Claims) Snapshot() []Binding {
 // then tried by the normal scan. It returns the dropped
 // threads, sorted.
 func (c *Claims) Resume(ctx context.Context, carried []Binding) []string {
+	defer quiesce.Enter()()
 	var dropped []string
 	for _, b := range carried {
 		t := b.Claim.SessionID

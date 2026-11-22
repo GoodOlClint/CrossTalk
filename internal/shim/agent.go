@@ -54,7 +54,13 @@ type AgentState struct {
 	closeErr  error
 }
 
-func (st *AgentState) Agent() *mcpserver.Agent      { return st.agent }
+func (st *AgentState) Agent() *mcpserver.Agent { return st.agent }
+
+func (st *AgentState) boundTime() time.Time {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	return st.boundAt
+}
 func (st *AgentState) Binding() adapter.Binding     { return st.binding }
 func (st *AgentState) Receiver() *receiver.Receiver { return st.rcv }
 func (st *AgentState) UDSPath() string              { return st.udsPath }
@@ -100,7 +106,9 @@ func (s *Shim) RefreshExport(a *mcpserver.Agent, h *mcpserver.AgentHandoff) {
 	st := s.agents[a.ID()]
 	s.mu.Unlock()
 	if st != nil && st.agent == a {
+		st.mu.Lock()
 		h.Binding, h.BoundAt = st.binding, st.boundAt
+		st.mu.Unlock()
 	}
 }
 
@@ -111,7 +119,9 @@ func (s *Shim) RefreshResume(a *mcpserver.Agent, h mcpserver.AgentHandoff) {
 	st := s.agents[a.ID()]
 	s.mu.Unlock()
 	if st != nil && st.agent == a && !h.BoundAt.IsZero() {
+		st.mu.Lock()
 		st.boundAt = h.BoundAt
+		st.mu.Unlock()
 	}
 }
 
@@ -179,10 +189,13 @@ func (s *Shim) Bind(ctx context.Context, a *mcpserver.Agent) (mcpserver.BindInfo
 		if err := u.Listen(); err != nil {
 			return mcpserver.BindInfo{}, err
 		}
-		st.uds, st.serve = u, make(chan struct{})
+		serve := make(chan struct{})
+		st.mu.Lock()
+		st.uds, st.serve = u, serve
+		st.mu.Unlock()
 		go func() {
-			defer close(st.serve)
-			if err := st.uds.Serve(st.ctx); err != nil {
+			defer close(serve)
+			if err := u.Serve(st.ctx); err != nil {
 				s.log.Warn("shim: uds ingress stopped", "agent", a.ID(), "err", err)
 			}
 		}()
@@ -393,11 +406,12 @@ func (s *Shim) PauseIngress() (unpause func()) {
 	var undo []func() error
 	for _, st := range sts {
 		st.mu.Lock()
-		up, uds, a2a := st.up && !st.closed, st.uds, st.a2a
-		st.mu.Unlock()
-		if !up {
+		if !st.up || st.closed {
+			st.mu.Unlock()
 			continue
 		}
+		uds, a2a := st.uds, st.a2a
+		st.mu.Unlock()
 		if p, ok := uds.(pausable); ok {
 			if err := p.Pause(); err != nil {
 				s.log.Warn("shim: pausing uds ingress", "agent", st.agent.ID(), "err", err)
