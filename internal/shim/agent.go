@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"slices"
 	"sync"
 	"time"
 
@@ -394,16 +395,20 @@ type pausable interface {
 
 // PauseIngress closes every agent's unix socket and A2A listener, so a peer
 // dial fails as for a stopped agent (ADR 0030 quiesce); the returned func
-// listens again at the same endpoints. Work already admitted is counted by
-// package quiesce, not here.
-func (s *Shim) PauseIngress() (unpause func()) {
+// listens again at the same endpoints and reports the agents for which that
+// failed. Work already admitted is counted by package quiesce, not here.
+func (s *Shim) PauseIngress() (unpause func() (lost []*mcpserver.Agent)) {
 	s.mu.Lock()
 	sts := make([]*AgentState, 0, len(s.agents))
 	for _, st := range s.agents {
 		sts = append(sts, st)
 	}
 	s.mu.Unlock()
-	var undo []func() error
+	type reopen struct {
+		a *mcpserver.Agent
+		f func() error
+	}
+	var undo []reopen
 	for _, st := range sts {
 		st.mu.Lock()
 		if !st.up || st.closed {
@@ -416,22 +421,26 @@ func (s *Shim) PauseIngress() (unpause func()) {
 			if err := p.Pause(); err != nil {
 				s.log.Warn("shim: pausing uds ingress", "agent", st.agent.ID(), "err", err)
 			}
-			undo = append(undo, p.Unpause)
+			undo = append(undo, reopen{st.agent, p.Unpause})
 		}
 		if a2a.Pause != nil {
 			if err := a2a.Pause(); err != nil {
 				s.log.Warn("shim: pausing a2a listener", "agent", st.agent.ID(), "err", err)
 			}
 			if a2a.Unpause != nil {
-				undo = append(undo, a2a.Unpause)
+				undo = append(undo, reopen{st.agent, a2a.Unpause})
 			}
 		}
 	}
-	return func() {
-		for _, f := range undo {
-			if err := f(); err != nil {
-				s.log.Warn("shim: reopening ingress after a refresh gave up", "err", err)
+	return func() (lost []*mcpserver.Agent) {
+		for _, r := range undo {
+			if err := r.f(); err != nil {
+				s.log.Warn("shim: reopening ingress after a refresh gave up", "agent", r.a.ID(), "err", err)
+				if !slices.Contains(lost, r.a) {
+					lost = append(lost, r.a)
+				}
 			}
 		}
+		return lost
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/GoodOlClint/crosstalk/internal/mcpserver"
+	"github.com/GoodOlClint/crosstalk/internal/quiesce"
 )
 
 type rec struct {
@@ -119,4 +120,35 @@ func TestRefreshRetriesAfterTransientExecError(t *testing.T) {
 	if r.execs != 2 || r.probes != 2 {
 		t.Fatalf("%+v, want a retry after the transient error and none after the exec failure", r)
 	}
+}
+
+// A failed Exec undoes the quiesce exactly once, so the gate admits work
+// again and this shim keeps serving on its current binary.
+func TestRefreshUndoesQuiesceAfterFailedExec(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "crosstalk")
+	os.WriteFile(bin, []byte("v1"), 0o755)
+	id, _ := mcpserver.IdentityOf(bin)
+	os.WriteFile(bin+".n", []byte("v2"), 0o755)
+	os.Rename(bin+".n", bin)
+	var r rec
+	w := r.watcher(bin, id, mcpserver.IdentityOf)
+	w.Quiesce = func(context.Context) (func(), error) {
+		r.quiesces++
+		if !quiesce.Pause() {
+			t.Fatal("pause in progress")
+		}
+		return func() { r.undos++; quiesce.Unpause() }, nil
+	}
+	w.Exec = func(mcpserver.BinaryIdentity) error { r.execs++; return ErrExecFailed }
+	w.Tick(context.Background())
+	if r.execs != 1 || r.undos != 1 {
+		t.Fatalf("%+v, want one exec and one undo", r)
+	}
+	done, ok := quiesce.TryEnter()
+	if !ok {
+		quiesce.Unpause()
+		t.Fatal("the gate still refuses work after a failed exec")
+	}
+	done()
 }

@@ -83,18 +83,21 @@ type ingressPauser interface{ PauseIngress() (unpause func()) }
 // quiesceForExec stops admitting peer work, stops the stdin reader at a frame
 // boundary, and waits until every read request is answered and no counted
 // work runs. The listeners close only after that wait, so agents bound by a
-// call still running are paused too.
+// call still running are paused too. Undo opens the gate before reopening
+// the listeners and resumes stdin last: an agent whose listener cannot listen
+// again is retired, which waits for its running calls, and those may need the
+// gate, while a fresh call from stdin could outlast that wait.
 func quiesceForExec(ctx context.Context, sh ingressPauser, conn *mcpserver.Conn) (func(), error) {
 	if !quiesce.Pause() {
 		return nil, errors.New("refresh: a pause is already in progress")
 	}
 	var unpause []func()
 	undo := func() {
+		quiesce.Unpause()
 		for _, f := range unpause {
 			f()
 		}
 		conn.Unpause()
-		quiesce.Unpause()
 	}
 	unpause = append(unpause, sh.PauseIngress())
 	if err := conn.Pause(); err != nil {
@@ -102,6 +105,10 @@ func quiesceForExec(ctx context.Context, sh ingressPauser, conn *mcpserver.Conn)
 		return nil, err
 	}
 	for {
+		if err := ctx.Err(); err != nil {
+			undo()
+			return nil, err
+		}
 		if err := conn.WaitPaused(ctx); err != nil {
 			undo()
 			return nil, err
@@ -111,6 +118,10 @@ func quiesceForExec(ctx context.Context, sh ingressPauser, conn *mcpserver.Conn)
 			return nil, err
 		}
 		unpause = append(unpause, sh.PauseIngress())
+		if err := ctx.Err(); err != nil {
+			undo()
+			return nil, err
+		}
 		if quiesce.Busy() == 0 && conn.WaitPaused(expired) == nil {
 			return undo, nil
 		}

@@ -947,3 +947,47 @@ func (s *Server) addTools() {
 	s.addRenameTool()
 	s.addInboxTools()
 }
+
+// IngressPauser is a Backend that closes peer ingress for a refresh (ADR
+// 0030); unpause listens again and reports the agents for which that failed.
+type IngressPauser interface {
+	PauseIngress() (unpause func() (lost []*Agent))
+}
+
+// PauseIngress pauses the backend's peer ingress. The returned func reopens
+// it and retires every agent that could not listen again, as
+// RetireSuperseded does, so no descriptor advertises a dead endpoint; the
+// session's next registration binds it again with new endpoints. An agent
+// still registering is retired once its registration ends.
+func (s *Server) PauseIngress() (unpause func()) {
+	ip, ok := s.backend.(IngressPauser)
+	if !ok {
+		return func() {}
+	}
+	f := ip.PauseIngress()
+	return func() {
+		for _, a := range f() {
+			if a.isReady() {
+				s.retireLost(a)
+			} else {
+				go s.retireLost(a)
+			}
+		}
+	}
+}
+
+func (s *Server) retireLost(a *Agent) {
+	<-a.ready
+	if a.err != nil {
+		return
+	}
+	s.mu.Lock()
+	mine := s.agents[a.id] == a
+	if mine {
+		delete(s.agents, a.id)
+	}
+	s.mu.Unlock()
+	if mine {
+		s.retire(a, "ingress lost")
+	}
+}

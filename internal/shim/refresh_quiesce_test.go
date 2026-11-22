@@ -3,7 +3,9 @@ package shim
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -65,4 +67,48 @@ func TestPauseIngressDuringFirstBind(t *testing.T) {
 	}
 	close(stop)
 	wg.Wait()
+}
+
+// A listener that cannot listen again after a refresh gave up retires its
+// agent, so no descriptor advertises the dead endpoint; the next call binds
+// the agent again with a new one.
+func TestFailedRebindRetiresAgent(t *testing.T) {
+	w := newWorld(t)
+	w.codex.addThread("T-a", "alice")
+	var starts atomic.Int32
+	n := w.node(1, w.lb, func(o *Options) {
+		o.StartA2A = func(context.Context, *AgentState) (A2AListener, error) {
+			k := starts.Add(1)
+			l := A2AListener{URL: fmt.Sprintf("http://127.0.0.1:%d", 40000+k), Pause: func() error { return nil }, Unpause: func() error { return nil }}
+			if k == 1 {
+				l.Unpause = func() error { return errors.New("address already in use") }
+			}
+			return l, nil
+		}
+	})
+	n.ok(thread("T-a"), "receive_message", map[string]any{})
+	dead := "http://127.0.0.1:40001"
+	advertised := func(url string) bool {
+		ds, err := n.sh.reg.List()
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, d := range ds {
+			if d.A2AURL == url {
+				return true
+			}
+		}
+		return false
+	}
+	if !advertised(dead) {
+		t.Fatal("bound agent not advertised")
+	}
+	n.srv.PauseIngress()()
+	if advertised(dead) {
+		t.Fatal("a descriptor still advertises the endpoint that did not listen again")
+	}
+	n.ok(thread("T-a"), "receive_message", map[string]any{})
+	if !advertised("http://127.0.0.1:40002") {
+		t.Fatal("agent not bound again with a new endpoint")
+	}
 }
