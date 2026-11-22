@@ -2,6 +2,7 @@ package codex
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"testing"
 	"time"
@@ -64,9 +65,6 @@ func TestResumeReprovesCodexClaims(t *testing.T) {
 	if slices.Contains(reg.retired, "T1") {
 		t.Fatalf("T1 retired: %v", reg.retired)
 	}
-	if got := reg.got(); len(got) != 0 {
-		t.Fatalf("resume re-registered %v; the agents are registered by the server", got)
-	}
 
 	h.wakeRoute().wakes.Gate = newWakeEnv(t).wakes(t.TempDir()).Gate
 	ss, err := h.Discover(context.Background())
@@ -94,5 +92,21 @@ func TestResumeWithoutClaimSourceRetiresCarriedClaims(t *testing.T) {
 	}
 	if !slices.Equal(reg.retired, []string{"T9"}) {
 		t.Fatalf("retired %v, want [T9]", reg.retired)
+	}
+}
+
+func TestResumeClaimNotBoundWhenRegistrationFails(t *testing.T) {
+	e := newHookEnv(t, true)
+	setRefreshLock(e.sys, "T1", parentPID)
+	parent, _ := e.sys.Info(parentPID)
+	reg := &fakeRegistrar{fail: map[string]error{"T1": errors.New("held elsewhere")}}
+	c := NewClaims(ClaimOptions{Sys: e.sys, Parent: parent, LockDir: refreshLockDir, Registrar: reg, Tries: 3, Sleep: func(time.Duration) {}})
+	dropped := c.Resume(context.Background(), []Binding{{Claim: claim("T1")}})
+	if !slices.Equal(dropped, []string{"T1"}) || c.Bound("T1") {
+		t.Fatalf("dropped %v, bound %v: a claim whose agent cannot be registered must not stay bound", dropped, c.Bound("T1"))
+	}
+	reg.fail = nil
+	if err := c.AcceptDurable(context.Background(), claim("T1")); err != nil || !c.Bound("T1") {
+		t.Fatalf("durable retry after the failure: %v bound=%v", err, c.Bound("T1"))
 	}
 }

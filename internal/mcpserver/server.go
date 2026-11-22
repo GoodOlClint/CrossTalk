@@ -207,12 +207,13 @@ func (s *Server) Resume(ctx context.Context, h *Handoff) {
 
 func (s *Server) resumeAgent(ctx context.Context, ah AgentHandoff) error {
 	req := ah.Req
-	if req.ParentPID == 0 {
-		req.ParentPID = s.ppid
-	}
+	req.ParentPID = s.ppid
 	c, err := s.resolveContext(ctx, req)
 	if err != nil {
 		return err
+	}
+	if c.cwd == "" {
+		c.cwd = ah.Cwd
 	}
 	if !c.bound() || identity.AgentID(string(c.harness), c.sessionRef) != ah.ID {
 		return errors.New("session no longer resolves to the carried agent")

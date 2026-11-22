@@ -53,6 +53,7 @@ type AgentHandoff struct {
 	ID            string                 `json:"id"`
 	Harness       string                 `json:"harness"`
 	SessionRef    string                 `json:"session_ref"`
+	Cwd           string                 `json:"cwd,omitempty"`
 	Req           harness.RequestContext `json:"req"`
 	HarnessName   string                 `json:"harness_name,omitempty"`
 	ViaCall       bool                   `json:"via_call,omitempty"`
@@ -100,7 +101,7 @@ func (s *Server) Handoff(st SessionState, bin BinaryIdentity) *Handoff {
 	r, _ := s.backend.(Refresher)
 	for _, a := range agents {
 		a.mu.Lock()
-		ah := AgentHandoff{ID: a.id, Harness: string(a.harness), SessionRef: a.sessionRef, Req: a.req,
+		ah := AgentHandoff{ID: a.id, Harness: string(a.harness), SessionRef: a.sessionRef, Cwd: a.Descriptor().Cwd, Req: a.req,
 			HarnessName: a.harnessName, ViaCall: via[a], PendingNotice: slices.Clone(a.pendingNotice)}
 		a.mu.Unlock()
 		if r != nil {
@@ -127,6 +128,9 @@ func WriteHandoff(h *Handoff) (*os.File, error) {
 	b, err := json.Marshal(h)
 	if err != nil {
 		return nil, err
+	}
+	if len(b) > maxHandoff {
+		return nil, fmt.Errorf("refresh handoff: %d bytes exceeds the %d byte limit the reader accepts", len(b), maxHandoff)
 	}
 	f, err := os.CreateTemp("", "crosstalk-refresh-")
 	if err != nil {
@@ -168,6 +172,9 @@ func ReadHandoff(r io.Reader) (*Handoff, error) {
 	if h.RefreshHandoff != HandoffFormat {
 		return nil, fmt.Errorf("refresh handoff: unknown version %d", h.RefreshHandoff)
 	}
+	if _, err := h.Session.serverState(); err != nil {
+		return nil, fmt.Errorf("refresh handoff: session state: %w", err)
+	}
 	for _, a := range h.Agents {
 		if a.ID == "" || a.Harness == "" || a.SessionRef == "" {
 			return nil, errors.New("refresh handoff: agent without id, harness or session_ref")
@@ -194,7 +201,25 @@ func HandoffFromEnv() (*Handoff, error) {
 		return nil, fmt.Errorf("refresh handoff: bad descriptor %d", fd)
 	}
 	defer f.Close()
+	if err := checkHandoffFile(f); err != nil {
+		return nil, err
+	}
 	return ReadHandoff(f)
+}
+
+// checkHandoffFile requires what WriteHandoff makes: a regular file with no
+// name left and no access for group or others, so a stale descriptor number
+// (a pipe, a socket, a file of another purpose) is never read or closed as one.
+func checkHandoffFile(f *os.File) error {
+	fi, err := f.Stat()
+	if err != nil {
+		return fmt.Errorf("refresh handoff: %w", err)
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !fi.Mode().IsRegular() || fi.Mode().Perm()&0o077 != 0 || !ok || st.Nlink != 0 {
+		return errors.New("refresh handoff: descriptor is not a private unlinked regular file")
+	}
+	return nil
 }
 
 // serverState is what the SDK needs to accept calls with no initialize.

@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -213,6 +214,7 @@ func TestHandoffReadRejectsBadDocuments(t *testing.T) {
 		"truncated":       string(ok[:len(ok)-3]),
 		"not json":        `refresh`,
 		"agent no id":     `{"refresh_handoff":1,"agents":[{"harness":"claude","session_ref":"s"}]}`,
+		"bad session":     `{"refresh_handoff":1,"session":{"initialize_params":"nope"}}`,
 	} {
 		if _, err := ReadHandoff(strings.NewReader(doc)); err == nil {
 			t.Errorf("%s: accepted", name)
@@ -235,5 +237,72 @@ func TestHandoffFromEnvUnsetsAndStartsNormallyWithoutIt(t *testing.T) {
 	}
 	if _, ok := os.LookupEnv(HandoffFDEnv); ok {
 		t.Fatal("variable left set for children")
+	}
+}
+
+func TestWriteHandoffRefusesWhatTheReaderRefuses(t *testing.T) {
+	big := &Handoff{RefreshHandoff: HandoffFormat, Agents: []AgentHandoff{{ID: "a", Harness: "claude", SessionRef: strings.Repeat("s", maxHandoff)}}}
+	if f, err := WriteHandoff(big); err == nil {
+		f.Close()
+		t.Fatal("wrote a handoff larger than ReadHandoff accepts")
+	}
+}
+
+func TestHandoffFromEnvAcceptsOnlyAPrivateUnlinkedFile(t *testing.T) {
+	via := func(f *os.File) (*Handoff, error) {
+		fd, err := syscall.Dup(int(f.Fd()))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv(HandoffFDEnv, itoa(fd))
+		return HandoffFromEnv()
+	}
+	good, err := WriteHandoff(&Handoff{RefreshHandoff: HandoffFormat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer good.Close()
+	if h, err := via(good); err != nil || h == nil {
+		t.Fatalf("unlinked private file: %v %v", h, err)
+	}
+	linked, err := os.CreateTemp(t.TempDir(), "h")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer linked.Close()
+	linked.WriteString(`{"refresh_handoff":1}`)
+	linked.Seek(0, io.SeekStart)
+	if _, err := via(linked); err == nil {
+		t.Fatal("accepted a file that still has a name")
+	}
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pr.Close()
+	defer pw.Close()
+	if _, err := via(pr); err == nil {
+		t.Fatal("accepted a pipe")
+	}
+}
+
+func TestHandoffCarriesCwdAndResumeUsesLiveParent(t *testing.T) {
+	stateDir, sessions := t.TempDir(), t.TempDir()
+	writeClaudeSession(t, sessions, 4242, "claude-sess", "alpha", "/work/alpha")
+	srv1 := newRigServer(t, stateDir, sessions, 4242, NewFakeBackend())
+	r1 := startRig(t, srv1)
+	r1.handshake()
+	r1.rpc(3, "tools/call", `{"name":"send_message","arguments":{"to":"bob","text":"hi"}}`)
+	r1.quiet()
+	ho := srv1.Handoff(r1.tr.Conn().State(), BinaryIdentity{})
+	if len(ho.Agents) != 1 || ho.Agents[0].Cwd != "/work/alpha" {
+		t.Fatalf("agents %+v, want the registered cwd carried", ho.Agents)
+	}
+	r1.stop()
+	ho.Agents[0].Req.ParentPID = 1
+	srv2 := newRigServer(t, stateDir, sessions, 4242, NewFakeBackend())
+	srv2.Resume(context.Background(), ho)
+	if srv2.local(ho.Agents[0].ID) == nil {
+		t.Fatal("agent not resumed from the live parent when the saved parent pid differs")
 	}
 }

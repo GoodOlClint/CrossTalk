@@ -280,8 +280,10 @@ func (c *Claims) Snapshot() []Binding {
 }
 
 // Resume proves each carried claim again by the target check only and binds
-// the ones that pass; the agents are already registered. A claim that fails
-// is dropped and its agent retired, as Recheck does. It returns the dropped
+// the ones that pass, registering the agent again if the resume could not
+// (RegisterSession finds an existing one). A claim that fails either step is
+// dropped and its agent retired, as Recheck does; a durable file for it is
+// then tried by the normal scan. It returns the dropped
 // threads, sorted.
 func (c *Claims) Resume(ctx context.Context, carried []Binding) []string {
 	var dropped []string
@@ -289,6 +291,10 @@ func (c *Claims) Resume(ctx context.Context, carried []Binding) []string {
 		t := b.Claim.SessionID
 		err := c.proveTarget(t)
 		c.regMu.Lock()
+		if err == nil {
+			req := harness.RequestContext{Meta: map[string]any{"threadId": t}}
+			err = c.opt.Registrar.RegisterSession(ctx, req, b.Claim.Cwd)
+		}
 		if err == nil {
 			c.mu.Lock()
 			c.byID[t] = &Binding{Claim: b.Claim, Live: b.Live}
