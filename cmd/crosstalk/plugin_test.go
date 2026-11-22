@@ -193,9 +193,9 @@ func TestMarketplacesPinToReleaseTag(t *testing.T) {
 	}
 }
 
-func TestVersionIs023AndManifestsMatch(t *testing.T) {
-	if mcpserver.Version != "0.2.3" {
-		t.Errorf("binary version %s, want 0.2.3", mcpserver.Version)
+func TestVersionIs024AndManifestsMatch(t *testing.T) {
+	if mcpserver.Version != "0.2.4" {
+		t.Errorf("binary version %s, want 0.2.4", mcpserver.Version)
 	}
 	for _, f := range []string{filepath.Join(pluginDir, ".claude-plugin/plugin.json"), filepath.Join(pluginDir, ".codex-plugin/plugin.json")} {
 		if v := readJSON(t, f)["version"]; v != mcpserver.Version {
