@@ -268,6 +268,13 @@ var _ harness.ClaimSource = (*Harness)(nil)
 // ServeClaims serves the SessionStart claim handoff while the setting is on
 // and this shim's parent is a codex process; otherwise it returns at once.
 func (h *Harness) ServeClaims(ctx context.Context, r harness.SessionRegistrar) error {
+	pending := h.takeResume()
+	proven := false
+	defer func() {
+		if !proven {
+			dropResumed(ctx, r, pending, h.logger)
+		}
+	}()
 	cfg := h.claims
 	if cfg.StateDir == "" {
 		d, err := registry.DefaultDir()
@@ -311,6 +318,8 @@ func (h *Harness) ServeClaims(ctx context.Context, r harness.SessionRegistrar) e
 	rt := newWakeRoute(cfg.StateDir, c, func() *QueueGate { return &QueueGate{Path: queue, Parent: parent} })
 	h.setWakeRoute(rt)
 	defer h.setWakeRoute(nil)
+	c.Resume(ctx, pending)
+	proven = true
 	srv := &ClaimServer{Claims: c, Owner: parent, StateDir: cfg.StateDir, SockDir: cfg.SockDir, Interval: cfg.Interval, Logger: h.logger, OnTick: func(ctx context.Context) { rt.wakes.Tick(ctx, c.Bound) }}
 	return srv.Serve(ctx)
 }

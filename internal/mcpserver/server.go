@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/jsonschema-go/jsonschema"
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/GoodOlClint/crosstalk/internal/harness"
@@ -65,6 +66,8 @@ type Server struct {
 	mu     sync.Mutex
 	agents map[string]*Agent
 	closed bool
+	// resumed is set once Resume has run, so Run does not repeat it.
+	resumed bool
 	// timedOut keeps retired agents reachable: a collected *os.File's finalizer
 	// would drop the agent flock before process exit.
 	timedOut []*Agent
@@ -103,8 +106,22 @@ func New(opt Options) *Server {
 
 func (s *Server) MCP() *mcp.Server { return s.mcp }
 
+// RunOption changes how Run starts.
+type RunOption func(*runOpts)
+
+type runOpts struct{ handoff *Handoff }
+
+// WithHandoff starts Run from a refresh handoff: the agents are re-registered
+// (unless Resume already did), the session is served from the carried state,
+// and the first frame written is notifications/tools/list_changed.
+func WithHandoff(h *Handoff) RunOption { return func(o *runOpts) { o.handoff = h } }
+
 // Run serves MCP on t until the client disconnects, then closes every agent.
-func (s *Server) Run(ctx context.Context, t mcp.Transport) error {
+func (s *Server) Run(ctx context.Context, t mcp.Transport, opts ...RunOption) error {
+	var o runOpts
+	for _, f := range opts {
+		f(&o)
+	}
 	wctx, stop := context.WithCancel(ctx)
 	done := make(chan struct{})
 	go func() {
@@ -120,10 +137,103 @@ func (s *Server) Run(ctx context.Context, t mcp.Transport) error {
 			}
 		}
 	}()
-	err := s.mcp.Run(ctx, t)
+	var err error
+	if o.handoff != nil {
+		err = s.runResumed(ctx, t, o.handoff)
+	} else {
+		err = s.mcp.Run(ctx, t)
+	}
 	stop()
 	<-done
 	return errors.Join(err, s.Close())
+}
+
+// runResumed is mcp.Server.Run with the carried session state.
+func (s *Server) runResumed(ctx context.Context, t mcp.Transport, h *Handoff) error {
+	s.Resume(ctx, h)
+	state, err := h.Session.serverState()
+	if err != nil {
+		slog.Warn("mcpserver: carried session state unreadable; serving a new session", "err", err)
+		state = nil
+	}
+	if tr, ok := t.(*Transport); ok && state != nil {
+		tr.Conn().Restore(h.Session)
+		n := &jsonrpc.Request{Method: "notifications/tools/list_changed", Params: json.RawMessage(`{}`)}
+		if err := tr.Conn().Write(ctx, n); err != nil {
+			return err
+		}
+	}
+	ss, err := s.mcp.Connect(ctx, t, &mcp.ServerSessionOptions{State: state})
+	if err != nil {
+		return err
+	}
+	waited := make(chan error, 1)
+	go func() { waited <- ss.Wait() }()
+	select {
+	case <-ctx.Done():
+		ss.Close()
+		<-waited
+		return ctx.Err()
+	case err := <-waited:
+		return err
+	}
+}
+
+// Resume hands each harness its carried state and re-registers every carried
+// agent, as a first call would, before the session is served. A second call
+// does nothing. An agent that cannot be re-registered is logged and left for
+// its next call.
+func (s *Server) Resume(ctx context.Context, h *Handoff) {
+	s.mu.Lock()
+	again := s.resumed
+	s.resumed = true
+	s.mu.Unlock()
+	if again {
+		return
+	}
+	for _, hh := range s.harnesses {
+		if rf, ok := hh.(harness.Refreshable); ok {
+			if raw, ok := h.Harness[string(hh.Name())]; ok {
+				rf.ResumeState(raw)
+			}
+		}
+	}
+	for _, ah := range h.Agents {
+		if err := s.resumeAgent(ctx, ah); err != nil {
+			slog.Warn("mcpserver: resuming agent", "agent", ah.ID, "err", err)
+		}
+	}
+}
+
+func (s *Server) resumeAgent(ctx context.Context, ah AgentHandoff) error {
+	req := ah.Req
+	if req.ParentPID == 0 {
+		req.ParentPID = s.ppid
+	}
+	c, err := s.resolveContext(ctx, req)
+	if err != nil {
+		return err
+	}
+	if !c.bound() || identity.AgentID(string(c.harness), c.sessionRef) != ah.ID {
+		return errors.New("session no longer resolves to the carried agent")
+	}
+	a, e := s.agent(ctx, c, ah.ViaCall)
+	if e != nil {
+		return e
+	}
+	defer a.Done()
+	a.mu.Lock()
+	if ah.HarnessName != "" {
+		a.harnessName = ah.HarnessName
+	}
+	a.mu.Unlock()
+	for _, n := range ah.PendingNotice {
+		a.holdNotice(n)
+	}
+	if r, ok := s.backend.(Refresher); ok {
+		r.RefreshResume(a, ah)
+	}
+	return nil
 }
 
 // RetireSuperseded ends the registration of every agent of this process whose
