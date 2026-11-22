@@ -348,7 +348,7 @@ func runInstall(mode string, args []string, in io.Reader, tty bool, stdout, stde
 	}
 	failed := installChecks(ctx, stdout, targets, env, false)
 	installMarkers(ctx, targets, env, cfgDir, stderr)
-	fmt.Fprintln(stdout, "Running Claude and Codex sessions keep their old CrossTalk server. Restart them (in Claude, /mcp and reconnect also works).")
+	fmt.Fprintln(stdout, "A running session that already has a CrossTalk server switches to the new binary on its own once it is idle, unless refresh is off (CROSSTALK_NO_AUTO_REFRESH=1) or the session started before refresh existed. Restart those, and any session started before CrossTalk was registered, which has no server to list (in Claude, /mcp and reconnect also works); crosstalk install --check (K11) lists shims that have not refreshed.")
 	if failed {
 		return 1
 	}

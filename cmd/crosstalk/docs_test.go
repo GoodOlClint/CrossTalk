@@ -127,3 +127,69 @@ func TestRefreshAwaitLimitDocumented(t *testing.T) {
 		}
 	}
 }
+
+func TestSetupDocCoversAutoRefresh(t *testing.T) {
+	doc := repoFile(t, "docs/setup.md")
+	for _, want := range []string{
+		"CROSSTALK_NO_AUTO_REFRESH", "--no-auto-refresh",
+		"upgrade/<version>/<target>.done", "follow-up.log", "plugin step", "gateway restart", "without a terminal",
+		"refresh on their own", "manual path", "have not refreshed",
+		"keeps its original tool list", "follow-up is off too", "already wrote the markers",
+	} {
+		if !strings.Contains(doc, want) {
+			t.Errorf("setup.md lacks %q", want)
+		}
+	}
+	for _, old := range []string{
+		"Running sessions and the remote gateway keep the old binary until restarted",
+		"A running session keeps the old server",
+		"then restart sessions: running sessions, and the remote gateway, keep the old binary until they are restarted",
+	} {
+		if strings.Contains(doc, old) {
+			t.Errorf("setup.md still says %q", old)
+		}
+	}
+}
+
+func TestUpgradeRefreshADREdits(t *testing.T) {
+	const (
+		a0006 = "docs/decisions/0006-no-spawning-the-mcp-server-is-the-shim-and-binds-from-harness-provided-identity.md"
+		a0016 = "docs/decisions/0016-crosstalk-install-registers-mcp-at-the-installed-path.md"
+		a0018 = "docs/decisions/0018-homebrew-tap-formula-and-crosstalk-install-registers-the-homebrew-path.md"
+		a0028 = "docs/decisions/0028-codex-no-daemon-sessions-get-an-experimental-opt-in-queue-wake-the-journal-stays-the-mailbox.md"
+	)
+	for _, c := range []struct {
+		name, file, has, lacks string
+	}{
+		{"0006 names the follow-up exception", a0006, "ADR 0031", ""},
+		{"0006 probe", a0006, "compatibility probe", ""},
+		{"0016 unconfirmed steps", a0016, "run unconfirmed", ""},
+		{"0016 sessions refresh", a0016, "refresh on their own", "running sessions keep their old server until restarted"},
+		{"0018 sandbox evidence", a0018, "spike 20", ""},
+		{"0018 plugin consequence", a0018, "ADR 0031", "the plugin stays at the old version until the user runs `crosstalk install` again (caveats say so; K1 reports it)"},
+		{"0028 item 4 quiescence", a0028, "open wake transaction", ""},
+		{"0028 item 8 handoff", a0028, "A refresh (ADR 0030) carries each proven claim", ""},
+		{"AGENTS names 0030", "AGENTS.md", "ADR 0030", ""},
+		{"AGENTS names 0031", "AGENTS.md", "ADR 0031", "follow the step 5 merge"},
+		{"AGENTS refresh built", "AGENTS.md", "R4, F1 and F2", "Proposed, partly built"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			doc := repoFile(t, c.file)
+			if !strings.Contains(doc, c.has) {
+				t.Errorf("%s lacks %q", c.file, c.has)
+			}
+			if c.lacks != "" && strings.Contains(doc, c.lacks) {
+				t.Errorf("%s still says %q", c.file, c.lacks)
+			}
+		})
+	}
+}
+
+func TestFAQCoversAutoRefresh(t *testing.T) {
+	doc := repoFile(t, "docs/faq.md")
+	for _, want := range []string{"refresh on their own", "CROSSTALK_NO_AUTO_REFRESH=1", "started before the feature existed"} {
+		if !strings.Contains(doc, want) {
+			t.Errorf("faq.md lacks %q", want)
+		}
+	}
+}
