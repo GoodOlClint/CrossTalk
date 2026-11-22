@@ -29,6 +29,9 @@ const (
 	DefaultInterval     = 2 * time.Second
 	DefaultProbeTimeout = 5 * time.Second
 	DefaultQuiesceCap   = 10 * time.Second
+	// DefaultQuiesceTries bounds the quiesce attempts for one new file; each
+	// closes peer ingress for up to QuiesceCap.
+	DefaultQuiesceTries = 5
 )
 
 // Off reports whether OffEnv turns refresh off.
@@ -51,6 +54,7 @@ type Watcher struct {
 	Interval     time.Duration
 	ProbeTimeout time.Duration
 	QuiesceCap   time.Duration
+	QuiesceTries int
 	// Stat reads the identity of Path; nil means mcpserver.IdentityOf.
 	Stat func(path string) (mcpserver.BinaryIdentity, error)
 	// Probe checks that the file at path can take the handoff; nil means
@@ -62,9 +66,14 @@ type Watcher struct {
 	// Exec hands over to the file whose identity is id; it returns only on
 	// failure.
 	Exec func(id mcpserver.BinaryIdentity) error
-	Log  *slog.Logger
+	// GaveUp, when set, is told that the file at Path never quiesced in
+	// QuiesceTries attempts and is not tried again until the path changes.
+	GaveUp func(path string, tries int)
+	Log    *slog.Logger
 
-	bad mcpserver.BinaryIdentity
+	bad   mcpserver.BinaryIdentity
+	tried mcpserver.BinaryIdentity
+	tries int
 }
 
 // Run ticks until ctx ends.
@@ -114,6 +123,18 @@ func (w *Watcher) Tick(ctx context.Context) {
 	undo, err := w.Quiesce(qctx)
 	cancel()
 	if err != nil {
+		if !same(cur, w.tried) {
+			w.tried, w.tries = cur, 0
+		}
+		w.tries++
+		if n := orDefaultInt(w.QuiesceTries, DefaultQuiesceTries); w.tries >= n {
+			w.bad = cur
+			w.log().Warn("refresh: never quiescent; staying on this binary until the path changes again", "path", w.Path, "tries", w.tries, "err", err)
+			if w.GaveUp != nil {
+				w.GaveUp(w.Path, w.tries)
+			}
+			return
+		}
 		w.log().Info("refresh: not quiescent; trying again later", "err", err)
 		return
 	}
@@ -132,6 +153,13 @@ func (w *Watcher) Tick(ctx context.Context) {
 func orDefault(d, def time.Duration) time.Duration {
 	if d > 0 {
 		return d
+	}
+	return def
+}
+
+func orDefaultInt(n, def int) int {
+	if n > 0 {
+		return n
 	}
 	return def
 }

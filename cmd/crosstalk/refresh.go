@@ -203,6 +203,9 @@ func startRefresh(ctx context.Context, home string, hs []harness.Harness, ho *mc
 			ID:      id,
 			Quiesce: func(ctx context.Context) (func(), error) { return quiesceForExec(ctx, sh, conn) },
 			Exec:    func(id mcpserver.BinaryIdentity) error { return execHandoff(srv, conn, argv0, id) },
+			GaveUp: func(path string, tries int) {
+				srv.HoldNotice(fmt.Sprintf("crosstalk: a new binary is installed at %s, but this session's CrossTalk server stayed busy through %d refresh attempts and keeps running the old version; messages still reach this session; restart the session to use the new version", path, tries))
+			},
 		}
 		go w.Run(ctx)
 	}, true

@@ -169,11 +169,13 @@ func (s *Server) runResumed(ctx context.Context, t mcp.Transport, h *Handoff) er
 		slog.Warn("mcpserver: carried session state unreadable; serving a new session", "err", err)
 		state = nil
 	}
-	if tr, ok := t.(*Transport); ok && state != nil {
+	if tr, ok := t.(*Transport); ok && (state != nil || len(h.Session.Listens) > 0) {
 		tr.Conn().Restore(h.Session)
-		n := &jsonrpc.Request{Method: "notifications/tools/list_changed", Params: json.RawMessage(`{}`)}
-		if err := tr.Conn().Write(ctx, n); err != nil {
-			return err
+		for _, params := range listChangedParams(h.Session, state != nil) {
+			n := &jsonrpc.Request{Method: "notifications/tools/list_changed", Params: params}
+			if err := tr.Conn().Write(ctx, n); err != nil {
+				return err
+			}
 		}
 	}
 	ss, err := s.mcp.Connect(ctx, t, &mcp.ServerSessionOptions{State: state})
@@ -190,6 +192,34 @@ func (s *Server) runResumed(ctx context.Context, t mcp.Transport, h *Handoff) er
 	case err := <-waited:
 		return err
 	}
+}
+
+// listChangedParams is one tools/list_changed per carried listen that asked
+// for it, stamped with that listen's id (SEP-2575); with none, one unstamped
+// for a session that initialized, as before listens existed.
+func listChangedParams(st SessionState, initialized bool) []json.RawMessage {
+	var out []json.RawMessage
+	for _, raw := range st.Listens {
+		var req struct {
+			ID     json.RawMessage `json:"id"`
+			Params struct {
+				Notifications struct {
+					ToolsListChanged bool `json:"toolsListChanged"`
+				} `json:"notifications"`
+			} `json:"params"`
+		}
+		if json.Unmarshal(raw, &req) != nil || len(req.ID) == 0 || !req.Params.Notifications.ToolsListChanged {
+			continue
+		}
+		p, err := json.Marshal(map[string]any{"_meta": map[string]json.RawMessage{metaSubscriptionID: req.ID}})
+		if err == nil {
+			out = append(out, p)
+		}
+	}
+	if len(out) == 0 && initialized {
+		out = append(out, json.RawMessage(`{}`))
+	}
+	return out
 }
 
 // Resume hands each harness its carried state and re-registers every carried

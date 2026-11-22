@@ -368,3 +368,48 @@ func TestConnPauseConsumesNoByte(t *testing.T) {
 		t.Fatal("no frame after Unpause")
 	}
 }
+
+func TestConnOpenListenIsCarriedNotPending(t *testing.T) {
+	const listen = `{"jsonrpc":"2.0","id":3,"method":"subscriptions/listen","params":{"notifications":{"toolsListChanged":true}}}`
+	c := NewConn(strings.NewReader(listen+"\n"), io.Discard)
+	if _, err := c.Read(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if !c.Quiescent() {
+		t.Fatal("an open subscriptions/listen blocks quiescence; the server answers it only when the subscription ends")
+	}
+	st := c.State()
+	if len(st.Listens) != 1 {
+		t.Fatalf("carried listens = %d, want 1", len(st.Listens))
+	}
+
+	var out strings.Builder
+	n := NewConn(strings.NewReader(""), &out)
+	n.Restore(st)
+	m, err := n.Read(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if req, ok := m.(*jsonrpc.Request); !ok || req.Method != "subscriptions/listen" || req.ID != okResp(t, 3).ID {
+		t.Fatalf("first message after Restore = %#v, want the carried listen with id 3", m)
+	}
+	ack := &jsonrpc.Request{Method: "notifications/subscriptions/acknowledged", Params: json.RawMessage(`{"_meta":{"io.modelcontextprotocol/subscriptionId":3},"notifications":{"toolsListChanged":true}}`)}
+	if err := n.Write(context.Background(), ack); err != nil {
+		t.Fatal(err)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("the replayed listen's acknowledgement was written again: %q", out.String())
+	}
+	if err := n.Write(context.Background(), ack); err != nil || out.Len() == 0 {
+		t.Fatalf("a second acknowledgement was dropped too (err %v)", err)
+	}
+	if len(n.State().Listens) != 1 {
+		t.Fatal("the restored listen is not carried into the next handoff")
+	}
+	if err := n.Write(context.Background(), okResp(t, 3)); err != nil {
+		t.Fatal(err)
+	}
+	if len(n.State().Listens) != 0 {
+		t.Fatal("a listen whose response was written is still carried")
+	}
+}

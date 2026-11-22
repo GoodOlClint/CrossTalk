@@ -152,3 +152,32 @@ func TestRefreshUndoesQuiesceAfterFailedExec(t *testing.T) {
 	}
 	done()
 }
+
+// A file that never quiesces is tried QuiesceTries times, then left until the
+// path changes again, and GaveUp is told once; a newer file is tried afresh.
+func TestRefreshStopsAfterBoundedQuiesceTries(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "crosstalk")
+	os.WriteFile(bin, []byte("v1"), 0o755)
+	id, _ := mcpserver.IdentityOf(bin)
+	os.WriteFile(bin+".n", []byte("v2"), 0o755)
+	os.Rename(bin+".n", bin)
+	var r rec
+	w := r.watcher(bin, id, mcpserver.IdentityOf)
+	w.QuiesceTries = 3
+	w.Quiesce = func(context.Context) (func(), error) { r.quiesces++; return nil, context.DeadlineExceeded }
+	var gaveUp []int
+	w.GaveUp = func(_ string, n int) { gaveUp = append(gaveUp, n) }
+	for range 6 {
+		w.Tick(context.Background())
+	}
+	if r.quiesces != 3 || r.execs != 0 || len(gaveUp) != 1 || gaveUp[0] != 3 {
+		t.Fatalf("%+v, gave up %v: want 3 quiesce attempts, no exec, one give-up after 3", r, gaveUp)
+	}
+	os.WriteFile(bin+".n", []byte("v3"), 0o755)
+	os.Rename(bin+".n", bin)
+	w.Tick(context.Background())
+	if r.quiesces != 4 {
+		t.Fatalf("quiesces = %d after a newer file, want it tried again", r.quiesces)
+	}
+}
