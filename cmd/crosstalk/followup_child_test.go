@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"io"
 	"os"
@@ -31,7 +32,8 @@ func TestFollowUpChildHelper(t *testing.T) {
 	}
 	timeout, _ := time.ParseDuration(os.Getenv("CROSSTALK_TEST_FOLLOWUP_TIMEOUT"))
 	os.Setenv("CROSSTALK_TEST_MAIN", "1")
-	shRunner(st, `echo $$ > "$0"; exec sleep 30`, pidFile, timeout).Run(context.Background())
+	script := cmp.Or(os.Getenv("CROSSTALK_TEST_FOLLOWUP_SCRIPT"), `echo $$ > "$0"; exec sleep 30`)
+	shRunner(st, script, pidFile, timeout).Run(context.Background())
 }
 
 func waitPID(t *testing.T, pidFile string) int {
@@ -69,24 +71,25 @@ func within(d time.Duration, cond func() bool) bool {
 	return true
 }
 
-func killedShim(t *testing.T, timeout time.Duration) (st string, child int) {
+func killedShim(t *testing.T, timeout time.Duration, env ...string) (st string, child int, pidFile string) {
 	t.Helper()
 	st = t.TempDir()
-	pidFile := filepath.Join(t.TempDir(), "child.pid")
+	pidFile = filepath.Join(t.TempDir(), "child.pid")
 	shim := exec.Command(os.Args[0], "-test.run=^TestFollowUpChildHelper$")
 	shim.Env = append(os.Environ(), "CROSSTALK_TEST_FOLLOWUP_STATE="+st, "CROSSTALK_TEST_FOLLOWUP_PIDFILE="+pidFile,
 		"CROSSTALK_TEST_FOLLOWUP_TIMEOUT="+timeout.String())
+	shim.Env = append(shim.Env, env...)
 	if err := shim.Start(); err != nil {
 		t.Fatal(err)
 	}
 	child = waitPID(t, pidFile)
 	shim.Process.Kill()
 	shim.Wait()
-	return st, child
+	return st, child, pidFile
 }
 
 func TestFollowUpChildKeepsLockAfterShimKilled(t *testing.T) {
-	st, child := killedShim(t, time.Minute)
+	st, child, _ := killedShim(t, time.Minute)
 	if pg, err := syscall.Getpgid(child); err != nil || pg != child {
 		t.Errorf("child pgid = %d (%v), want its own group %d", pg, err, child)
 	}
@@ -100,7 +103,7 @@ func TestFollowUpChildKeepsLockAfterShimKilled(t *testing.T) {
 }
 
 func TestFollowUpChildDeadlineOutlivesShim(t *testing.T) {
-	st, child := killedShim(t, time.Second)
+	st, child, _ := killedShim(t, time.Second)
 	if !within(10*time.Second, func() bool { return gone(child) && lockFree(st) }) {
 		t.Fatalf("after the shim was killed, the target deadline did not end the child (gone %v) and free the lock (%v)", gone(child), lockFree(st))
 	}
@@ -142,5 +145,29 @@ func TestFollowUpChildCancelKillsGroup(t *testing.T) {
 	}
 	if !lockFree(st) {
 		t.Fatal("upgrade.lock held after the cancelled step")
+	}
+}
+
+func TestFollowUpChildWritesAfterShimKilled(t *testing.T) {
+	st, child, pidFile := killedShim(t, time.Minute, "CROSSTALK_TEST_FOLLOWUP_SCRIPT="+
+		`echo $$ > "$0"; sleep 1; i=0; while [ $i -lt 2000 ]; do echo out line $i; echo err line $i >&2; i=$((i+1)); done; echo ok > "$0.done"`)
+	if !within(15*time.Second, func() bool { return gone(child) }) {
+		t.Fatal("the child never finished")
+	}
+	if _, err := os.Stat(pidFile + ".done"); err != nil {
+		t.Fatal("a child writing output after the shim was killed did not finish its step")
+	}
+	if !within(15*time.Second, func() bool { return lockFree(st) }) {
+		t.Fatal("upgrade.lock held after the child finished")
+	}
+}
+
+func TestFollowUpChildErrorKeepsStderr(t *testing.T) {
+	t.Setenv("CROSSTALK_TEST_MAIN", "1")
+	st := t.TempDir()
+	shRunner(st, `echo boom-from-codex >&2; exit 3`, "", time.Minute).Run(context.Background())
+	b, _ := os.ReadFile(upgrade.LogPath(st, "9.9.9"))
+	if !strings.Contains(string(b), "boom-from-codex") || !strings.Contains(string(b), "exit status 3") {
+		t.Fatalf("log lacks the command's stderr and exit status:\n%s", b)
 	}
 }

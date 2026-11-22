@@ -27,9 +27,9 @@ type lockKey struct{}
 // Command is exec.CommandContext, except inside a follow-up target: there it
 // starts `crosstalk upgrade-exec`, which holds upgrade.lock on fd 3 and runs
 // name in its own process group, killing that group at ctx's deadline (5
-// minutes without one) or on SIGTERM, which cancelling ctx sends. The lock
-// is freed when the supervisor exits, whether or not the shim still runs,
-// and never reaches name or its descendants.
+// minutes without one) or on SIGTERM, which cancelling ctx sends. The
+// supervisor keeps its hold on the lock until it exits, even if the shim is
+// killed; name and its descendants never get it.
 func Command(ctx context.Context, name string, args ...string) *exec.Cmd {
 	f, _ := ctx.Value(lockKey{}).(*os.File)
 	exe, err := os.Executable()
@@ -66,7 +66,8 @@ func Supervise(args []string, stderr io.Writer) int {
 	term := make(chan os.Signal, 1)
 	signal.Notify(term, syscall.SIGTERM)
 	c := exec.Command(args[2], args[3:]...)
-	c.Stdin, c.Stdout, c.Stderr = os.Stdin, os.Stdout, os.Stderr
+	c.Stdin, c.Stdout, c.Stderr = os.Stdin, bestEffort{os.Stdout}, bestEffort{os.Stderr}
+	c.WaitDelay = superviseDrain
 	c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := c.Start(); err != nil {
 		fmt.Fprintln(stderr, err)
@@ -93,4 +94,13 @@ func Supervise(args []string, stderr io.Writer) int {
 	}
 	<-done
 	return 1
+}
+
+// bestEffort forwards to w and drops what w refuses, so the command never
+// writes to a pipe whose reader, the shim, may be gone.
+type bestEffort struct{ w io.Writer }
+
+func (b bestEffort) Write(p []byte) (int, error) {
+	b.w.Write(p)
+	return len(p), nil
 }
