@@ -632,6 +632,22 @@ func (c *Conn) Restore(s SessionState) {
 	c.changed()
 }
 
+// Listening counts the open subscriptions/listen requests: open ones are
+// acknowledged and carried in a handoff, settling ones are not acknowledged
+// yet, or cancelled, and still owe a write.
+func (c *Conn) Listening() (open, settling int) {
+	c.smu.Lock()
+	defer c.smu.Unlock()
+	for id := range c.listens {
+		if _, owed := c.pending[id]; owed {
+			settling++
+		} else {
+			open++
+		}
+	}
+	return open, settling
+}
+
 // Quiescent reports that no frame is half-read, no read request still owes a
 // response, no batch waits for a response, and no response is mid-write. A
 // subscriptions/listen counts until its acknowledgement is written, and again

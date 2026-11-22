@@ -87,7 +87,7 @@ func TestRefreshInodeChangedAfterProbe(t *testing.T) {
 	stats := 0
 	w := r.watcher(bin, id, func(p string) (mcpserver.BinaryIdentity, error) {
 		stats++
-		if stats == 2 {
+		if stats == 3 {
 			write("v3")
 		}
 		return mcpserver.IdentityOf(p)
@@ -238,8 +238,8 @@ func TestRefreshListenCapabilityDecidedBeforeQuiesce(t *testing.T) {
 				events = append(events, "probe")
 				return Probed{ReplaysListens: replays}, nil
 			},
-			OpenListens: func() bool { return true },
-			Quiesce:     func(context.Context) (func(), error) { events = append(events, "quiesce"); return func() {}, nil },
+			Listening: func() (int, int) { return 1, 0 },
+			Quiesce:   func(context.Context) (func(), error) { events = append(events, "quiesce"); return func() {}, nil },
 			Exec: func(_ mcpserver.BinaryIdentity, p Probed) error {
 				events = append(events, "exec")
 				if !p.ReplaysListens {
@@ -260,6 +260,32 @@ func TestRefreshListenCapabilityDecidedBeforeQuiesce(t *testing.T) {
 		if want := []string{"probe", "quiesce", "exec", "probe", "quiesce", "exec"}; !slices.Equal(events, want) {
 			t.Fatalf("replay: events %v, want %v (no probe inside the quiesce window)", events, want)
 		}
+	}
+}
+
+// A listen read but not yet acknowledged may still fail validation, so the
+// decision waits: nothing is refused and nothing is quiesced until it settles.
+func TestRefreshDefersWhileAListenSettles(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "crosstalk")
+	os.WriteFile(bin, []byte("v1"), 0o755)
+	id, _ := mcpserver.IdentityOf(bin)
+	os.WriteFile(bin+".n", []byte("v2"), 0o755)
+	os.Rename(bin+".n", bin)
+	var r rec
+	w := r.watcher(bin, id, mcpserver.IdentityOf)
+	settling := 1
+	w.Listening = func() (int, int) { return 0, settling }
+	gaveUp := 0
+	w.GaveUp = func(string, string) { gaveUp++ }
+	w.Tick(context.Background())
+	if r.quiesces != 0 || gaveUp != 0 {
+		t.Fatalf("%+v, gave up %d while a listen settles: want neither", r, gaveUp)
+	}
+	settling = 0
+	w.Tick(context.Background())
+	if r.quiesces != 1 || r.execs != 1 || gaveUp != 0 {
+		t.Fatalf("%+v, gave up %d after the listen failed validation: want the file taken", r, gaveUp)
 	}
 }
 

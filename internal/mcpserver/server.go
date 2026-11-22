@@ -168,6 +168,11 @@ func (s *Server) runResumed(ctx context.Context, t mcp.Transport, h *Handoff) er
 	if err != nil {
 		slog.Warn("mcpserver: carried session state unreadable; serving a new session", "err", err)
 		state = nil
+		if tr, ok := t.(*Transport); ok {
+			if err := endListens(ctx, tr.Conn(), h.Session.Listens); err != nil {
+				return err
+			}
+		}
 		h.Session.Listens = nil
 	}
 	if tr, ok := t.(*Transport); ok && (state != nil || len(h.Session.Listens) > 0) {
@@ -193,6 +198,24 @@ func (s *Server) runResumed(ctx context.Context, t mcp.Transport, h *Handoff) er
 	case err := <-waited:
 		return err
 	}
+}
+
+// endListens answers each carried listen with an error, so a client whose
+// session state could not be carried sees its subscriptions end and can
+// open them again.
+func endListens(ctx context.Context, c *Conn, listens []json.RawMessage) error {
+	for _, raw := range listens {
+		m, err := jsonrpc.DecodeMessage(raw)
+		req, ok := m.(*jsonrpc.Request)
+		if err != nil || !ok || !req.ID.IsValid() {
+			continue
+		}
+		resp := &jsonrpc.Response{ID: req.ID, Error: &jsonrpc.Error{Code: jsonrpc.CodeInternalError, Message: "subscription ended: the server restarted without its session state"}}
+		if err := c.Write(ctx, resp); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // sep2575Protocol is the first protocol version whose clients get list

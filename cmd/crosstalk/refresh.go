@@ -209,7 +209,7 @@ func startRefresh(ctx context.Context, home string, hs []harness.Harness, ho *mc
 			Exec: func(id mcpserver.BinaryIdentity, p refresh.Probed) error {
 				return execHandoff(srv, conn, argv0, id, p)
 			},
-			OpenListens: func() bool { return len(conn.State().Listens) > 0 },
+			Listening: conn.Listening,
 			GaveUp: func(path, why string) {
 				srv.HoldNotice(fmt.Sprintf("crosstalk: a new binary is installed at %s, but this session's CrossTalk server keeps running the old version because %s; messages still reach this session; restart the session to use the new version", path, why))
 			},

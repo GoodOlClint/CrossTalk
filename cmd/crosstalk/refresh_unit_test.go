@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -10,6 +11,8 @@ import (
 	"strings"
 	"syscall"
 	"testing"
+
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 
 	"github.com/GoodOlClint/crosstalk/internal/mcpserver"
 	"github.com/GoodOlClint/crosstalk/internal/refresh"
@@ -91,5 +94,27 @@ func TestExecHandoffRefusesAFileReplacedDuringPreparation(t *testing.T) {
 	err := execHandoff(srv, mcpserver.NewConn(strings.NewReader(""), io.Discard), path, probed, refresh.Probed{})
 	if !errors.Is(err, errChanged) || errors.Is(err, refresh.ErrExecFailed) {
 		t.Fatalf("exec of a replaced file: %v, want errChanged", err)
+	}
+}
+
+// A listen opened after the probe still stops the handoff to a file that
+// cannot replay it, before any exec.
+func TestExecHandoffRefusesOpenListenWithoutReplay(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "crosstalk")
+	os.WriteFile(path, []byte("a"), 0o755)
+	probed, _ := mcpserver.IdentityOf(path)
+	conn := mcpserver.NewConn(strings.NewReader(`{"jsonrpc":"2.0","id":3,"method":"subscriptions/listen","params":{"notifications":{"toolsListChanged":true}}}`+"\n"), io.Discard)
+	if _, err := conn.Read(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	ack := &jsonrpc.Request{Method: "notifications/subscriptions/acknowledged", Params: json.RawMessage(`{"_meta":{"io.modelcontextprotocol/subscriptionId":3},"notifications":{"toolsListChanged":true}}`)}
+	if err := conn.Write(context.Background(), ack); err != nil {
+		t.Fatal(err)
+	}
+	srv := mcpserver.New(mcpserver.Options{})
+	err := execHandoff(srv, conn, path, probed, refresh.Probed{})
+	if !errors.Is(err, refresh.ErrExecFailed) || !strings.Contains(err.Error(), "subscriptions/listen") {
+		t.Fatalf("handoff with an open listen to a file without replay: %v, want ErrExecFailed naming the listen", err)
 	}
 }

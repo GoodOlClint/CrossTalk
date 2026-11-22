@@ -61,9 +61,10 @@ type Watcher struct {
 	// Probe. It runs before Quiesce, so nothing is run while ingress is
 	// closed.
 	Probe func(ctx context.Context, path string) (Probed, error)
-	// OpenListens reports whether the session holds an open
-	// subscriptions/listen, which only a file that replays listens may take.
-	OpenListens func() bool
+	// Listening counts the session's subscriptions/listen requests: open
+	// ones only a file that replays listens may take, and settling ones not
+	// acknowledged yet, which defer the decision to a later tick.
+	Listening func() (open, settling int)
 	// Quiesce stops new work and waits for running work until ctx ends; undo
 	// restarts it.
 	Quiesce func(ctx context.Context) (undo func(), err error)
@@ -118,14 +119,23 @@ func (w *Watcher) Tick(ctx context.Context) {
 	pctx, cancel := context.WithTimeout(ctx, orDefault(w.ProbeTimeout, DefaultProbeTimeout))
 	p, err := probe(pctx, w.Path)
 	cancel()
+	if again, serr := stat(w.Path); serr != nil || !same(again, cur) {
+		return
+	}
 	if err != nil {
 		w.bad = cur
 		w.log().Warn("refresh: new binary not taken", "path", w.Path, "err", err)
 		return
 	}
-	if !p.ReplaysListens && w.OpenListens != nil && w.OpenListens() {
-		w.giveUp(cur, "it cannot take over the session's open subscriptions/listen", nil)
-		return
+	if !p.ReplaysListens && w.Listening != nil {
+		open, settling := w.Listening()
+		if settling > 0 {
+			return
+		}
+		if open > 0 {
+			w.giveUp(cur, "it cannot take over the session's open subscriptions/listen", nil)
+			return
+		}
 	}
 	qctx, cancel := context.WithTimeout(ctx, orDefault(w.QuiesceCap, DefaultQuiesceCap))
 	undo, err := w.Quiesce(qctx)
