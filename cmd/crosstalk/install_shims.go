@@ -179,9 +179,11 @@ func listShims(bin string) ([]shimProc, error) {
 	return shims, nil
 }
 
+const newThreadsNote = "; tools added in this version appear only in threads started after the upgrade"
+
 var shimGroupText = map[shimParentKind]struct{ who, fix string }{
-	parentDaemon:    {"the managed Codex daemon", "run: codex app-server daemon restart (it interrupts running Codex turns); an app-server you started yourself whose launcher has exited looks the same, so for that one end it and start it again instead"},
-	parentAppServer: {"standalone Codex app-servers", "end each of those Codex sessions and start it again; its app-server then starts a new shim"},
+	parentDaemon:    {"the managed Codex daemon", "run: codex app-server daemon restart (it interrupts running Codex turns); an app-server you started yourself whose launcher has exited looks the same, so for that one end it and start it again instead" + newThreadsNote},
+	parentAppServer: {"standalone Codex app-servers", "end each of those Codex sessions and start it again; its app-server then starts a new shim" + newThreadsNote},
 	parentClaude:    {"Claude Code sessions", "restart each session (in Claude, /mcp and reconnect also works)"},
 	parentOther:     {"other parents", "restart the process that started each one"},
 }

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -350,6 +351,13 @@ func readRecovery(home string) (*mcpEntry, error) {
 	return &e, nil
 }
 
+func (e *mcpEntry) envOrNil() map[string]string {
+	if e == nil {
+		return nil
+	}
+	return e.Env
+}
+
 func addArgs(command string, args []string, env map[string]string) []string {
 	out := []string{"mcp", "add", "--scope", "user", "crosstalk"}
 	for _, k := range sortedKeys(env) {
@@ -360,6 +368,9 @@ func addArgs(command string, args []string, env map[string]string) []string {
 
 func mcpStep(env harness.InstallEnv) harness.Step {
 	change := "claude mcp add --scope user crosstalk -- " + env.Bin + " mcp"
+	if env.NoAutoRefresh {
+		change = "claude mcp add --scope user crosstalk -e " + harness.OffEnv + "=1 -- " + env.Bin + " mcp"
+	}
 	if e, _ := userEntry(env.Home); e != nil {
 		change += fmt.Sprintf("\nreplaces the user entry %q %q, keeping its env %v", e.Command, e.Args, sortedKeys(e.Env))
 	}
@@ -388,9 +399,12 @@ func mcpStep(env harness.InstallEnv) harness.Step {
 					return err
 				}
 			}
-			var keep map[string]string
-			if old != nil {
-				keep = old.Env
+			keep := maps.Clone(old.envOrNil())
+			if env.NoAutoRefresh {
+				if keep == nil {
+					keep = map[string]string{}
+				}
+				keep[harness.OffEnv] = "1"
 			}
 			if _, err := env.Run(ctx, "claude", addArgs(env.Bin, []string{"mcp"}, keep)...); err != nil {
 				if old != nil {

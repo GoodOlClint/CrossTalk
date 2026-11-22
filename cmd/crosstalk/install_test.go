@@ -11,6 +11,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/GoodOlClint/crosstalk/internal/harness"
+	"github.com/GoodOlClint/crosstalk/internal/refresh"
 )
 
 // installSandbox gives the test a temp HOME, CODEX_HOME and a PATH holding
@@ -352,5 +355,26 @@ func TestInstallHomebrewBinDirOverride(t *testing.T) {
 	}
 	if got := installRead(t, filepath.Join(home, ".claude.json")); !strings.Contains(got, filepath.Join(bin, "crosstalk")) {
 		t.Errorf(".claude.json does not name the --bin-dir copy:\n%s", got)
+	}
+}
+
+func TestParseInstallNoAutoRefresh(t *testing.T) {
+	for _, mode := range []string{"install", "reinstall"} {
+		o, err := parseInstallArgs(mode, []string{"--no-auto-refresh"})
+		if err != nil || !o.noRefresh {
+			t.Errorf("%s: noRefresh %v err %v", mode, o.noRefresh, err)
+		}
+		if o, _ := parseInstallArgs(mode, nil); o.noRefresh {
+			t.Errorf("%s: set without the flag", mode)
+		}
+	}
+	if _, err := parseInstallArgs("uninstall", []string{"--no-auto-refresh"}); err == nil {
+		t.Error("uninstall accepted --no-auto-refresh")
+	}
+}
+
+func TestHarnessOffEnvMatchesRefresh(t *testing.T) {
+	if harness.OffEnv != refresh.OffEnv {
+		t.Errorf("harness.OffEnv %q, refresh.OffEnv %q", harness.OffEnv, refresh.OffEnv)
 	}
 }

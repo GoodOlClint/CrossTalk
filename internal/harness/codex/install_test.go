@@ -33,6 +33,9 @@ func (r *installRecorder) run(_ context.Context, name string, args ...string) ([
 		}
 		var out registration
 		out.Transport.Command, out.Transport.Args = e.command, e.args
+		if strings.Contains(string(b), "CROSSTALK_NO_AUTO_REFRESH = \"1\"") {
+			out.Transport.Env = map[string]string{"CROSSTALK_NO_AUTO_REFRESH": "1"}
+		}
 		return json.Marshal(out)
 	}
 	return nil, nil
@@ -187,4 +190,95 @@ func TestCodexLocalMarketplaceSkipsUpgrade(t *testing.T) {
 			t.Errorf("upgrade run for a local marketplace, which codex refuses: %v", r.calls)
 		}
 	}
+}
+
+func TestInstallNoAutoRefreshWritesEnv(t *testing.T) {
+	read := func(p string) string { b, _ := os.ReadFile(p); return string(b) }
+	fixture := func(f string) string { return read(filepath.Join("testdata", f)) }
+	const kv = "CROSSTALK_NO_AUTO_REFRESH = \"1\"\n"
+	run := func(t *testing.T, fx string, flag bool) (string, string) {
+		env, r := codexEnv(t, fx)
+		env.NoAutoRefresh = flag
+		steps := (&Harness{}).InstallSteps(env)
+		if flag && !strings.Contains(steps[len(steps)-1].Change, "CROSSTALK_NO_AUTO_REFRESH") {
+			t.Errorf("dry-run text lacks the env: %q", steps[len(steps)-1].Change)
+		}
+		if err := applySteps(steps); err != nil {
+			t.Fatal(err)
+		}
+		return read(r.path), strings.Join(r.calls, "\n")
+	}
+
+	t.Run("fresh table", func(t *testing.T) {
+		got, _ := run(t, "config-none.toml", true)
+		want := fixture("config-none.toml") + "\n[mcp_servers.crosstalk]\ncommand = \"/opt/x/crosstalk\"\nargs = [\"mcp\"]\ndefault_tools_approval_mode = \"approve\"\n\n[mcp_servers.crosstalk.env]\n" + kv
+		if got != want {
+			t.Errorf("got\n%s\nwant\n%s", got, want)
+		}
+	})
+	t.Run("existing table keeps its other keys and sub-tables", func(t *testing.T) {
+		got, _ := run(t, "config-prompt.toml", true)
+		base := strings.Replace(fixture("config-prompt.toml"), "command = \"crosstalk\"", "command = \"/opt/x/crosstalk\"", 1)
+		hdr := "default_tools_approval_mode = \"prompt\"\n"
+		want := strings.Replace(base, hdr, hdr+"\n[mcp_servers.crosstalk.env]\n"+kv, 1)
+		if got != want {
+			t.Errorf("got\n%s\nwant\n%s", got, want)
+		}
+	})
+	t.Run("re-run is idempotent and replaces a stale value", func(t *testing.T) {
+		env, r := codexEnv(t, "config-prompt.toml")
+		env.NoAutoRefresh = true
+		if err := applySteps((&Harness{}).InstallSteps(env)); err != nil {
+			t.Fatal(err)
+		}
+		once := read(r.path)
+		if err := applySteps((&Harness{}).InstallSteps(env)); err != nil {
+			t.Fatal(err)
+		}
+		if twice := read(r.path); twice != once {
+			t.Errorf("second run changed the file:\n%s\nvs\n%s", twice, once)
+		}
+		stale := strings.Replace(once, kv, "OTHER = \"x\"\nCROSSTALK_NO_AUTO_REFRESH = \"0\"\n", 1)
+		os.WriteFile(r.path, []byte(stale), 0o600)
+		if err := applySteps((&Harness{}).InstallSteps(env)); err != nil {
+			t.Fatal(err)
+		}
+		if got, want := read(r.path), strings.Replace(once, kv, "OTHER = \"x\"\n"+kv, 1); got != want {
+			t.Errorf("got\n%s\nwant\n%s", got, want)
+		}
+	})
+	t.Run("without the flag an existing entry stays", func(t *testing.T) {
+		env, r := codexEnv(t, "config-prompt.toml")
+		env.NoAutoRefresh = true
+		if err := applySteps((&Harness{}).InstallSteps(env)); err != nil {
+			t.Fatal(err)
+		}
+		withEnv := read(r.path)
+		env.NoAutoRefresh = false
+		if err := applySteps((&Harness{}).InstallSteps(env)); err != nil {
+			t.Fatal(err)
+		}
+		if got := read(r.path); got != withEnv {
+			t.Errorf("got\n%s\nwant\n%s", got, withEnv)
+		}
+	})
+	t.Run("without the flag nothing is written", func(t *testing.T) {
+		got, _ := run(t, "config-none.toml", false)
+		if strings.Contains(got, "NO_AUTO_REFRESH") {
+			t.Errorf("unexpected env:\n%s", got)
+		}
+	})
+	t.Run("inline env key is refused", func(t *testing.T) {
+		env, r := codexEnv(t, "")
+		os.MkdirAll(filepath.Dir(r.path), 0o700)
+		orig := "[mcp_servers.crosstalk]\ncommand = \"crosstalk\"\nargs = [\"mcp\"]\nenv = { A = \"1\" }\n"
+		os.WriteFile(r.path, []byte(orig), 0o600)
+		env.NoAutoRefresh = true
+		if err := applySteps((&Harness{}).InstallSteps(env)); err == nil || !strings.Contains(err.Error(), "env") {
+			t.Errorf("want a refusal naming env, got %v", err)
+		}
+		if read(r.path) != orig {
+			t.Error("config changed")
+		}
+	})
 }
