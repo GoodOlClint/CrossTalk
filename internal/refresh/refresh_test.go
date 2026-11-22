@@ -71,6 +71,7 @@ func TestRefreshInodeChangedAfterProbe(t *testing.T) {
 		if err := os.WriteFile(tmp, []byte(body), 0o755); err != nil {
 			t.Fatal(err)
 		}
+		os.Link(bin, bin+".was-"+body)
 		if err := os.Rename(tmp, bin); err != nil {
 			t.Fatal(err)
 		}
