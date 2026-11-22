@@ -3,6 +3,7 @@ package shim
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"strings"
 	"testing"
@@ -94,4 +95,53 @@ func TestRunRetiresSupersededWithoutACall(t *testing.T) {
 		return true
 	})
 	defer g.Close()
+}
+
+func TestRunKeepsRetirementAndClose(t *testing.T) {
+	w := newWorld(t)
+	bob := w.claude(4002, "sess-1", "bob")
+	sh, err := New(Options{StateDir: w.state, PPID: bob.pid, Harnesses: w.harnesses(w.codex)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sh.reg.StartTime = startTime
+	o := sh.MCPOptions()
+	o.SupersedeInterval = 10 * time.Millisecond
+	srv := mcpserver.New(o)
+	inR, inW := io.Pipe()
+	outR, outW := io.Pipe()
+	ctx := context.Background()
+	done := make(chan error, 1)
+	go func() { done <- srv.Run(ctx, mcpserver.NewTransport(inR, outW)) }()
+	t.Cleanup(func() { inW.Close(); sh.Close() })
+	cs, err := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0"}, nil).Connect(ctx, &mcp.IOTransport{Reader: outR, Writer: inW}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "receive_message", Arguments: map[string]any{}}); err != nil {
+		t.Fatal(err)
+	}
+	reg := registry.New(w.state)
+	oldID := bob.agentID()
+	w.become(bob, "sess-2", "bob")
+	waitFor(t, "the old descriptor to go", func() bool {
+		_, err := os.Stat(reg.DescriptorPath(oldID))
+		return errors.Is(err, os.ErrNotExist)
+	})
+	if _, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "receive_message", Arguments: map[string]any{}}); err != nil {
+		t.Fatal(err)
+	}
+	newID := bob.agentID()
+	if _, err := os.Stat(reg.DescriptorPath(newID)); err != nil {
+		t.Fatal(err)
+	}
+	inW.Close()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return on EOF")
+	}
+	if _, err := os.Stat(reg.DescriptorPath(newID)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("descriptor survived Close on EOF: %v", err)
+	}
 }
