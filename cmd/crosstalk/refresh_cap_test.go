@@ -52,3 +52,33 @@ func TestQuiesceStopsAtCapUnderFlickeringWork(t *testing.T) {
 		t.Fatalf("gave up with ingress paused %d, reopened %d", ing.paused, ing.reopens)
 	}
 }
+
+type slowFirstIngress struct {
+	pass            time.Duration
+	paused, reopens int
+}
+
+func (f *slowFirstIngress) PauseIngress() func() {
+	f.paused++
+	if f.paused == 1 {
+		time.Sleep(f.pass)
+	}
+	return func() { f.reopens++ }
+}
+
+// A first ingress pass that outlasts the cap gives up without a second pass.
+func TestQuiesceStopsAfterSlowFirstPass(t *testing.T) {
+	conn, _ := pipeConn(t)
+	limit := 50 * time.Millisecond
+	ing := &slowFirstIngress{pass: 2 * limit}
+	ctx, cancel := context.WithTimeout(context.Background(), limit)
+	defer cancel()
+	undo, err := quiesceForExec(ctx, ing, conn)
+	if err == nil {
+		undo()
+		t.Fatal("quiescent past the cap")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) || ing.paused != 1 || ing.reopens != 1 {
+		t.Fatalf("err %v, passes %d, reopens %d; want the context error after one pass", err, ing.paused, ing.reopens)
+	}
+}
