@@ -50,18 +50,26 @@ func openLock(stateDir string) (*os.File, error) {
 // process or another open of the file holds it. The descriptor is
 // close-on-exec, so an exec or a child process never keeps the lock.
 func TryLock(stateDir string) (release func(), ok bool, err error) {
+	f, err := tryLock(stateDir)
+	if f == nil {
+		return nil, false, err
+	}
+	return func() { f.Close() }, true, nil
+}
+
+func tryLock(stateDir string) (*os.File, error) {
 	f, err := openLock(stateDir)
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
 	if err := unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
 		f.Close()
 		if errors.Is(err, unix.EWOULDBLOCK) {
-			return nil, false, nil
+			return nil, nil
 		}
-		return nil, false, err
+		return nil, err
 	}
-	return func() { f.Close() }, true, nil
+	return f, nil
 }
 
 // Lock takes upgrade.lock, calling waiting once if it has to wait.
@@ -93,9 +101,10 @@ type Target struct {
 	Eligible func() bool
 }
 
-// Runner is the follow-up of ADR 0031. Run makes one attempt; when that
-// attempt held the lock and a target failed, it tries again every Interval
-// until Bound has passed or every target is done.
+// Runner is the follow-up of ADR 0031. Run makes one attempt; while a target
+// is still pending after it, because a target failed or another process held
+// the lock, it tries again every Interval until Bound has passed or every
+// target is done.
 type Runner struct {
 	StateDir, Version string
 	Targets           []Target
@@ -129,8 +138,8 @@ type outcome struct {
 }
 
 func (r *Runner) Run(ctx context.Context) {
-	took, pending := r.attempt(ctx, true)
-	if !took || !pending || r.Interval <= 0 {
+	ran, pending := r.attempt(ctx, true)
+	if !pending || r.Interval <= 0 {
 		return
 	}
 	after, now := r.After, r.Now
@@ -147,13 +156,15 @@ func (r *Runner) Run(ctx context.Context) {
 			return
 		case <-after(r.Interval):
 		}
-		_, pending = r.attempt(ctx, false)
+		var now bool
+		now, pending = r.attempt(ctx, !ran)
+		ran = ran || now
 	}
 }
 
-// attempt reports whether it held the lock and whether a target is still
+// attempt reports whether it ran a target and whether a target is still
 // pending after it.
-func (r *Runner) attempt(ctx context.Context, first bool) (took, pending bool) {
+func (r *Runner) attempt(ctx context.Context, first bool) (ran, pending bool) {
 	before := r.pending()
 	if ctx.Err() != nil || len(before) == 0 {
 		return false, false
@@ -168,17 +179,18 @@ func (r *Runner) attempt(ctx context.Context, first bool) (took, pending bool) {
 	if r.beforeLock != nil {
 		r.beforeLock()
 	}
-	release, ok, err := TryLock(r.StateDir)
-	if err != nil || !ok {
+	lock, err := tryLock(r.StateDir)
+	if lock == nil || err != nil {
 		return false, true
 	}
-	defer release()
+	defer lock.Close()
+	ctx = context.WithValue(ctx, lockKey{}, lock)
 	todo := r.pending()
 	if len(todo) == 0 {
-		return true, false
+		return false, false
 	}
 	if err := os.MkdirAll(dir(r.StateDir, r.Version), 0o700); err != nil {
-		return true, true
+		return false, true
 	}
 	log, err := os.OpenFile(LogPath(r.StateDir, r.Version), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
@@ -192,7 +204,7 @@ func (r *Runner) attempt(ctx context.Context, first bool) (took, pending bool) {
 	var outs []outcome
 	for _, t := range todo {
 		if ctx.Err() != nil {
-			return true, true
+			return false, true
 		}
 		fmt.Fprintf(w, "%s %s: start\n", time.Now().UTC().Format(time.RFC3339), t.Name)
 		err := runTarget(ctx, t, w, r.TargetTimeout)

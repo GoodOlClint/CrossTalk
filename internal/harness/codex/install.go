@@ -346,17 +346,38 @@ func writeVerified(ctx context.Context, env harness.InstallEnv, cfg string, chec
 	return fmt.Errorf("%w; %s restored", err, path)
 }
 
+// checkoutEmpty reports that Codex's checkout of the crosstalk marketplace
+// is missing or has no entries.
+func checkoutEmpty(home string) bool {
+	es, err := os.ReadDir(filepath.Join(codexHome(home), ".tmp", "marketplaces", "crosstalk"))
+	return len(es) == 0 && (err == nil || errors.Is(err, os.ErrNotExist))
+}
+
 func pluginStep(env harness.InstallEnv) harness.Step {
 	return harness.Step{
 		Title:  "Codex plugin",
 		Change: "codex plugin marketplace add " + env.Marketplace + ", codex plugin marketplace upgrade crosstalk, codex plugin add " + pluginID,
 		Apply: func(ctx context.Context) error {
-			cmds := [][]string{{"plugin", "marketplace", "add", env.Marketplace}}
+			add := []string{"plugin", "marketplace", "add", env.Marketplace}
+			upgrade := []string{"plugin", "marketplace", "upgrade", "crosstalk"}
 			// codex refuses upgrade on a local marketplace, which add already reads live.
-			if !filepath.IsAbs(env.Marketplace) && !strings.HasPrefix(env.Marketplace, ".") {
-				cmds = append(cmds, []string{"plugin", "marketplace", "upgrade", "crosstalk"})
+			local := filepath.IsAbs(env.Marketplace) || strings.HasPrefix(env.Marketplace, ".")
+			cmds := [][]string{{"plugin", "add", pluginID}}
+			if _, err := env.Run(ctx, "codex", add...); err != nil {
+				// codex reads an emptied checkout as another source; upgrade refills it.
+				if local || !checkoutEmpty(env.Home) {
+					return err
+				}
+				if _, uerr := env.Run(ctx, "codex", upgrade...); uerr != nil {
+					return errors.Join(err, uerr)
+				}
+				if _, err := env.Run(ctx, "codex", add...); err != nil {
+					return err
+				}
+			} else if !local {
+				cmds = append([][]string{upgrade}, cmds...)
 			}
-			for _, args := range append(cmds, []string{"plugin", "add", pluginID}) {
+			for _, args := range cmds {
 				if _, err := env.Run(ctx, "codex", args...); err != nil {
 					return err
 				}

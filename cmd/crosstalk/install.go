@@ -111,7 +111,7 @@ func (o installOpts) cfgFlags() cfgFlags {
 
 func installRun(ctx context.Context, name string, args ...string) ([]byte, error) {
 	var stderr bytes.Buffer
-	c := exec.CommandContext(ctx, name, args...)
+	c := upgrade.Command(ctx, name, args...)
 	c.Stderr = &stderr
 	out, err := c.Output()
 	if err != nil {
