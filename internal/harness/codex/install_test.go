@@ -14,9 +14,10 @@ import (
 )
 
 type installRecorder struct {
-	calls []string
-	path  string
-	fail  string
+	dropEnv bool
+	calls   []string
+	path    string
+	fail    string
 }
 
 func (r *installRecorder) run(_ context.Context, name string, args ...string) ([]byte, error) {
@@ -33,7 +34,7 @@ func (r *installRecorder) run(_ context.Context, name string, args ...string) ([
 		}
 		var out registration
 		out.Transport.Command, out.Transport.Args = e.command, e.args
-		if strings.Contains(string(b), "CROSSTALK_NO_AUTO_REFRESH = \"1\"") {
+		if !r.dropEnv && strings.Contains(string(b), "CROSSTALK_NO_AUTO_REFRESH = \"1\"") {
 			out.Transport.Env = map[string]string{"CROSSTALK_NO_AUTO_REFRESH": "1"}
 		}
 		return json.Marshal(out)
@@ -279,6 +280,30 @@ func TestInstallNoAutoRefreshWritesEnv(t *testing.T) {
 		}
 		if read(r.path) != orig {
 			t.Error("config changed")
+		}
+	})
+	t.Run("dotted env key is refused", func(t *testing.T) {
+		env, r := codexEnv(t, "")
+		os.MkdirAll(filepath.Dir(r.path), 0o700)
+		orig := "[mcp_servers.crosstalk]\ncommand = \"crosstalk\"\nargs = [\"mcp\"]\nenv.KEEP = \"x\"\n"
+		os.WriteFile(r.path, []byte(orig), 0o600)
+		env.NoAutoRefresh = true
+		if err := applySteps((&Harness{}).InstallSteps(env)); err == nil {
+			t.Error("want a refusal")
+		}
+		if read(r.path) != orig {
+			t.Error("config changed")
+		}
+	})
+	t.Run("codex not reading the env rolls the edit back", func(t *testing.T) {
+		env, r := codexEnv(t, "config-prompt.toml")
+		r.dropEnv = true
+		env.NoAutoRefresh = true
+		if err := applySteps((&Harness{}).InstallSteps(env)); err == nil || !strings.Contains(err.Error(), "NO_AUTO_REFRESH") {
+			t.Errorf("want a rollback naming the env, got %v", err)
+		}
+		if read(r.path) != fixture("config-prompt.toml") {
+			t.Error("config not restored")
 		}
 	})
 }

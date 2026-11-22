@@ -219,8 +219,9 @@ func newTable(bin string, noRefresh bool) string {
 // the table after the server table's own keys.
 func setOffEnv(lines []string) ([]string, error) {
 	t, _ := findTable(lines, serverTable)
-	if _, _, ok := keySpan(lines, t.start+1, t.end, "env"); ok {
-		return nil, fmt.Errorf("the crosstalk server sets env as an inline table, which install does not edit; move it to a [%s] table by hand", envTable)
+	dotted := slices.ContainsFunc(lines[t.start+1:t.end], func(l string) bool { return strings.HasPrefix(strings.TrimSpace(l), "env.") })
+	if _, _, ok := keySpan(lines, t.start+1, t.end, "env"); ok || dotted {
+		return nil, fmt.Errorf("the crosstalk server sets env inline or with dotted keys, which install does not edit; move it to a [%s] table by hand", envTable)
 	}
 	if et, ok := findTable(lines, envTable); ok {
 		if i, j, ok := keySpan(lines, et.start+1, et.end, harness.OffEnv); ok {
@@ -398,6 +399,9 @@ func configStep(env harness.InstallEnv) harness.Step {
 				}
 				if r.Transport.Command != env.Bin || !slices.Equal(r.Transport.Args, []string{"mcp"}) {
 					return fmt.Errorf("codex reads command %q args %q, want %q [mcp]", r.Transport.Command, r.Transport.Args, env.Bin)
+				}
+				if env.NoAutoRefresh && r.Transport.Env[harness.OffEnv] != "1" {
+					return fmt.Errorf("codex reads env %v, want %s=1", r.Transport.Env, harness.OffEnv)
 				}
 				return nil
 			})
