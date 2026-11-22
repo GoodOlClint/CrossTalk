@@ -83,7 +83,9 @@ type Server struct {
 	// held are notices for the first agent to bind, when none was bound.
 	held []string
 	// bindHook runs under mu just before a new agent's ready closes; tests only.
-	bindHook func()
+	bindHook  func()
+	bound     chan struct{}
+	boundOnce sync.Once
 }
 
 func DefaultOptions(b Backend, hs ...harness.Harness) (Options, error) {
@@ -102,6 +104,7 @@ func New(opt Options) *Server {
 		ppid:      opt.PPID,
 		interval:  opt.SupersedeInterval,
 		agents:    map[string]*Agent{},
+		bound:     make(chan struct{}),
 	}
 	if s.interval == 0 {
 		s.interval = DefaultSupersedeInterval
@@ -544,6 +547,7 @@ func (s *Server) agent(ctx context.Context, c caller, viaCall bool) (*Agent, *Er
 		if s.bindHook != nil {
 			s.bindHook()
 		}
+		s.boundOnce.Do(func() { close(s.bound) })
 		close(a.ready)
 		s.mu.Unlock()
 		return a, nil
@@ -851,6 +855,9 @@ func errResult(e *Error) (*mcp.CallToolResult, any, error) {
 	}
 	return &mcp.CallToolResult{IsError: true}, e, nil
 }
+
+// Bound is closed once this process has bound its first agent, by any path.
+func (s *Server) Bound() <-chan struct{} { return s.bound }
 
 // HoldNotice puts n on the next tool result of every agent this process has
 // bound; with none bound yet, on the first one that binds.

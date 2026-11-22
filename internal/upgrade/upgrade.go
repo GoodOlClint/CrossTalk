@@ -211,6 +211,10 @@ func (r *Runner) attempt(ctx context.Context, first bool) (ran, pending bool) {
 		if err == nil {
 			err = MarkDone(r.StateDir, r.Version, t.Name)
 		}
+		if err != nil && ctx.Err() != nil {
+			fmt.Fprintf(w, "%s %s: cancelled: %v\n", time.Now().UTC().Format(time.RFC3339), t.Name, err)
+			return false, true
+		}
 		if err != nil {
 			pending = true
 			fmt.Fprintf(w, "%s %s: failed: %v\n", time.Now().UTC().Format(time.RFC3339), t.Name, err)

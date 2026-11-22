@@ -164,7 +164,7 @@ func runMCP(stderr io.Writer) int {
 	in, arm, armed := startRefresh(ctx, home, hs, ho)
 	tr := mcpserver.NewTransport(in, os.Stdout)
 	arm(srv, srv, tr.Conn())
-	stopFollowUp, _ := startFollowUp(ctx, armed, followUpEnv(os.Args[0], home, stateDir), hs, filepath.Join(home, ".config", "crosstalk"), srv.HoldNotice)
+	stopFollowUp, _ := startFollowUp(ctx, armed, srv.Bound(), followUpEnv(os.Args[0], home, stateDir), hs, filepath.Join(home, ".config", "crosstalk"), srv.HoldNotice)
 	stopClaims := serveClaims(ctx, hs, srv)
 	err = srv.Run(ctx, tr, runOpts...)
 	stopFollowUp()

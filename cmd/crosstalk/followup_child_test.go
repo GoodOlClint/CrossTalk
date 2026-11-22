@@ -146,6 +146,10 @@ func TestFollowUpChildCancelKillsGroup(t *testing.T) {
 	if !lockFree(st) {
 		t.Fatal("upgrade.lock held after the cancelled step")
 	}
+	b, _ := os.ReadFile(upgrade.LogPath(st, "9.9.9"))
+	if log := string(b); !strings.Contains(log, "codex: cancelled:") || !strings.Contains(log, "cancelled: shim exited") || strings.Contains(log, "failed") {
+		t.Fatalf("log does not name the cancel:\n%s", b)
+	}
 }
 
 func TestFollowUpChildWritesAfterShimKilled(t *testing.T) {

@@ -82,3 +82,23 @@ func TestFollowUpNoticeDuringBindNotLost(t *testing.T) {
 		t.Fatalf("notice sent while the first agent was binding never reached a tool result (server still holds %q)", held)
 	}
 }
+
+func TestBoundClosesAtFirstBind(t *testing.T) {
+	stateDir, sessions := t.TempDir(), t.TempDir()
+	writeClaudeSession(t, sessions, 4242, "claude-sess", "alpha", "/work/alpha")
+	srv := newRigServer(t, stateDir, sessions, 4242, NewFakeBackend())
+	r := startRig(t, srv)
+	r.handshake()
+	select {
+	case <-srv.Bound():
+		t.Fatal("Bound closed before any agent bound")
+	default:
+	}
+	r.rpc(3, "tools/call", `{"name":"send_message","arguments":{"to":"bob","text":"hi"}}`)
+	select {
+	case <-srv.Bound():
+	case <-time.After(5 * time.Second):
+		t.Fatal("Bound not closed after the first bind")
+	}
+	r.rpc(4, "tools/call", `{"name":"send_message","arguments":{"to":"bob","text":"a"}}`)
+}

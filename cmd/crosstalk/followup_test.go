@@ -118,6 +118,9 @@ func fuSandbox(t *testing.T, home string, setUp ...string) (*fuRec, harness.Inst
 	return rec, env, hs
 }
 
+// fuBound is a shim that has already bound a session.
+var fuBound = func() chan struct{} { c := make(chan struct{}); close(c); return c }()
+
 func fuCfgDir(env harness.InstallEnv) string { return filepath.Join(env.Home, ".config", "crosstalk") }
 
 func fuRun(env harness.InstallEnv, hs []harness.Harness, notice func(string)) {
@@ -292,11 +295,11 @@ func TestFollowUpOffAndNotArmed(t *testing.T) {
 	rec, env, hs := fuSandbox(t, "", "claude")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	if _, ok := startFollowUp(ctx, false, env, hs, fuCfgDir(env), nil); ok {
+	if _, ok := startFollowUp(ctx, false, fuBound, env, hs, fuCfgDir(env), nil); ok {
 		t.Error("started with refresh not armed")
 	}
 	t.Setenv(refresh.OffEnv, "1")
-	if _, ok := startFollowUp(ctx, true, env, hs, fuCfgDir(env), nil); ok {
+	if _, ok := startFollowUp(ctx, true, fuBound, env, hs, fuCfgDir(env), nil); ok {
 		t.Errorf("started with %s=1", refresh.OffEnv)
 	}
 	time.Sleep(100 * time.Millisecond)
@@ -304,7 +307,7 @@ func TestFollowUpOffAndNotArmed(t *testing.T) {
 		t.Fatalf("commands ran while off: %v", c)
 	}
 	t.Setenv(refresh.OffEnv, "0")
-	stop, ok := startFollowUp(ctx, true, env, hs, fuCfgDir(env), nil)
+	stop, ok := startFollowUp(ctx, true, fuBound, env, hs, fuCfgDir(env), nil)
 	if !ok {
 		t.Fatal("did not start when armed")
 	}
@@ -463,7 +466,7 @@ func TestFollowUpCountedForRefreshAndJoinedOnStop(t *testing.T) {
 		}
 		return rec.run(ctx, name, args...)
 	}
-	stop, ok := startFollowUp(context.Background(), true, env, hs, fuCfgDir(env), nil)
+	stop, ok := startFollowUp(context.Background(), true, fuBound, env, hs, fuCfgDir(env), nil)
 	if !ok {
 		t.Fatal("not started")
 	}
@@ -624,5 +627,48 @@ func TestShimTestsKeepHarnessCLIsOffPath(t *testing.T) {
 				t.Errorf("a test shim's PATH finds %s in %s: its follow-up would run the real CLI", c, d)
 			}
 		}
+	}
+}
+
+// A health-check shim (`claude mcp get`, `claude mcp list`) serves no session
+// and exits within a second; it must not start the follow-up (#264).
+func TestFollowUpProbeShimStartsNothing(t *testing.T) {
+	t.Setenv(refresh.OffEnv, "")
+	rec, env, hs := fuSandbox(t, "", "claude", "codex")
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	bound := make(chan struct{})
+	stop, _ := startFollowUp(ctx, true, bound, env, hs, fuCfgDir(env), nil)
+	<-ctx.Done()
+	stop()
+	if c := rec.all(); len(c) != 0 {
+		t.Errorf("a target ran for a shim that served no session: %v", c)
+	}
+	if _, err := os.Stat(upgrade.LogPath(env.StateDir, env.Version)); err == nil {
+		b, _ := os.ReadFile(upgrade.LogPath(env.StateDir, env.Version))
+		t.Errorf("follow-up.log written for a shim that served no session:\n%s", b)
+	}
+	if _, err := os.Stat(upgrade.LockPath(env.StateDir)); err == nil {
+		t.Error("upgrade.lock taken by a shim that served no session")
+	}
+}
+
+func TestFollowUpStartsAtFirstBind(t *testing.T) {
+	t.Setenv(refresh.OffEnv, "")
+	_, env, hs := fuSandbox(t, "", "claude")
+	bound := make(chan struct{})
+	stop, _ := startFollowUp(context.Background(), true, bound, env, hs, fuCfgDir(env), nil)
+	defer stop()
+	time.Sleep(100 * time.Millisecond)
+	if fuDone(env, "claude") {
+		t.Fatal("ran before a session bound")
+	}
+	close(bound)
+	deadline := time.Now().Add(5 * time.Second)
+	for !fuDone(env, "claude") && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !fuDone(env, "claude") {
+		t.Fatal("did not run after the first bind")
 	}
 }
