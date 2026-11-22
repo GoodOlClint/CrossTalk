@@ -13,8 +13,6 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/modelcontextprotocol/go-sdk/mcp"
-
 	"github.com/GoodOlClint/crosstalk/internal/harness"
 	"github.com/GoodOlClint/crosstalk/internal/harness/claude"
 	"github.com/GoodOlClint/crosstalk/internal/harness/codex"
@@ -129,7 +127,7 @@ func runMCP(stderr io.Writer) int {
 	defer stop()
 	srv := mcpserver.New(sh.MCPOptions())
 	stopClaims := serveClaims(ctx, hs, srv)
-	err = srv.Run(ctx, &mcp.StdioTransport{})
+	err = srv.Run(ctx, &mcpserver.Transport{In: os.Stdin, Out: os.Stdout})
 	return finish(srv, err, stopClaims, sh.Close, stderr)
 }
 
