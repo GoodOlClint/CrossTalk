@@ -171,7 +171,7 @@ func TestUpgradeRefreshADREdits(t *testing.T) {
 		{"0028 item 8 handoff", a0028, "A refresh (ADR 0030) carries each proven claim", ""},
 		{"AGENTS names 0030", "AGENTS.md", "ADR 0030", ""},
 		{"AGENTS names 0031", "AGENTS.md", "ADR 0031", "follow the step 5 merge"},
-		{"AGENTS refresh built", "AGENTS.md", "R4 and F2", "Proposed, partly built"},
+		{"AGENTS refresh built", "AGENTS.md", "R4, F1 and F2", "Proposed, partly built"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			doc := repoFile(t, c.file)
