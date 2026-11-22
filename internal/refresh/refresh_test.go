@@ -162,6 +162,7 @@ func TestRefreshStopsAfterBoundedQuiesceTries(t *testing.T) {
 	bin := filepath.Join(dir, "crosstalk")
 	os.WriteFile(bin, []byte("v1"), 0o755)
 	id, _ := mcpserver.IdentityOf(bin)
+	os.Link(bin, bin+".was-v1")
 	os.WriteFile(bin+".n", []byte("v2"), 0o755)
 	os.Rename(bin+".n", bin)
 	var r rec
@@ -176,6 +177,7 @@ func TestRefreshStopsAfterBoundedQuiesceTries(t *testing.T) {
 	if r.quiesces != 3 || r.execs != 0 || len(gaveUp) != 1 || !strings.Contains(gaveUp[0], "3 attempts") {
 		t.Fatalf("%+v, gave up %v: want 3 quiesce attempts, no exec, one give-up after 3", r, gaveUp)
 	}
+	os.Link(bin, bin+".was-v2")
 	os.WriteFile(bin+".n", []byte("v3"), 0o755)
 	os.Rename(bin+".n", bin)
 	w.Tick(context.Background())
