@@ -203,11 +203,12 @@ class Crosstalk < Formula
     <<~EOS
       Register CrossTalk with Claude Code and Codex:
         crosstalk install
-      After `brew upgrade crosstalk`, running sessions refresh on their own within seconds,
-      and the plugin update runs on its own when the first session on the new version starts.
+      After `brew upgrade crosstalk`, running sessions refresh on their own once they are idle,
+      and the plugin update runs on its own when the first session on the new version starts (unless `crosstalk install` already did it).
       `crosstalk install` stays the manual path, and the only way to change registration, allow rules, PATH or Codex config.
       A session started before this feature, or with CROSSTALK_NO_AUTO_REFRESH=1, needs a restart by hand;
-      `crosstalk install --check` (K11) lists those sessions.
+      with CROSSTALK_NO_AUTO_REFRESH=1 also run `crosstalk install`, which updates the plugin and gateway.
+      `crosstalk install --check` (K11) lists shims that have not refreshed.
       Before `brew uninstall crosstalk`, run:
         crosstalk uninstall
       Restart running Claude and Codex sessions after uninstall.

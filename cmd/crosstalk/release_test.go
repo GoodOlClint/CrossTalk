@@ -253,7 +253,7 @@ func TestFormulaRender(t *testing.T) {
 				t.Errorf("formula lacks %s\n%s", w, out)
 			}
 		}
-		for _, w := range []string{"refresh on their own", "manual path", "CROSSTALK_NO_AUTO_REFRESH=1", "needs a restart by hand"} {
+		for _, w := range []string{"refresh on their own", "manual path", "CROSSTALK_NO_AUTO_REFRESH=1", "needs a restart by hand", "plugin update runs on its own", "also run `crosstalk install`"} {
 			if !strings.Contains(out, w) {
 				t.Errorf("caveats lack %q\n%s", w, out)
 			}

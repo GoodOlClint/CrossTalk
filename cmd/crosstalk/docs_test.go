@@ -134,6 +134,7 @@ func TestSetupDocCoversAutoRefresh(t *testing.T) {
 		"CROSSTALK_NO_AUTO_REFRESH", "--no-auto-refresh",
 		"upgrade/<version>/<target>.done", "follow-up.log", "plugin step", "gateway restart", "without a terminal",
 		"refresh on their own", "manual path", "have not refreshed",
+		"keeps its original tool list", "follow-up is off too", "already wrote the markers",
 	} {
 		if !strings.Contains(doc, want) {
 			t.Errorf("setup.md lacks %q", want)
@@ -161,6 +162,7 @@ func TestUpgradeRefreshADREdits(t *testing.T) {
 		name, file, has, lacks string
 	}{
 		{"0006 names the follow-up exception", a0006, "ADR 0031", ""},
+		{"0006 probe", a0006, "compatibility probe", ""},
 		{"0016 unconfirmed steps", a0016, "run unconfirmed", ""},
 		{"0016 sessions refresh", a0016, "refresh on their own", "running sessions keep their old server until restarted"},
 		{"0018 sandbox evidence", a0018, "spike 20", ""},
@@ -180,5 +182,14 @@ func TestUpgradeRefreshADREdits(t *testing.T) {
 				t.Errorf("%s still says %q", c.file, c.lacks)
 			}
 		})
+	}
+}
+
+func TestFAQCoversAutoRefresh(t *testing.T) {
+	doc := repoFile(t, "docs/faq.md")
+	for _, want := range []string{"refresh on their own", "CROSSTALK_NO_AUTO_REFRESH=1", "started before the feature existed"} {
+		if !strings.Contains(doc, want) {
+			t.Errorf("faq.md lacks %q", want)
+		}
 	}
 }
