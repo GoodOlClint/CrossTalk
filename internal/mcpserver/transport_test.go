@@ -112,7 +112,7 @@ func TestConnCapturesState(t *testing.T) {
 	srv := mcp.NewServer(&mcp.Implementation{Name: "s", Version: "0"}, &mcp.ServerOptions{Capabilities: &mcp.ServerCapabilities{Logging: &mcp.LoggingCapabilities{}}})
 	inR, inW := io.Pipe()
 	outR, outW := io.Pipe()
-	tr := &Transport{In: inR, Out: outW}
+	tr := NewTransport(inR, outW)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go srv.Run(ctx, tr)
@@ -186,5 +186,80 @@ func TestConnCloseUnblocksReadOfNonCloser(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("Close did not unblock Read")
+	}
+}
+
+func TestConnBlankLinesAndFinalFrameAtEOF(t *testing.T) {
+	c := NewConn(strings.NewReader("\n"+reqA+"\n\n"+reqB), io.Discard)
+	for i := 0; i < 2; i++ {
+		if _, err := c.Read(context.Background()); err != nil {
+			t.Fatalf("read %d: %v", i, err)
+		}
+	}
+	if _, err := c.Read(context.Background()); err != io.EOF {
+		t.Fatalf("third read = %v, want EOF", err)
+	}
+}
+
+func TestConnCancelledReadKeepsItsFrame(t *testing.T) {
+	pr, pw := io.Pipe()
+	defer pw.Close()
+	c := NewConn(pr, io.Discard)
+	ctx, cancel := context.WithCancel(context.Background())
+	got := make(chan error, 1)
+	go func() { _, err := c.Read(ctx); got <- err }()
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+	if err := <-got; err != context.Canceled {
+		t.Fatal(err)
+	}
+	go pw.Write([]byte(reqA + "\n"))
+	waitUntil(t, "the frame to be read", func() bool { c.smu.Lock(); defer c.smu.Unlock(); return c.partial })
+	if c.Quiescent() {
+		t.Fatal("quiescent with a complete frame no Read has accepted")
+	}
+	m, err := c.Read(context.Background())
+	if err != nil || m.(*jsonrpc.Request).Method != "ping" {
+		t.Fatalf("%v %v", m, err)
+	}
+}
+
+func TestConnNotificationAndFailedWriteBlockQuiescence(t *testing.T) {
+	inR, inW := io.Pipe()
+	outR, outW := io.Pipe()
+	defer inW.Close()
+	c := NewConn(inR, outW)
+	n := &jsonrpc.Request{Method: "notifications/message", Params: json.RawMessage(`{}`)}
+	wrote := make(chan error, 1)
+	go func() { wrote <- c.Write(context.Background(), n) }()
+	waitUntil(t, "the notification write to start", func() bool { c.smu.Lock(); defer c.smu.Unlock(); return c.inflight == 1 })
+	if c.Quiescent() {
+		t.Fatal("quiescent while a notification is mid-write")
+	}
+	outR.Close()
+	if err := <-wrote; err == nil {
+		t.Fatal("write to a closed pipe succeeded")
+	}
+	if c.Quiescent() {
+		t.Fatal("quiescent after a failed write")
+	}
+}
+
+func TestConnLargeFrameThroughOSPipe(t *testing.T) {
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	frame := `{"jsonrpc":"2.0","id":1,"method":"ping","params":{"x":"` + strings.Repeat("a", 1<<20) + `"}}` + "\n"
+	go func() { w.WriteString(frame); w.Close() }()
+	c := NewConn(r, io.Discard)
+	start := time.Now()
+	if _, err := c.Read(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("1 MiB frame: %v", time.Since(start))
+	if time.Since(start) > 5*time.Second {
+		t.Fatal("1 MiB frame took over 5s")
 	}
 }

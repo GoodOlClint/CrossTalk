@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"sync"
+	"sync/atomic"
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -37,18 +38,24 @@ type SessionState struct {
 // the SDK's stdio transport it never reads ahead of the frame it returns, and
 // it knows which requests still owe a response.
 type Transport struct {
-	In  io.Reader
-	Out io.Writer
-	// Conn is set by Connect.
 	conn *Conn
+	used atomic.Bool
 }
 
-// Conn returns the connection made by Connect, or nil before it.
+// NewTransport builds the transport and its connection up front, so a watcher
+// can hold Conn before Server.Run starts.
+func NewTransport(in io.Reader, out io.Writer) *Transport {
+	return &Transport{conn: NewConn(in, out)}
+}
+
+// Conn returns the connection Connect hands out.
 func (t *Transport) Conn() *Conn { return t.conn }
 
-// Connect implements mcp.Transport.
+// Connect implements mcp.Transport; it serves one connection.
 func (t *Transport) Connect(context.Context) (mcp.Connection, error) {
-	t.conn = NewConn(t.In, t.Out)
+	if !t.used.CompareAndSwap(false, true) {
+		return nil, errors.New("transport already connected")
+	}
 	return t.conn, nil
 }
 
@@ -67,15 +74,21 @@ type Conn struct {
 
 	smu      sync.Mutex
 	pending  map[jsonrpc.ID]struct{}
+	cand     map[jsonrpc.ID]candidate // state-changing requests until their response succeeds
+	werr     error                    // a failed response write; handoff must not proceed
 	batches  map[jsonrpc.ID]*batch
 	queue    []jsonrpc.Message
 	inflight int // responses being written
 	state    SessionState
-	initID   jsonrpc.ID
 	hasInit  bool
 	partial  bool
 	rd       chan frameRes // the outstanding frame read, if a Read gave up on it
 	idle     chan struct{} // closed and replaced on every change
+}
+
+type candidate struct {
+	method string
+	params json.RawMessage
 }
 
 type batch struct {
@@ -90,6 +103,7 @@ func NewConn(in io.Reader, out io.Writer) *Conn {
 		out:     out,
 		closed:  make(chan struct{}),
 		pending: map[jsonrpc.ID]struct{}{},
+		cand:    map[jsonrpc.ID]candidate{},
 		batches: map[jsonrpc.ID]*batch{},
 		idle:    make(chan struct{}),
 	}
@@ -115,6 +129,7 @@ func (c *Conn) Read(ctx context.Context) (jsonrpc.Message, error) {
 	if len(c.queue) > 0 {
 		m := c.queue[0]
 		c.queue = c.queue[1:]
+		c.changed()
 		c.smu.Unlock()
 		return m, nil
 	}
@@ -162,30 +177,35 @@ func (c *Conn) readFrame() ([]byte, error) {
 	for {
 		n, err := c.in.Read(one[:])
 		if n == 0 && err != nil {
-			if len(line) > 0 && errors.Is(err, io.EOF) {
-				err = io.ErrUnexpectedEOF
-			}
-			c.setPartial(false)
 			select {
 			case <-c.closed:
 				err = io.EOF
 			default:
 			}
+			if len(line) > 0 && errors.Is(err, io.EOF) {
+				c.setPartial(false)
+				return line, nil
+			}
+			c.setPartial(false)
 			return nil, err
 		}
 		if n == 0 {
 			continue
 		}
 		if one[0] == '\n' {
-			c.setPartial(false)
+			if len(line) == 0 {
+				continue
+			}
 			return line, nil
+		}
+		if len(line) == 0 {
+			c.setPartial(true)
 		}
 		line = append(line, one[0])
 		if len(line) > MaxFrame {
 			c.setPartial(false)
 			return nil, errFrameTooLarge
 		}
-		c.setPartial(true)
 	}
 }
 
@@ -223,6 +243,10 @@ func (c *Conn) accept(line []byte) (jsonrpc.Message, error) {
 
 	c.smu.Lock()
 	defer c.smu.Unlock()
+	if c.partial {
+		c.partial = false
+		c.changed()
+	}
 	if isBatch {
 		v := c.state.ProtocolVersion
 		if v == "" {
@@ -274,17 +298,18 @@ func (c *Conn) observeRead(m jsonrpc.Message) {
 	}
 	switch req.Method {
 	case "initialize":
-		c.state.InitializeParams = append(json.RawMessage(nil), req.Params...)
-		c.initID, c.hasInit = req.ID, true
+		if !c.hasInit {
+			c.cand[req.ID] = candidate{method: req.Method, params: append(json.RawMessage(nil), req.Params...)}
+		}
 	case "notifications/initialized":
 		c.state.Initialized = true
 	case "logging/setLevel":
-		c.state.SetLevelParams = append(json.RawMessage(nil), req.Params...)
+		c.cand[req.ID] = candidate{method: req.Method, params: append(json.RawMessage(nil), req.Params...)}
 	}
 }
 
-// Write writes msg; a response leaves the pending set only after the bytes are
-// written.
+// Write writes msg; a response leaves the pending set only after its bytes are
+// written, and a failed write is terminal for quiescence.
 func (c *Conn) Write(ctx context.Context, msg jsonrpc.Message) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -293,35 +318,39 @@ func (c *Conn) Write(ctx context.Context, msg jsonrpc.Message) error {
 
 	c.wmu.Lock()
 	defer c.wmu.Unlock()
-	if isResp {
+	c.smu.Lock()
+	c.inflight++
+	c.smu.Unlock()
+	var err error
+	defer func() {
 		c.smu.Lock()
-		c.inflight++
-		c.smu.Unlock()
-		defer func() {
-			c.smu.Lock()
-			c.inflight--
+		c.inflight--
+		if err != nil {
+			c.werr = err
+		} else if isResp {
 			delete(c.pending, resp.ID)
-			c.changed()
-			c.smu.Unlock()
-		}()
+		}
+		c.changed()
+		c.smu.Unlock()
+	}()
+	if isResp {
+		c.commit(resp)
 		if b, ok := c.takeBatch(resp); ok {
 			if len(b) == 0 {
 				return nil
 			}
-			return c.writeBatch(b)
+			err = c.writeBatch(b)
+			return err
 		}
 	}
-	data, err := jsonrpc.EncodeMessage(msg)
+	var data []byte
+	data, err = jsonrpc.EncodeMessage(msg)
 	if err != nil {
-		return fmt.Errorf("marshaling message: %v", err)
-	}
-	if _, err := c.out.Write(append(data, '\n')); err != nil {
+		err = fmt.Errorf("marshaling message: %v", err)
 		return err
 	}
-	if isResp {
-		c.captureResponse(resp)
-	}
-	return nil
+	_, err = c.out.Write(append(data, '\n'))
+	return err
 }
 
 func (c *Conn) takeBatch(resp *jsonrpc.Response) ([]*jsonrpc.Response, bool) {
@@ -357,17 +386,33 @@ func (c *Conn) writeBatch(rs []*jsonrpc.Response) error {
 	return err
 }
 
-func (c *Conn) captureResponse(resp *jsonrpc.Response) {
+// commit applies a state-changing request's candidate once its response is a
+// success; it runs before the response bytes are written, so a client's next
+// frame already sees the negotiated version.
+func (c *Conn) commit(resp *jsonrpc.Response) {
 	c.smu.Lock()
 	defer c.smu.Unlock()
-	if !c.hasInit || resp.ID != c.initID || resp.Error != nil {
+	cd, ok := c.cand[resp.ID]
+	if !ok {
 		return
 	}
-	var r struct {
-		ProtocolVersion string `json:"protocolVersion"`
+	delete(c.cand, resp.ID)
+	if resp.Error != nil {
+		return
 	}
-	if json.Unmarshal(resp.Result, &r) == nil {
+	switch cd.method {
+	case "initialize":
+		var r struct {
+			ProtocolVersion string `json:"protocolVersion"`
+		}
+		if json.Unmarshal(resp.Result, &r) != nil {
+			return
+		}
+		c.state.InitializeParams = cd.params
 		c.state.ProtocolVersion = r.ProtocolVersion
+		c.hasInit = true
+	case "logging/setLevel":
+		c.state.SetLevelParams = cd.params
 	}
 }
 
@@ -397,14 +442,14 @@ func (c *Conn) State() SessionState {
 func (c *Conn) Quiescent() bool {
 	c.smu.Lock()
 	defer c.smu.Unlock()
-	return !c.partial && len(c.pending) == 0 && c.inflight == 0 && len(c.queue) == 0
+	return !c.partial && len(c.pending) == 0 && c.inflight == 0 && len(c.queue) == 0 && c.werr == nil
 }
 
 // WaitQuiescent blocks until Quiescent or ctx ends.
 func (c *Conn) WaitQuiescent(ctx context.Context) error {
 	for {
 		c.smu.Lock()
-		q := !c.partial && len(c.pending) == 0 && c.inflight == 0 && len(c.queue) == 0
+		q := !c.partial && len(c.pending) == 0 && c.inflight == 0 && len(c.queue) == 0 && c.werr == nil
 		ch := c.idle
 		c.smu.Unlock()
 		if q {

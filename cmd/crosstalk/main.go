@@ -127,7 +127,7 @@ func runMCP(stderr io.Writer) int {
 	defer stop()
 	srv := mcpserver.New(sh.MCPOptions())
 	stopClaims := serveClaims(ctx, hs, srv)
-	err = srv.Run(ctx, &mcpserver.Transport{In: os.Stdin, Out: os.Stdout})
+	err = srv.Run(ctx, mcpserver.NewTransport(os.Stdin, os.Stdout))
 	return finish(srv, err, stopClaims, sh.Close, stderr)
 }
 

@@ -112,7 +112,7 @@ func TestRunKeepsRetirementAndClose(t *testing.T) {
 	outR, outW := io.Pipe()
 	ctx := context.Background()
 	done := make(chan error, 1)
-	go func() { done <- srv.Run(ctx, &mcpserver.Transport{In: inR, Out: outW}) }()
+	go func() { done <- srv.Run(ctx, mcpserver.NewTransport(inR, outW)) }()
 	t.Cleanup(func() { inW.Close(); sh.Close() })
 	cs, err := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "0"}, nil).Connect(ctx, &mcp.IOTransport{Reader: outR, Writer: inW}, nil)
 	if err != nil {
