@@ -494,9 +494,14 @@ func TestInstallHandshakeTurnsFollowUpOff(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	lines := strings.Split(string(b), "\n")
-	if !slices.Contains(lines, refresh.OffEnv+"=1") || slices.Contains(lines, refresh.OffEnv+"=0") {
-		t.Fatalf("the handshake child can run the follow-up: %s", b)
+	var ours []string
+	for _, l := range strings.Split(string(b), "\n") {
+		if strings.HasPrefix(l, refresh.OffEnv+"=") {
+			ours = append(ours, l)
+		}
+	}
+	if !slices.Equal(ours, []string{refresh.OffEnv + "=1"}) {
+		t.Fatalf("the handshake child can run the follow-up: %q", ours)
 	}
 }
 
