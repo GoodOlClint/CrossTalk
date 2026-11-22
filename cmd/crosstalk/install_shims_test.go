@@ -592,3 +592,31 @@ func TestInstallPlansNoGatewayStepForUnitNotOwned(t *testing.T) {
 		t.Errorf("calls %v:\n%s", rec.all(), out)
 	}
 }
+
+func TestK11CodexNotesNewThreads(t *testing.T) {
+	fakeShims(t,
+		shimProc{PID: 21, PPID: 2, ParentCmd: daemonCmd, ParentPPID: 1},
+		shimProc{PID: 23, PPID: 4, ParentCmd: standaloneCm, ParentPPID: 900},
+		shimProc{PID: 24, PPID: 5, ParentCmd: claudeCmd, ParentPPID: 900})
+	rs := installShimChecks("/bin/crosstalk")
+	if len(rs) != 3 {
+		t.Fatalf("got %v", k11Lines(rs))
+	}
+	const note = "only in threads started after the upgrade"
+	for _, i := range []int{0, 1} {
+		if !strings.Contains(rs[i].Detail, note) {
+			t.Errorf("Codex group %d lacks %q: %s", i, note, rs[i].Detail)
+		}
+	}
+	if strings.Contains(rs[2].Detail, note) {
+		t.Errorf("Claude group carries the Codex note: %s", rs[2].Detail)
+	}
+	for _, off := range []bool{false, true} {
+		if off {
+			t.Setenv("CROSSTALK_NO_AUTO_REFRESH", "1")
+		}
+		if got := installShimChecks("/bin/crosstalk"); len(got) != 3 || got[0].OK || !strings.Contains(got[0].Detail, "pids 21") {
+			t.Errorf("shim that cannot refresh (off=%v) not listed: %v", off, k11Lines(got))
+		}
+	}
+}

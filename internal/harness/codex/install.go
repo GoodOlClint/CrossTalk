@@ -203,16 +203,49 @@ func readEntry(cfg string) (entry, bool) {
 	return e, true
 }
 
-func newTable(bin string) string {
-	return "[mcp_servers.crosstalk]\ncommand = " + strconv.Quote(bin) + "\nargs = [\"mcp\"]\ndefault_tools_approval_mode = \"approve\"\n"
+const envTable = serverTable + ".env"
+
+func offLine() string { return harness.OffEnv + ` = "1"` }
+
+func newTable(bin string, noRefresh bool) string {
+	t := "[mcp_servers.crosstalk]\ncommand = " + strconv.Quote(bin) + "\nargs = [\"mcp\"]\ndefault_tools_approval_mode = \"approve\"\n"
+	if noRefresh {
+		t += "\n[" + envTable + "]\n" + offLine() + "\n"
+	}
+	return t
+}
+
+// setOffEnv writes the off switch into [mcp_servers.crosstalk.env], creating
+// the table after the server table's own keys.
+func setOffEnv(lines []string) ([]string, error) {
+	t, _ := findTable(lines, serverTable)
+	dotted := slices.ContainsFunc(lines[t.start+1:t.end], func(l string) bool { return strings.HasPrefix(strings.TrimSpace(l), "env.") })
+	if _, _, ok := keySpan(lines, t.start+1, t.end, "env"); ok || dotted {
+		return nil, fmt.Errorf("the crosstalk server sets env inline or with dotted keys, which install does not edit; move it to a [%s] table by hand", envTable)
+	}
+	if et, ok := findTable(lines, envTable); ok {
+		if i, j, ok := keySpan(lines, et.start+1, et.end, harness.OffEnv); ok {
+			return slices.Replace(lines, i, j, offLine()), nil
+		}
+		return slices.Insert(lines, et.start+1, offLine()), nil
+	}
+	p := t.end
+	for p > t.start+1 && strings.TrimSpace(lines[p-1]) == "" {
+		p--
+	}
+	add := []string{"", "[" + envTable + "]", offLine()}
+	if p < len(lines) && strings.TrimSpace(lines[p]) != "" {
+		add = append(add, "")
+	}
+	return slices.Insert(lines, p, add...), nil
 }
 
 // editConfig points the crosstalk server at bin with args ["mcp"], keeping
 // every other key and sub-table, or appends the table when there is none.
-func editConfig(cfg, bin string) (string, error) {
+func editConfig(cfg, bin string, noRefresh bool) (string, error) {
 	lines := strings.Split(cfg, "\n")
 	if otherForm(lines) {
-		return "", fmt.Errorf("the crosstalk server is declared as an inline table or with dotted keys, which install does not edit; replace that declaration by hand with:\n%s", newTable(bin))
+		return "", fmt.Errorf("the crosstalk server is declared as an inline table or with dotted keys, which install does not edit; replace that declaration by hand with:\n%s", newTable(bin, noRefresh))
 	}
 	t, ok := findTable(lines, serverTable)
 	if !ok {
@@ -223,7 +256,7 @@ func editConfig(cfg, bin string) (string, error) {
 		if out != "" {
 			out += "\n"
 		}
-		return out + newTable(bin), nil
+		return out + newTable(bin, noRefresh), nil
 	}
 	body := slices.Clone(lines[t.start+1 : t.end])
 	set := func(key, line string) {
@@ -235,7 +268,14 @@ func editConfig(cfg, bin string) (string, error) {
 	}
 	set("args", `args = ["mcp"]`)
 	set("command", "command = "+strconv.Quote(bin))
-	return strings.Join(slices.Concat(lines[:t.start+1], body, lines[t.end:]), "\n"), nil
+	lines = slices.Concat(lines[:t.start+1], body, lines[t.end:])
+	if noRefresh {
+		var err error
+		if lines, err = setOffEnv(lines); err != nil {
+			return "", err
+		}
+	}
+	return strings.Join(lines, "\n"), nil
 }
 
 // removeTables drops the crosstalk server table and every sub-table, and
@@ -328,10 +368,13 @@ func pluginStep(env harness.InstallEnv) harness.Step {
 
 func configStep(env harness.InstallEnv) harness.Step {
 	path := configPath(env.Home)
-	change := fmt.Sprintf("append to %s (backup next to it):\n%s", path, newTable(env.Bin))
+	change := fmt.Sprintf("append to %s (backup next to it):\n%s", path, newTable(env.Bin, env.NoAutoRefresh))
 	if b, err := os.ReadFile(path); err == nil {
 		if e, ok := readEntry(string(b)); ok {
 			change = fmt.Sprintf("in %s (backup next to it), [mcp_servers.crosstalk] gets command = %q and args = [\"mcp\"]; other keys and sub-tables stay", path, env.Bin)
+			if env.NoAutoRefresh {
+				change += "; [" + envTable + "] gets " + offLine()
+			}
 			if filepath.Base(e.command) != "crosstalk" || !slices.Equal(e.args, []string{"mcp"}) {
 				change += "\nreplaces this entry, whose args are not kept:\n" + e.raw
 			}
@@ -345,7 +388,7 @@ func configStep(env harness.InstallEnv) harness.Step {
 			if err != nil && !errors.Is(err, os.ErrNotExist) {
 				return err
 			}
-			cfg, err := editConfig(string(b), env.Bin)
+			cfg, err := editConfig(string(b), env.Bin, env.NoAutoRefresh)
 			if err != nil {
 				return err
 			}
@@ -356,6 +399,9 @@ func configStep(env harness.InstallEnv) harness.Step {
 				}
 				if r.Transport.Command != env.Bin || !slices.Equal(r.Transport.Args, []string{"mcp"}) {
 					return fmt.Errorf("codex reads command %q args %q, want %q [mcp]", r.Transport.Command, r.Transport.Args, env.Bin)
+				}
+				if env.NoAutoRefresh && r.Transport.Env[harness.OffEnv] != "1" {
+					return fmt.Errorf("codex reads env %v, want %s=1", r.Transport.Env, harness.OffEnv)
 				}
 				return nil
 			})

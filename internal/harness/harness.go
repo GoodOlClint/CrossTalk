@@ -241,6 +241,9 @@ type Leftover interface {
 	Leftover(env InstallEnv, anyBin bool) (string, error)
 }
 
+// OffEnv is refresh.OffEnv, which this package cannot import.
+const OffEnv = "CROSSTALK_NO_AUTO_REFRESH"
+
 type InstallEnv struct {
 	// Bin is the absolute path of the installed crosstalk binary.
 	Bin, Version, Home string
@@ -251,6 +254,8 @@ type InstallEnv struct {
 	// SkipRulePort lets install continue past old-prefix rules it cannot
 	// edit; the checks then warn about each.
 	SkipRulePort bool
+	// NoAutoRefresh makes each registration carry CROSSTALK_NO_AUTO_REFRESH=1.
+	NoAutoRefresh bool
 	// StateDir is CrossTalk's state directory; "" means under Home.
 	StateDir string
 	// Experimental names the opt-in features the user asked install for.

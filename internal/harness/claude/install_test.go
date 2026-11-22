@@ -201,3 +201,58 @@ func TestClaudeMCPReplaceRestoresOnFailure(t *testing.T) {
 		t.Errorf("recovery copy left after a successful add: %v", err)
 	}
 }
+
+func TestInstallNoAutoRefreshWritesEnv(t *testing.T) {
+	const off = "CROSSTALK_NO_AUTO_REFRESH=1"
+	h := &Harness{}
+	t.Run("fresh", func(t *testing.T) {
+		r := &recorder{}
+		env := installEnv(t, r)
+		env.NoAutoRefresh = true
+		steps := h.InstallSteps(env)
+		if c := steps[len(steps)-2].Change; !strings.Contains(c, off) {
+			t.Errorf("dry-run text lacks the env: %q", c)
+		}
+		if err := applyAll(steps); err != nil {
+			t.Fatal(err)
+		}
+		if want := "claude mcp add --scope user crosstalk -e " + off + " -- /opt/x/crosstalk mcp"; r.index(want) < 0 {
+			t.Errorf("want %q in\n%s", want, strings.Join(r.calls, "\n"))
+		}
+	})
+	t.Run("re-run keeps other env and sets the flag", func(t *testing.T) {
+		r := &recorder{}
+		env := installEnv(t, r)
+		env.NoAutoRefresh = true
+		writeFile(t, filepath.Join(env.Home, ".claude.json"), `{"mcpServers": {"crosstalk": {"command": "crosstalk", "args": ["mcp"], "env": {"A": "1", "CROSSTALK_NO_AUTO_REFRESH": "0"}}}}`)
+		if err := applyAll(h.InstallSteps(env)); err != nil {
+			t.Fatal(err)
+		}
+		if want := "claude mcp add --scope user crosstalk -e A=1 -e " + off + " -- /opt/x/crosstalk mcp"; r.index(want) < 0 {
+			t.Errorf("want %q in\n%s", want, strings.Join(r.calls, "\n"))
+		}
+	})
+	t.Run("without the flag an existing entry is kept", func(t *testing.T) {
+		r := &recorder{}
+		env := installEnv(t, r)
+		writeFile(t, filepath.Join(env.Home, ".claude.json"), `{"mcpServers": {"crosstalk": {"command": "crosstalk", "args": ["mcp"], "env": {"CROSSTALK_NO_AUTO_REFRESH": "1"}}}}`)
+		if err := applyAll(h.InstallSteps(env)); err != nil {
+			t.Fatal(err)
+		}
+		if want := "claude mcp add --scope user crosstalk -e " + off + " -- /opt/x/crosstalk mcp"; r.index(want) < 0 {
+			t.Errorf("want %q in\n%s", want, strings.Join(r.calls, "\n"))
+		}
+	})
+	t.Run("without the flag a fresh install writes none", func(t *testing.T) {
+		r := &recorder{}
+		env := installEnv(t, r)
+		if err := applyAll(h.InstallSteps(env)); err != nil {
+			t.Fatal(err)
+		}
+		for _, c := range r.calls {
+			if strings.Contains(c, "NO_AUTO_REFRESH") {
+				t.Errorf("unexpected env: %s", c)
+			}
+		}
+	})
+}

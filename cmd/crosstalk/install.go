@@ -26,23 +26,25 @@ import (
 	"github.com/GoodOlClint/crosstalk/internal/remote"
 )
 
-const installUsage = `usage: crosstalk install   [claude|codex] [--yes] [--path] [--bin-dir DIR] [--skip-rule-port] [--check] [--codex-no-daemon-queue] [--remote --bind ADDR [--port N] [--alias NAME]]
+const installUsage = `usage: crosstalk install   [claude|codex] [--yes] [--path] [--bin-dir DIR] [--skip-rule-port] [--no-auto-refresh] [--check] [--codex-no-daemon-queue] [--remote --bind ADDR [--port N] [--alias NAME]]
        crosstalk uninstall [claude|codex] [--yes] [--purge] [--bin-dir DIR]
-       crosstalk reinstall [claude|codex] [--yes] [--path] [--bin-dir DIR] [--skip-rule-port] [--codex-no-daemon-queue] [--remote --bind ADDR [--port N] [--alias NAME]]
+       crosstalk reinstall [claude|codex] [--yes] [--path] [--bin-dir DIR] [--skip-rule-port] [--no-auto-refresh] [--codex-no-daemon-queue] [--remote --bind ADDR [--port N] [--alias NAME]]
 
+  --no-auto-refresh        write CROSSTALK_NO_AUTO_REFRESH=1 into each registration: a running shim then never re-execs itself
+                           when its binary is replaced (restart it by hand)
   --codex-no-daemon-queue  EXPERIMENTAL, Codex only, macOS only, off unless given: wake an idle codex --no-daemon session
                            through Codex's local queue when a message arrives; each wake is a paid model turn
 `
 
 type installOpts struct {
-	mode                            string
-	names                           []string
-	yes, path, purge, check, noPort bool
-	binDir                          string
-	remote, queueWake               bool
-	bind, alias                     string
-	port                            int
-	set                             map[string]bool
+	mode                                       string
+	names                                      []string
+	yes, path, purge, check, noPort, noRefresh bool
+	binDir                                     string
+	remote, queueWake                          bool
+	bind, alias                                string
+	port                                       int
+	set                                        map[string]bool
 }
 
 func parseInstallArgs(mode string, args []string) (installOpts, error) {
@@ -56,6 +58,7 @@ func parseInstallArgs(mode string, args []string) (installOpts, error) {
 	} else {
 		fs.BoolVar(&o.path, "path", false, "")
 		fs.BoolVar(&o.noPort, "skip-rule-port", false, "")
+		fs.BoolVar(&o.noRefresh, "no-auto-refresh", false, "")
 		fs.BoolVar(&o.remote, "remote", false, "")
 		fs.BoolVar(&o.queueWake, "codex-no-daemon-queue", false, "")
 		fs.StringVar(&o.bind, "bind", "", "")
@@ -191,15 +194,16 @@ func runInstall(mode string, args []string, in io.Reader, tty bool, stdout, stde
 		return 1
 	}
 	env := harness.InstallEnv{
-		Bin:          filepath.Join(o.binDir, "crosstalk"),
-		Version:      mcpserver.Version,
-		Home:         home,
-		Run:          installRun,
-		Handshake:    installHandshake,
-		SkipRulePort: o.noPort,
-		Marketplace:  cmp.Or(os.Getenv("CROSSTALK_MARKETPLACE"), "GoodOlClint/CrossTalk"),
-		StateDir:     stateDir,
-		Out:          stdout,
+		Bin:           filepath.Join(o.binDir, "crosstalk"),
+		Version:       mcpserver.Version,
+		Home:          home,
+		Run:           installRun,
+		Handshake:     installHandshake,
+		SkipRulePort:  o.noPort,
+		NoAutoRefresh: o.noRefresh,
+		Marketplace:   cmp.Or(os.Getenv("CROSSTALK_MARKETPLACE"), "GoodOlClint/CrossTalk"),
+		StateDir:      stateDir,
+		Out:           stdout,
 	}
 	if o.queueWake && mode != "uninstall" {
 		env.Experimental = map[string]bool{codex.QueueWakeOption: true}
