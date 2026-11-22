@@ -91,7 +91,7 @@ func Supervise(args []string, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "%s: killed after %s\n", args[2], limit)
 	case <-term:
 		syscall.Kill(-c.Process.Pid, syscall.SIGKILL)
-		fmt.Fprintf(stderr, "%s: cancelled: shim exited\n", args[2])
+		fmt.Fprintf(stderr, "%s: cancelled by SIGTERM\n", args[2])
 	}
 	<-done
 	return 1

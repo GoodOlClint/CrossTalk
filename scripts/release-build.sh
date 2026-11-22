@@ -204,7 +204,7 @@ class Crosstalk < Formula
       Register CrossTalk with Claude Code and Codex:
         crosstalk install
       After `brew upgrade crosstalk`, running sessions refresh on their own once they are idle,
-      and the plugin update runs on its own when the first session on the new version starts (unless `crosstalk install` already did it).
+      and the plugin update runs on its own once the first session on the new version binds (unless `crosstalk install` already did it); a Codex thread binds at its first CrossTalk tool call.
       `crosstalk install` stays the manual path, and the only way to change registration, allow rules, PATH or Codex config.
       A session started before this feature, or with CROSSTALK_NO_AUTO_REFRESH=1, needs a restart by hand;
       with CROSSTALK_NO_AUTO_REFRESH=1 also run `crosstalk install`, which updates the plugin and gateway.
