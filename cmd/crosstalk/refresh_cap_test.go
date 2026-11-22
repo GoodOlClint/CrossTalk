@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/GoodOlClint/crosstalk/internal/mcpserver"
 	"github.com/GoodOlClint/crosstalk/internal/quiesce"
 )
 
@@ -80,5 +81,43 @@ func TestQuiesceStopsAfterSlowFirstPass(t *testing.T) {
 	}
 	if !errors.Is(err, context.DeadlineExceeded) || ing.paused != 1 || ing.reopens != 1 {
 		t.Fatalf("err %v, passes %d, reopens %d; want the context error after one pass", err, ing.paused, ing.reopens)
+	}
+}
+
+type orderIngress struct {
+	conn                   *mcpserver.Conn
+	gateOpen, stdinsPaused []bool
+}
+
+func (o *orderIngress) PauseIngress() func() {
+	return func() {
+		done, ok := quiesce.TryEnter()
+		if ok {
+			done()
+		}
+		o.gateOpen = append(o.gateOpen, ok)
+		o.stdinsPaused = append(o.stdinsPaused, o.conn.WaitPaused(expired) == nil)
+	}
+}
+
+// Undo reopens the listeners with the gate already open, so a retirement can
+// drain its calls, and with stdin still paused, so no fresh call starts.
+func TestQuiesceUndoReopensWithGateOpenAndStdinPaused(t *testing.T) {
+	conn, _ := pipeConn(t)
+	ing := &orderIngress{conn: conn}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	undo, err := quiesceForExec(ctx, ing, conn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	undo()
+	if len(ing.gateOpen) == 0 {
+		t.Fatal("no ingress reopened")
+	}
+	for i := range ing.gateOpen {
+		if !ing.gateOpen[i] || !ing.stdinsPaused[i] {
+			t.Fatalf("reopen %d: gate open %v, stdin paused %v; want both", i, ing.gateOpen[i], ing.stdinsPaused[i])
+		}
 	}
 }
