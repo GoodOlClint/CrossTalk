@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"bytes"
-	"cmp"
 	"context"
 	"errors"
 	"flag"
@@ -24,6 +23,7 @@ import (
 	"github.com/GoodOlClint/crosstalk/internal/mcpserver"
 	"github.com/GoodOlClint/crosstalk/internal/registry"
 	"github.com/GoodOlClint/crosstalk/internal/remote"
+	"github.com/GoodOlClint/crosstalk/internal/upgrade"
 )
 
 const installUsage = `usage: crosstalk install   [claude|codex] [--yes] [--path] [--bin-dir DIR] [--skip-rule-port] [--no-auto-refresh] [--check] [--codex-no-daemon-queue] [--remote --bind ADDR [--port N] [--alias NAME]]
@@ -201,7 +201,7 @@ func runInstall(mode string, args []string, in io.Reader, tty bool, stdout, stde
 		Handshake:     installHandshake,
 		SkipRulePort:  o.noPort,
 		NoAutoRefresh: o.noRefresh,
-		Marketplace:   cmp.Or(os.Getenv("CROSSTALK_MARKETPLACE"), "GoodOlClint/CrossTalk"),
+		Marketplace:   installMarketplace(),
 		StateDir:      stateDir,
 		Out:           stdout,
 	}
@@ -306,6 +306,14 @@ func runInstall(mode string, args []string, in io.Reader, tty bool, stdout, stde
 		fmt.Fprintf(stderr, "crosstalk %s: no terminal to confirm on; nothing changed. Run it in a terminal or pass --yes.\n", mode)
 		return 2
 	}
+	release, err := upgrade.Lock(ctx, stateDir, func() {
+		fmt.Fprintf(stdout, "waiting for %s: a CrossTalk session is running the upgrade follow-up\n", upgrade.LockPath(stateDir))
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "crosstalk %s: %v\n", mode, err)
+		return 1
+	}
+	defer release()
 	answers := bufio.NewReader(in)
 	for _, g := range groups {
 		fmt.Fprintf(stdout, "== %s\n", g.title)
@@ -339,11 +347,31 @@ func runInstall(mode string, args []string, in io.Reader, tty bool, stdout, stde
 		return 1
 	}
 	failed := installChecks(ctx, stdout, targets, env, false)
+	installMarkers(ctx, targets, env, cfgDir, stderr)
 	fmt.Fprintln(stdout, "Running Claude and Codex sessions keep their old CrossTalk server. Restart them (in Claude, /mcp and reconnect also works).")
 	if failed {
 		return 1
 	}
 	return 0
+}
+
+// installMarkers writes the upgrade marker of each target whose K1 passes,
+// and of the gateway when CrossTalk's login unit runs it on env.Bin.
+func installMarkers(ctx context.Context, targets []installTarget, env harness.InstallEnv, cfgDir string, stderr io.Writer) {
+	var done []string
+	for _, t := range targets {
+		if pu, ok := t.in.(harness.PluginUpdater); ok && pu.PluginCheck(ctx, env).OK {
+			done = append(done, t.name)
+		}
+	}
+	if unitOwned(env.Home, cfgDir) && gatewayOnBin(ctx, env.StateDir, env.Bin, 0) == nil {
+		done = append(done, "gateway")
+	}
+	for _, n := range done {
+		if err := upgrade.MarkDone(env.StateDir, env.Version, n); err != nil {
+			fmt.Fprintf(stderr, "upgrade marker %s: %v\n", n, err)
+		}
+	}
 }
 
 // installStillRegistered names the harnesses outside targets that still need
@@ -612,7 +640,7 @@ func installHandshake(ctx context.Context, command string, args, env []string) e
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, command, args...)
-	cmd.Env = append(os.Environ(), env...)
+	cmd.Env = append(append(os.Environ(), env...), harness.OffEnv+"=1")
 	c := mcp.NewClient(&mcp.Implementation{Name: "crosstalk-install", Version: mcpserver.Version}, nil)
 	s, err := c.Connect(ctx, &mcp.CommandTransport{Command: cmd}, nil)
 	if err != nil {

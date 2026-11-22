@@ -229,7 +229,7 @@ func TestListShimsFindsRealProcess(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := exec.Command(bin, "mcp")
-	c.Env = append(os.Environ(), "CROSSTALK_TEST_MAIN=1", "HOME="+t.TempDir())
+	c.Env = shimEnv(t.TempDir(), "CROSSTALK_TEST_MAIN=1")
 	stdin, err := c.StdinPipe()
 	if err != nil {
 		t.Fatal(err)

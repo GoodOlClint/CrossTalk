@@ -693,13 +693,11 @@ func (h *Harness) SetUp(env harness.InstallEnv) (bool, error) {
 	return ok, nil
 }
 
-func (h *Harness) Checks(ctx context.Context, env harness.InstallEnv) []harness.CheckResult {
+func k1Result(env harness.InstallEnv, p *pluginEntry, err error) harness.CheckResult {
 	k1 := harness.CheckResult{ID: "K1"}
-	k2 := harness.CheckResult{ID: "K2"}
-	p, err := installedPlugin(ctx, env)
 	switch {
 	case err != nil:
-		k1.Detail, k2.Detail = err.Error(), err.Error()
+		k1.Detail = err.Error()
 	case p == nil:
 		k1.Detail = "plugin " + pluginID + " is not installed"
 	default:
@@ -708,6 +706,23 @@ func (h *Harness) Checks(ctx context.Context, env harness.InstallEnv) []harness.
 		if k1.OK && p.Version != env.Version {
 			k1.Detail += harness.RCNote
 		}
+	}
+	return k1
+}
+
+func (h *Harness) PluginStep(env harness.InstallEnv) harness.Step { return pluginStep(env) }
+
+func (h *Harness) PluginCheck(ctx context.Context, env harness.InstallEnv) harness.CheckResult {
+	p, err := installedPlugin(ctx, env)
+	return k1Result(env, p, err)
+}
+
+func (h *Harness) Checks(ctx context.Context, env harness.InstallEnv) []harness.CheckResult {
+	k2 := harness.CheckResult{ID: "K2"}
+	p, err := installedPlugin(ctx, env)
+	k1 := k1Result(env, p, err)
+	if err != nil {
+		k2.Detail = err.Error()
 	}
 	e, eerr := userEntry(env.Home)
 	if err == nil {

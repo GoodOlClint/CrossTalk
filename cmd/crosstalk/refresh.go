@@ -175,12 +175,14 @@ func execHandoff(srv *mcpserver.Server, conn *mcpserver.Conn, path string, id mc
 	return fmt.Errorf("%w: exec %s: %w", refresh.ErrExecFailed, path, err)
 }
 
+var pollStdin = pollableStdin
+
 // startRefresh arms the watcher when argv0 is trusted and returns the input
-// the transport reads; unarmed, it returns stdin unchanged.
-func startRefresh(ctx context.Context, home string, hs []harness.Harness, ho *mcpserver.Handoff) (io.Reader, func(srv *mcpserver.Server, sh ingressPauser, conn *mcpserver.Conn)) {
+// the transport reads; unarmed, it returns stdin unchanged and armed false.
+func startRefresh(ctx context.Context, home string, hs []harness.Harness, ho *mcpserver.Handoff) (in io.Reader, arm func(srv *mcpserver.Server, sh ingressPauser, conn *mcpserver.Conn), armed bool) {
 	argv0 := os.Args[0]
 	if !refreshArmed(argv0, home, hs) {
-		return os.Stdin, func(*mcpserver.Server, ingressPauser, *mcpserver.Conn) {}
+		return os.Stdin, func(*mcpserver.Server, ingressPauser, *mcpserver.Conn) {}, false
 	}
 	id, err := mcpserver.IdentityOf(argv0)
 	if ho != nil && ho.Binary.Path == argv0 {
@@ -188,14 +190,14 @@ func startRefresh(ctx context.Context, home string, hs []harness.Harness, ho *mc
 	}
 	if err != nil {
 		slog.Warn("crosstalk mcp: refresh not armed", "path", argv0, "err", err)
-		return os.Stdin, func(*mcpserver.Server, ingressPauser, *mcpserver.Conn) {}
+		return os.Stdin, func(*mcpserver.Server, ingressPauser, *mcpserver.Conn) {}, false
 	}
-	in, err := pollableStdin()
+	stdin, err := pollStdin()
 	if err != nil {
 		slog.Warn("crosstalk mcp: refresh not armed: stdin cannot be paused", "err", err)
-		return os.Stdin, func(*mcpserver.Server, ingressPauser, *mcpserver.Conn) {}
+		return os.Stdin, func(*mcpserver.Server, ingressPauser, *mcpserver.Conn) {}, false
 	}
-	return in, func(srv *mcpserver.Server, sh ingressPauser, conn *mcpserver.Conn) {
+	return stdin, func(srv *mcpserver.Server, sh ingressPauser, conn *mcpserver.Conn) {
 		w := &refresh.Watcher{
 			Path:    argv0,
 			ID:      id,
@@ -203,5 +205,5 @@ func startRefresh(ctx context.Context, home string, hs []harness.Harness, ho *mc
 			Exec:    func(id mcpserver.BinaryIdentity) error { return execHandoff(srv, conn, argv0, id) },
 		}
 		go w.Run(ctx)
-	}
+	}, true
 }
