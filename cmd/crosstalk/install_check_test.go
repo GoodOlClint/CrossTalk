@@ -131,8 +131,8 @@ func TestInstallChecksPass(t *testing.T) {
 	if l := installCheckLine(out, "K7", "crosstalk"); !strings.Contains(l, "PASS") && !strings.Contains(l, "WARN") {
 		t.Errorf("K7: %q", l)
 	}
-	if !strings.Contains(out, "Restart them") {
-		t.Error("no restart notice")
+	if !strings.Contains(out, "switches to the new binary on its own") {
+		t.Error("no refresh notice")
 	}
 }
 

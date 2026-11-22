@@ -16,13 +16,13 @@ Today a user downloads a release asset, checks its `.sha256` and runs `./crossta
 - The job runs in the `homebrew-tap` environment, shared with the `marketplace` job (ADR 0019), which holds only the App's client id (variable `RELEASE_APP_CLIENT_ID`) and private key (secret `RELEASE_APP_PRIVATE_KEY`), with no required reviewer: it runs only after the operator approved the `release` job, and never sees the signing secrets.
 - `crosstalk install` detects a Homebrew keg binary (resolved path under `<prefix>/Cellar/crosstalk/`, with `<prefix>/bin/crosstalk` resolving to the same file) and uses `<prefix>/bin/crosstalk` as the installed binary: no copy, and that path is what both harnesses register. `--bin-dir` overrides detection; an unlinked keg falls back to the copy.
 - `uninstall --purge` keeps the state directory while any harness still has CrossTalk set up, whichever binary path it names, because a Homebrew and a `~/.local/bin` install can coexist.
-- `crosstalk uninstall` never deletes a recognized Homebrew keg binary (a path that resolves into `<prefix>/Cellar/crosstalk/<version>/bin/`); it points to `brew uninstall crosstalk`. A plain copy placed in the prefix with `--bin-dir` is not recognized and is deleted. The formula's caveats say to run `crosstalk install` after install and after `brew upgrade`, and `crosstalk uninstall` before `brew uninstall`.
+- `crosstalk uninstall` never deletes a recognized Homebrew keg binary (a path that resolves into `<prefix>/Cellar/crosstalk/<version>/bin/`); it points to `brew uninstall crosstalk`. A plain copy placed in the prefix with `--bin-dir` is not recognized and is deleted. The formula's caveats say to run `crosstalk install` after install, that running sessions refresh on their own after `brew upgrade` (ADR 0030, ADR 0031), and to run `crosstalk uninstall` before `brew uninstall`.
 
 ## Rejected alternatives
 
 - **A cask.** For app bundles; CrossTalk is one command-line binary (gen 4 ruling). Stays the fallback if Homebrew breaks the signature or quarantines the binary (plan slice H6).
 - **Building from source in the formula (`depends_on "go"`).** A second, unsigned build that differs from the released, notarized binary.
-- **`post_install` running `crosstalk install`.** Edits `~/.claude` and `~/.codex` from inside Homebrew without a terminal to confirm on; ADR 0016 requires a confirmed step per change.
+- **`post_install` running `crosstalk install`.** Edits `~/.claude` and `~/.codex` from inside Homebrew without a terminal to confirm on; ADR 0016 requires a confirmed step per change. Still rejected, and Homebrew's sandbox also denies `post_install` the home directory and the network (ADR 0031, spike 20).
 - **Registering the keg path or `<prefix>/opt/crosstalk/bin/crosstalk`.** The keg path changes on every upgrade. The `opt` path is also stable, but `<prefix>/bin` is what the user's shell already finds, so K5 (registered command) and K7 (login shell) name one path.
 - **A fine-grained personal access token.** Expires, acts as the operator, and is broader in time than a per-run App token (interview Q1).
 - **Pushing the formula straight to the tap's main.** The operator chose PRs gated by the tap's own tests (interview Q3).
@@ -31,7 +31,7 @@ Today a user downloads a release asset, checks its `.sha256` and runs `./crossta
 
 - The operator creates a GitHub App installed on the tap (and CrossTalk, ADR 0019), the `homebrew-tap` environment with the App's client-id variable and private-key secret, auto-merge on, and a ruleset on the tap's main requiring the test-bot checks (plan section 9).
 - Every final release opens one tap PR; an rc tag opens none.
-- After `brew upgrade crosstalk`, the registered path is unchanged, but the plugin stays at the old version until the user runs `crosstalk install` again (caveats say so; K1 reports it).
+- After `brew upgrade crosstalk`, the registered path is unchanged, but the first shim on the new version updates the plugin and restarts a login-unit gateway on its own (ADR 0031); with refresh off, the plugin stays at its old tag until `crosstalk install` runs again (the caveats say so; K1 reports it).
 - The tap's generated `publish.yml` and `autobump.yml` are removed (plan slice E6): the release job is the formula's one writer.
 
 ## Trial record

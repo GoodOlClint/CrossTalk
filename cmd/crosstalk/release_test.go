@@ -253,6 +253,16 @@ func TestFormulaRender(t *testing.T) {
 				t.Errorf("formula lacks %s\n%s", w, out)
 			}
 		}
+		for _, w := range []string{"refresh on their own", "manual path", "CROSSTALK_NO_AUTO_REFRESH=1", "needs a restart by hand"} {
+			if !strings.Contains(out, w) {
+				t.Errorf("caveats lack %q\n%s", w, out)
+			}
+		}
+		for _, w := range []string{"Run it again after `brew upgrade crosstalk` so the plugin matches the binary.", "Restart running Claude and Codex sessions after either."} {
+			if strings.Contains(out, w) {
+				t.Errorf("caveats still say %q", w)
+			}
+		}
 		if strings.Contains(out, "version \"") {
 			t.Errorf("formula sets version explicitly; brew audit scans it from the URL\n%s", out)
 		}
