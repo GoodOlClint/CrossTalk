@@ -171,7 +171,7 @@ func (s *Server) runResumed(ctx context.Context, t mcp.Transport, h *Handoff) er
 	}
 	if tr, ok := t.(*Transport); ok && (state != nil || len(h.Session.Listens) > 0) {
 		tr.Conn().Restore(h.Session)
-		for _, params := range listChangedParams(h.Session, state != nil) {
+		for _, params := range listChangedParams(h.Session, state != nil && h.Session.ProtocolVersion < sep2575Protocol) {
 			n := &jsonrpc.Request{Method: "notifications/tools/list_changed", Params: params}
 			if err := tr.Conn().Write(ctx, n); err != nil {
 				return err
@@ -194,10 +194,14 @@ func (s *Server) runResumed(ctx context.Context, t mcp.Transport, h *Handoff) er
 	}
 }
 
+// sep2575Protocol is the first protocol version whose clients get list
+// changes only on a subscriptions/listen they opened.
+const sep2575Protocol = "2026-07-28"
+
 // listChangedParams is one tools/list_changed per carried listen that asked
 // for it, stamped with that listen's id (SEP-2575); with none, one unstamped
-// for a session that initialized, as before listens existed.
-func listChangedParams(st SessionState, initialized bool) []json.RawMessage {
+// for a legacy session, as before listens existed.
+func listChangedParams(st SessionState, legacy bool) []json.RawMessage {
 	var out []json.RawMessage
 	for _, raw := range st.Listens {
 		var req struct {
@@ -216,7 +220,7 @@ func listChangedParams(st SessionState, initialized bool) []json.RawMessage {
 			out = append(out, p)
 		}
 	}
-	if len(out) == 0 && initialized {
+	if len(out) == 0 && legacy {
 		out = append(out, json.RawMessage(`{}`))
 	}
 	return out

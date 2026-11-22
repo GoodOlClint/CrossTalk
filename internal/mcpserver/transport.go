@@ -89,8 +89,8 @@ type Conn struct {
 
 	smu      sync.Mutex
 	pending  map[jsonrpc.ID]struct{}
-	listens  map[jsonrpc.ID]json.RawMessage // open subscriptions/listen requests; never block quiescence
-	replayed map[string]bool                // listen ids, as JSON, whose repeated acknowledgement is dropped
+	listens  map[jsonrpc.ID]json.RawMessage // open subscriptions/listen requests, carried in the handoff
+	replayed map[jsonrpc.ID]bool            // carried listens whose repeated acknowledgement is dropped
 	cand     map[jsonrpc.ID]candidate       // state-changing requests until their response succeeds
 	werr     error                          // a failed response write; handoff must not proceed
 	batches  map[jsonrpc.ID]*batch
@@ -392,15 +392,26 @@ func (c *Conn) observeRead(m jsonrpc.Message) {
 		return
 	}
 	if req.ID.IsValid() {
+		c.pending[req.ID] = struct{}{}
 		if req.Method == methodListen {
 			if raw, err := jsonrpc.EncodeMessage(req); err == nil {
 				c.listens[req.ID] = raw
 			}
-		} else {
-			c.pending[req.ID] = struct{}{}
 		}
 	}
 	switch req.Method {
+	case "notifications/cancelled":
+		var p struct {
+			RequestID json.RawMessage `json:"requestId"`
+		}
+		if json.Unmarshal(req.Params, &p) == nil {
+			if id, ok := idOf(p.RequestID); ok {
+				if _, open := c.listens[id]; open {
+					c.pending[id] = struct{}{}
+					delete(c.listens, id)
+				}
+			}
+		}
 	case "initialize":
 		if !c.hasInit {
 			c.cand[req.ID] = candidate{method: req.Method, params: append(json.RawMessage(nil), req.Params...)}
@@ -419,8 +430,12 @@ func (c *Conn) Write(ctx context.Context, msg jsonrpc.Message) error {
 		return err
 	}
 	resp, isResp := msg.(*jsonrpc.Response)
-	if req, ok := msg.(*jsonrpc.Request); ok && req.Method == notificationListenAck && c.takeReplayedAck(req.Params) {
-		return nil
+	var ackID jsonrpc.ID
+	if req, ok := msg.(*jsonrpc.Request); ok && req.Method == notificationListenAck {
+		ackID = ackedListen(req.Params)
+		if c.takeReplayedAck(ackID) {
+			return nil
+		}
 	}
 
 	c.wmu.Lock()
@@ -437,6 +452,8 @@ func (c *Conn) Write(ctx context.Context, msg jsonrpc.Message) error {
 		} else if isResp {
 			delete(c.pending, resp.ID)
 			delete(c.listens, resp.ID)
+		} else if _, open := c.listens[ackID]; open && ackID.IsValid() {
+			delete(c.pending, ackID)
 		}
 		c.changed()
 		c.smu.Unlock()
@@ -461,23 +478,41 @@ func (c *Conn) Write(ctx context.Context, msg jsonrpc.Message) error {
 	return err
 }
 
-// takeReplayedAck reports whether params acknowledge a listen Restore
-// replayed; the client already has that acknowledgement from the previous
-// image, so it is dropped once.
-func (c *Conn) takeReplayedAck(params json.RawMessage) bool {
+// ackedListen is the listen id a subscriptions/acknowledged names.
+func ackedListen(params json.RawMessage) jsonrpc.ID {
 	var p struct {
 		Meta map[string]json.RawMessage `json:"_meta"`
 	}
 	if json.Unmarshal(params, &p) != nil {
+		return jsonrpc.ID{}
+	}
+	id, _ := idOf(p.Meta[metaSubscriptionID])
+	return id
+}
+
+// idOf decodes a JSON-RPC id, keeping the number 3 distinct from "3".
+func idOf(raw json.RawMessage) (jsonrpc.ID, bool) {
+	var v any
+	if len(raw) == 0 || json.Unmarshal(raw, &v) != nil {
+		return jsonrpc.ID{}, false
+	}
+	id, err := jsonrpc.MakeID(v)
+	return id, err == nil && id.IsValid()
+}
+
+// takeReplayedAck reports whether id is a listen Restore replayed; the client
+// already has its acknowledgement from the previous image, so it is dropped
+// once.
+func (c *Conn) takeReplayedAck(id jsonrpc.ID) bool {
+	if !id.IsValid() {
 		return false
 	}
-	k := string(p.Meta[metaSubscriptionID])
 	c.smu.Lock()
 	defer c.smu.Unlock()
-	if !c.replayed[k] {
+	if !c.replayed[id] {
 		return false
 	}
-	delete(c.replayed, k)
+	delete(c.replayed, id)
 	return true
 }
 
@@ -587,14 +622,10 @@ func (c *Conn) Restore(s SessionState) {
 		if err != nil || !ok || req.Method != methodListen || !req.ID.IsValid() {
 			continue
 		}
-		id, err := json.Marshal(req.ID.Raw())
-		if err != nil {
-			continue
-		}
 		if c.replayed == nil {
-			c.replayed = map[string]bool{}
+			c.replayed = map[jsonrpc.ID]bool{}
 		}
-		c.replayed[string(id)] = true
+		c.replayed[req.ID] = true
 		c.listens[req.ID] = append(json.RawMessage(nil), raw...)
 		c.queue = append(c.queue, req)
 	}
@@ -602,8 +633,9 @@ func (c *Conn) Restore(s SessionState) {
 }
 
 // Quiescent reports that no frame is half-read, no read request still owes a
-// response, and no response is mid-write. An open subscriptions/listen does
-// not count: it is carried in the handoff.
+// response, no batch waits for a response, and no response is mid-write. A
+// subscriptions/listen counts until its acknowledgement is written, and again
+// once a cancellation for it is read; otherwise it is carried in the handoff.
 func (c *Conn) Quiescent() bool {
 	c.smu.Lock()
 	defer c.smu.Unlock()
@@ -611,7 +643,7 @@ func (c *Conn) Quiescent() bool {
 }
 
 func (c *Conn) quiescent() bool {
-	return !c.partial && len(c.pending) == 0 && c.inflight == 0 && len(c.queue) == 0 && c.werr == nil
+	return !c.partial && len(c.pending) == 0 && len(c.batches) == 0 && c.inflight == 0 && len(c.queue) == 0 && c.werr == nil
 }
 
 // WaitQuiescent blocks until Quiescent or ctx ends.

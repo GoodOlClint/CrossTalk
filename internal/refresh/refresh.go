@@ -66,8 +66,8 @@ type Watcher struct {
 	// Exec hands over to the file whose identity is id; it returns only on
 	// failure.
 	Exec func(id mcpserver.BinaryIdentity) error
-	// GaveUp, when set, is told that the file at Path never quiesced in
-	// QuiesceTries attempts and is not tried again until the path changes.
+	// GaveUp, when set, is told that the file at Path failed to quiesce or to
+	// take the handoff in QuiesceTries attempts in a row and is not tried again until the path changes.
 	GaveUp func(path string, tries int)
 	Log    *slog.Logger
 
@@ -123,19 +123,9 @@ func (w *Watcher) Tick(ctx context.Context) {
 	undo, err := w.Quiesce(qctx)
 	cancel()
 	if err != nil {
-		if !same(cur, w.tried) {
-			w.tried, w.tries = cur, 0
+		if !w.failed(cur, err) {
+			w.log().Info("refresh: not quiescent; trying again later", "err", err)
 		}
-		w.tries++
-		if n := orDefaultInt(w.QuiesceTries, DefaultQuiesceTries); w.tries >= n {
-			w.bad = cur
-			w.log().Warn("refresh: never quiescent; staying on this binary until the path changes again", "path", w.Path, "tries", w.tries, "err", err)
-			if w.GaveUp != nil {
-				w.GaveUp(w.Path, w.tries)
-			}
-			return
-		}
-		w.log().Info("refresh: not quiescent; trying again later", "err", err)
 		return
 	}
 	if again, err := stat(w.Path); err != nil || !same(again, cur) {
@@ -148,6 +138,27 @@ func (w *Watcher) Tick(ctx context.Context) {
 		w.bad = cur
 	}
 	w.log().Warn("refresh: not exec'd; staying on this binary", "path", w.Path, "err", err)
+	if !errors.Is(err, ErrExecFailed) {
+		w.failed(cur, err)
+	}
+}
+
+// failed counts a quiesce or pre-exec failure for cur; at QuiesceTries in a
+// row cur is left until the path changes again.
+func (w *Watcher) failed(cur mcpserver.BinaryIdentity, err error) bool {
+	if !same(cur, w.tried) {
+		w.tried, w.tries = cur, 0
+	}
+	w.tries++
+	if w.tries < orDefaultInt(w.QuiesceTries, DefaultQuiesceTries) {
+		return false
+	}
+	w.bad = cur
+	w.log().Warn("refresh: never handed over; staying on this binary until the path changes again", "path", w.Path, "tries", w.tries, "err", err)
+	if w.GaveUp != nil {
+		w.GaveUp(w.Path, w.tries)
+	}
+	return true
 }
 
 func orDefault(d, def time.Duration) time.Duration {
@@ -169,6 +180,20 @@ func (w *Watcher) log() *slog.Logger {
 		return w.Log
 	}
 	return slog.Default()
+}
+
+// ReplaysListens reports whether the file at path says, in `version
+// --json`, that it takes over the open subscriptions/listen requests a
+// handoff carries; a binary from before that ignores them.
+func ReplaysListens(ctx context.Context, path string) bool {
+	out, err := exec.CommandContext(ctx, path, "version", "--json").Output()
+	if err != nil {
+		return false
+	}
+	var v struct {
+		RefreshListens bool `json:"refresh_listens"`
+	}
+	return json.Unmarshal(out, &v) == nil && v.RefreshListens
 }
 
 // Probe runs `path version --json` and requires a version and the

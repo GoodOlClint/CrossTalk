@@ -20,7 +20,12 @@ func TestRefreshExecsWithOpenListenStream(t *testing.T) {
 	cmd.Stderr = &testWriter{t}
 	changed := make(chan struct{}, 8)
 	c := mcp.NewClient(&mcp.Implementation{Name: "claude-code", Version: "2.1.330"}, &mcp.ClientOptions{
-		ToolListChangedHandler: func(context.Context, *mcp.ToolListChangedRequest) { changed <- struct{}{} },
+		ToolListChangedHandler: func(_ context.Context, r *mcp.ToolListChangedRequest) {
+			if r.Params == nil || r.Params.Meta["io.modelcontextprotocol/subscriptionId"] == nil {
+				t.Errorf("tools/list_changed without the listen's subscription id: %+v", r.Params)
+			}
+			changed <- struct{}{}
+		},
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()

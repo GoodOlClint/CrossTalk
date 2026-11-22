@@ -181,3 +181,37 @@ func TestRefreshStopsAfterBoundedQuiesceTries(t *testing.T) {
 		t.Fatalf("quiesces = %d after a newer file, want it tried again", r.quiesces)
 	}
 }
+
+// A pre-exec failure after quiesce (a handoff too large to write) counts
+// toward the same bound, so ingress is not closed every tick forever.
+func TestRefreshStopsAfterBoundedExecErrors(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "crosstalk")
+	os.WriteFile(bin, []byte("v1"), 0o755)
+	id, _ := mcpserver.IdentityOf(bin)
+	os.WriteFile(bin+".n", []byte("v2"), 0o755)
+	os.Rename(bin+".n", bin)
+	var r rec
+	w := r.watcher(bin, id, mcpserver.IdentityOf)
+	w.QuiesceTries = 2
+	w.Exec = func(mcpserver.BinaryIdentity) error { r.execs++; return errors.New("handoff too large") }
+	gaveUp := 0
+	w.GaveUp = func(string, int) { gaveUp++ }
+	for range 4 {
+		w.Tick(context.Background())
+	}
+	if r.quiesces != 2 || gaveUp != 1 {
+		t.Fatalf("%+v, gave up %d times: want 2 attempts then one give-up", r, gaveUp)
+	}
+}
+
+func TestReplaysListensReadsVersionJSON(t *testing.T) {
+	dir := t.TempDir()
+	for name, out := range map[string]string{"old": `{"version":"0.2.4","refresh_handoff":1}`, "new": `{"version":"0.2.5","refresh_handoff":1,"refresh_listens":true}`} {
+		p := filepath.Join(dir, name)
+		os.WriteFile(p, []byte("#!/bin/sh\necho '"+out+"'\n"), 0o755)
+		if got, want := ReplaysListens(context.Background(), p), name == "new"; got != want {
+			t.Fatalf("%s: ReplaysListens = %v, want %v", name, got, want)
+		}
+	}
+}
