@@ -74,6 +74,7 @@ type Conn struct {
 	initID   jsonrpc.ID
 	hasInit  bool
 	partial  bool
+	rd       chan frameRes // the outstanding frame read, if a Read gave up on it
 	idle     chan struct{} // closed and replaced on every change
 }
 
@@ -119,14 +120,41 @@ func (c *Conn) Read(ctx context.Context) (jsonrpc.Message, error) {
 	}
 	c.smu.Unlock()
 
-	line, err := c.readFrame()
-	if err != nil {
-		return nil, err
+	c.smu.Lock()
+	ch := c.rd
+	if ch == nil {
+		ch = make(chan frameRes, 1)
+		c.rd = ch
+		go func() {
+			line, err := c.readFrame()
+			ch <- frameRes{line, err}
+		}()
 	}
-	return c.accept(line)
+	c.smu.Unlock()
+	var r frameRes
+	select {
+	case r = <-ch:
+		c.smu.Lock()
+		c.rd = nil
+		c.smu.Unlock()
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-c.closed:
+		return nil, io.EOF
+	}
+	if r.err != nil {
+		return nil, r.err
+	}
+	return c.accept(r.line)
 }
 
-// readFrame reads one byte at a time up to '\n', so nothing past the frame is
+type frameRes struct {
+	line []byte
+	err  error
+}
+
+// readFrame runs only while a Read waits for it, so it never reads ahead of a
+// frame nobody asked for. It reads one byte at a time up to '\n', so nothing past the frame is
 // consumed. Close closes the input, which unblocks a Read in progress.
 func (c *Conn) readFrame() ([]byte, error) {
 	var line []byte

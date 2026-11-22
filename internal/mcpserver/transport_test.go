@@ -166,3 +166,25 @@ func waitUntil(t *testing.T, what string, f func() bool) {
 	}
 	t.Fatalf("timed out waiting for %s", what)
 }
+
+type blockingReader struct{ unblock chan struct{} }
+
+func (b blockingReader) Read([]byte) (int, error) { <-b.unblock; return 0, io.EOF }
+
+func TestConnCloseUnblocksReadOfNonCloser(t *testing.T) {
+	br := blockingReader{make(chan struct{})}
+	defer close(br.unblock)
+	c := NewConn(br, io.Discard)
+	got := make(chan error, 1)
+	go func() { _, err := c.Read(context.Background()); got <- err }()
+	time.Sleep(20 * time.Millisecond)
+	c.Close()
+	select {
+	case err := <-got:
+		if err != io.EOF {
+			t.Fatalf("err = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close did not unblock Read")
+	}
+}
