@@ -144,8 +144,12 @@ var errChanged = errors.New("refresh: binary replaced again before exec")
 // argv; it returns only when it did not exec. While close-on-exec is clear on
 // the handoff descriptor, syscall.ForkLock is held, so no child forked
 // meanwhile inherits it.
-func execHandoff(srv *mcpserver.Server, conn *mcpserver.Conn, path string, id mcpserver.BinaryIdentity) error {
-	f, err := mcpserver.WriteHandoff(srv.Handoff(conn.State(), id))
+func execHandoff(srv *mcpserver.Server, conn *mcpserver.Conn, path string, id mcpserver.BinaryIdentity, p refresh.Probed) error {
+	st := conn.State()
+	if len(st.Listens) > 0 && !p.ReplaysListens {
+		return fmt.Errorf("%w: %s does not take over an open subscriptions/listen", refresh.ErrExecFailed, path)
+	}
+	f, err := mcpserver.WriteHandoff(srv.Handoff(st, id))
 	if err != nil {
 		return err
 	}
@@ -202,7 +206,13 @@ func startRefresh(ctx context.Context, home string, hs []harness.Harness, ho *mc
 			Path:    argv0,
 			ID:      id,
 			Quiesce: func(ctx context.Context) (func(), error) { return quiesceForExec(ctx, sh, conn) },
-			Exec:    func(id mcpserver.BinaryIdentity) error { return execHandoff(srv, conn, argv0, id) },
+			Exec: func(id mcpserver.BinaryIdentity, p refresh.Probed) error {
+				return execHandoff(srv, conn, argv0, id, p)
+			},
+			Listening: conn.Listening,
+			GaveUp: func(path, why string) {
+				srv.HoldNotice(fmt.Sprintf("crosstalk: a new binary is installed at %s, but this session's CrossTalk server keeps running the old version because %s; messages still reach this session; restart the session to use the new version", path, why))
+			},
 		}
 		go w.Run(ctx)
 	}, true

@@ -1,12 +1,14 @@
 package mcpserver
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -24,6 +26,15 @@ const batchProtocol = "2025-06-18"
 // defaultProtocol is what the SDK assumes before a version is negotiated.
 const defaultProtocol = "2025-03-26"
 
+// methodListen is the SEP-2575 request a client keeps open to receive list
+// changes; the server answers it only when the subscription ends.
+const methodListen = "subscriptions/listen"
+
+const notificationListenAck = "notifications/subscriptions/acknowledged"
+
+// metaSubscriptionID is the _meta key that ties a notification to its listen.
+const metaSubscriptionID = "io.modelcontextprotocol/subscriptionId"
+
 var errFrameTooLarge = errors.New("inbound JSON-RPC frame exceeded the maximum line length")
 
 // SessionState is what the Conn saw on the wire: the client's initialize
@@ -34,6 +45,8 @@ type SessionState struct {
 	ProtocolVersion  string          `json:"protocol_version,omitempty"`
 	Initialized      bool            `json:"initialized,omitempty"`
 	SetLevelParams   json.RawMessage `json:"set_level_params,omitempty"`
+	// Listens are the open subscriptions/listen requests, as read.
+	Listens []json.RawMessage `json:"listens,omitempty"`
 }
 
 // Transport is the shim's own mcp.Transport over a byte stream pair. Unlike
@@ -76,8 +89,10 @@ type Conn struct {
 
 	smu      sync.Mutex
 	pending  map[jsonrpc.ID]struct{}
-	cand     map[jsonrpc.ID]candidate // state-changing requests until their response succeeds
-	werr     error                    // a failed response write; handoff must not proceed
+	listens  map[jsonrpc.ID]json.RawMessage // open subscriptions/listen requests, carried in the handoff
+	replayed map[jsonrpc.ID]bool            // carried listens whose repeated acknowledgement is dropped
+	cand     map[jsonrpc.ID]candidate       // state-changing requests until their response succeeds
+	werr     error                          // a failed response write; handoff must not proceed
 	batches  map[jsonrpc.ID]*batch
 	queue    []jsonrpc.Message
 	inflight int // responses being written
@@ -107,6 +122,7 @@ func NewConn(in io.Reader, out io.Writer) *Conn {
 		out:     out,
 		closed:  make(chan struct{}),
 		pending: map[jsonrpc.ID]struct{}{},
+		listens: map[jsonrpc.ID]json.RawMessage{},
 		cand:    map[jsonrpc.ID]candidate{},
 		batches: map[jsonrpc.ID]*batch{},
 		idle:    make(chan struct{}),
@@ -377,8 +393,25 @@ func (c *Conn) observeRead(m jsonrpc.Message) {
 	}
 	if req.ID.IsValid() {
 		c.pending[req.ID] = struct{}{}
+		if req.Method == methodListen {
+			if raw, err := jsonrpc.EncodeMessage(req); err == nil {
+				c.listens[req.ID] = raw
+			}
+		}
 	}
 	switch req.Method {
+	case "notifications/cancelled":
+		var p struct {
+			RequestID json.RawMessage `json:"requestId"`
+		}
+		if json.Unmarshal(req.Params, &p) == nil {
+			if id, ok := idOf(p.RequestID); ok {
+				if _, open := c.listens[id]; open {
+					c.pending[id] = struct{}{}
+					delete(c.listens, id)
+				}
+			}
+		}
 	case "initialize":
 		if !c.hasInit {
 			c.cand[req.ID] = candidate{method: req.Method, params: append(json.RawMessage(nil), req.Params...)}
@@ -397,6 +430,13 @@ func (c *Conn) Write(ctx context.Context, msg jsonrpc.Message) error {
 		return err
 	}
 	resp, isResp := msg.(*jsonrpc.Response)
+	var ackID jsonrpc.ID
+	if req, ok := msg.(*jsonrpc.Request); ok && req.Method == notificationListenAck {
+		ackID = ackedListen(req.Params)
+		if c.takeReplayedAck(ackID) {
+			return nil
+		}
+	}
 
 	c.wmu.Lock()
 	defer c.wmu.Unlock()
@@ -411,6 +451,9 @@ func (c *Conn) Write(ctx context.Context, msg jsonrpc.Message) error {
 			c.werr = err
 		} else if isResp {
 			delete(c.pending, resp.ID)
+			delete(c.listens, resp.ID)
+		} else if _, open := c.listens[ackID]; open && ackID.IsValid() {
+			delete(c.pending, ackID)
 		}
 		c.changed()
 		c.smu.Unlock()
@@ -433,6 +476,44 @@ func (c *Conn) Write(ctx context.Context, msg jsonrpc.Message) error {
 	}
 	_, err = c.out.Write(append(data, '\n'))
 	return err
+}
+
+// ackedListen is the listen id a subscriptions/acknowledged names.
+func ackedListen(params json.RawMessage) jsonrpc.ID {
+	var p struct {
+		Meta map[string]json.RawMessage `json:"_meta"`
+	}
+	if json.Unmarshal(params, &p) != nil {
+		return jsonrpc.ID{}
+	}
+	id, _ := idOf(p.Meta[metaSubscriptionID])
+	return id
+}
+
+// idOf decodes a JSON-RPC id, keeping the number 3 distinct from "3".
+func idOf(raw json.RawMessage) (jsonrpc.ID, bool) {
+	var v any
+	if len(raw) == 0 || json.Unmarshal(raw, &v) != nil {
+		return jsonrpc.ID{}, false
+	}
+	id, err := jsonrpc.MakeID(v)
+	return id, err == nil && id.IsValid()
+}
+
+// takeReplayedAck reports whether id is a listen Restore replayed; the client
+// already has its acknowledgement from the previous image, so it is dropped
+// once.
+func (c *Conn) takeReplayedAck(id jsonrpc.ID) bool {
+	if !id.IsValid() {
+		return false
+	}
+	c.smu.Lock()
+	defer c.smu.Unlock()
+	if !c.replayed[id] {
+		return false
+	}
+	delete(c.replayed, id)
+	return true
 }
 
 func (c *Conn) takeBatch(resp *jsonrpc.Response) ([]*jsonrpc.Response, bool) {
@@ -516,20 +597,61 @@ func (c *Conn) State() SessionState {
 	s := c.state
 	s.InitializeParams = append(json.RawMessage(nil), s.InitializeParams...)
 	s.SetLevelParams = append(json.RawMessage(nil), s.SetLevelParams...)
+	s.Listens = nil
+	for _, raw := range c.listens {
+		s.Listens = append(s.Listens, append(json.RawMessage(nil), raw...))
+	}
+	slices.SortFunc(s.Listens, func(a, b json.RawMessage) int { return bytes.Compare(a, b) })
 	return s
 }
 
 // Restore sets the state a refreshed process inherits, so the next refresh
-// carries it on and the batch rule follows the negotiated version.
+// carries it on and the batch rule follows the negotiated version. Each
+// carried listen is queued as if just read, so the server takes the stream
+// over under the same request id; its acknowledgement is not written again.
 func (c *Conn) Restore(s SessionState) {
 	c.smu.Lock()
 	defer c.smu.Unlock()
+	listens := s.Listens
+	s.Listens = nil
 	c.state = s
 	c.hasInit = len(s.InitializeParams) > 0
+	for _, raw := range listens {
+		m, err := jsonrpc.DecodeMessage(raw)
+		req, ok := m.(*jsonrpc.Request)
+		if err != nil || !ok || req.Method != methodListen || !req.ID.IsValid() {
+			continue
+		}
+		if c.replayed == nil {
+			c.replayed = map[jsonrpc.ID]bool{}
+		}
+		c.replayed[req.ID] = true
+		c.listens[req.ID] = append(json.RawMessage(nil), raw...)
+		c.queue = append(c.queue, req)
+	}
+	c.changed()
+}
+
+// Listening counts the open subscriptions/listen requests: open ones are
+// acknowledged and carried in a handoff, settling ones are not acknowledged
+// yet, or cancelled, and still owe a write.
+func (c *Conn) Listening() (open, settling int) {
+	c.smu.Lock()
+	defer c.smu.Unlock()
+	for id := range c.listens {
+		if _, owed := c.pending[id]; owed {
+			settling++
+		} else {
+			open++
+		}
+	}
+	return open, settling
 }
 
 // Quiescent reports that no frame is half-read, no read request still owes a
-// response, and no response is mid-write.
+// response, no batch waits for a response, and no response is mid-write. A
+// subscriptions/listen counts until its acknowledgement is written, and again
+// once a cancellation for it is read; otherwise it is carried in the handoff.
 func (c *Conn) Quiescent() bool {
 	c.smu.Lock()
 	defer c.smu.Unlock()
@@ -537,7 +659,7 @@ func (c *Conn) Quiescent() bool {
 }
 
 func (c *Conn) quiescent() bool {
-	return !c.partial && len(c.pending) == 0 && c.inflight == 0 && len(c.queue) == 0 && c.werr == nil
+	return !c.partial && len(c.pending) == 0 && len(c.batches) == 0 && c.inflight == 0 && len(c.queue) == 0 && c.werr == nil
 }
 
 // WaitQuiescent blocks until Quiescent or ctx ends.

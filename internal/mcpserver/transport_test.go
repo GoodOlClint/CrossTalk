@@ -368,3 +368,108 @@ func TestConnPauseConsumesNoByte(t *testing.T) {
 		t.Fatal("no frame after Unpause")
 	}
 }
+
+func listenAck(id string) *jsonrpc.Request {
+	return &jsonrpc.Request{Method: "notifications/subscriptions/acknowledged", Params: json.RawMessage(`{"_meta":{"io.modelcontextprotocol/subscriptionId":` + id + `},"notifications":{"toolsListChanged":true}}`)}
+}
+
+func TestConnOpenListenIsCarriedNotPending(t *testing.T) {
+	for _, id := range []string{`3`, `"a&b"`} {
+		t.Run(id, func(t *testing.T) {
+			listen := `{"jsonrpc":"2.0","id":` + id + `,"method":"subscriptions/listen","params":{"notifications":{"toolsListChanged":true}}}`
+			c := NewConn(strings.NewReader(listen+"\n"), io.Discard)
+			m, err := c.Read(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			lid := m.(*jsonrpc.Request).ID
+			if c.Quiescent() {
+				t.Fatal("quiescent before the listen's acknowledgement was written")
+			}
+			if err := c.Write(context.Background(), listenAck(id)); err != nil {
+				t.Fatal(err)
+			}
+			if !c.Quiescent() {
+				t.Fatal("an acknowledged subscriptions/listen blocks quiescence; the server answers it only when the subscription ends")
+			}
+			st := c.State()
+			if len(st.Listens) != 1 {
+				t.Fatalf("carried listens = %d, want 1", len(st.Listens))
+			}
+
+			var out strings.Builder
+			n := NewConn(strings.NewReader(""), &out)
+			n.Restore(st)
+			m, err = n.Read(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if req, ok := m.(*jsonrpc.Request); !ok || req.Method != "subscriptions/listen" || req.ID != lid {
+				t.Fatalf("first message after Restore = %#v, want the carried listen", m)
+			}
+			if err := n.Write(context.Background(), listenAck(id)); err != nil {
+				t.Fatal(err)
+			}
+			if out.Len() != 0 {
+				t.Fatalf("the replayed listen's acknowledgement was written again: %q", out.String())
+			}
+			if !n.Quiescent() {
+				t.Fatal("a replayed listen blocks quiescence")
+			}
+			if err := n.Write(context.Background(), listenAck(id)); err != nil || out.Len() == 0 {
+				t.Fatalf("a second acknowledgement was dropped too (err %v)", err)
+			}
+			if len(n.State().Listens) != 1 {
+				t.Fatal("the restored listen is not carried into the next handoff")
+			}
+			if err := n.Write(context.Background(), &jsonrpc.Response{ID: lid, Result: json.RawMessage(`{}`)}); err != nil {
+				t.Fatal(err)
+			}
+			if len(n.State().Listens) != 0 {
+				t.Fatal("a listen whose response was written is still carried")
+			}
+		})
+	}
+}
+
+// A cancellation read for an open listen means its final response is owed:
+// the handoff waits for it rather than carry a cancelled stream.
+func TestConnCancelledListenBlocksQuiescence(t *testing.T) {
+	const listen = `{"jsonrpc":"2.0","id":3,"method":"subscriptions/listen","params":{"notifications":{"toolsListChanged":true}}}`
+	const cancel = `{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":3}}`
+	c := NewConn(strings.NewReader(listen+"\n"+cancel+"\n"), io.Discard)
+	for range 2 {
+		if _, err := c.Read(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := c.Write(context.Background(), listenAck(`3`)); err != nil {
+		t.Fatal(err)
+	}
+	if c.Quiescent() {
+		t.Fatal("quiescent with a cancelled listen whose response is not written")
+	}
+	if err := c.Write(context.Background(), okResp(t, 3)); err != nil {
+		t.Fatal(err)
+	}
+	if !c.Quiescent() || len(c.State().Listens) != 0 {
+		t.Fatal("the cancelled listen's response was written, but it still blocks or is carried")
+	}
+}
+
+// A batch holding an open listen keeps the handoff waiting: a sibling's
+// response is buffered until the whole batch is written.
+func TestConnBatchWithListenBlocksQuiescence(t *testing.T) {
+	const b = `[{"jsonrpc":"2.0","id":3,"method":"subscriptions/listen","params":{"notifications":{"toolsListChanged":true}}},{"jsonrpc":"2.0","id":4,"method":"ping"}]`
+	c := NewConn(strings.NewReader(b+"\n"), io.Discard)
+	for range 2 {
+		if _, err := c.Read(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c.Write(context.Background(), listenAck(`3`))
+	c.Write(context.Background(), okResp(t, 4))
+	if c.Quiescent() {
+		t.Fatal("quiescent while a batch still waits for its listen's response")
+	}
+}

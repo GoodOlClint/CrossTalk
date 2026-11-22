@@ -80,7 +80,8 @@ func runVersion(args []string, stdout, stderr io.Writer) int {
 		b, _ := json.Marshal(struct {
 			Version        string `json:"version"`
 			RefreshHandoff int    `json:"refresh_handoff"`
-		}{mcpserver.Version, mcpserver.HandoffFormat})
+			RefreshListens bool   `json:"refresh_listens"`
+		}{mcpserver.Version, mcpserver.HandoffFormat, true})
 		fmt.Fprintln(stdout, string(b))
 	default:
 		fmt.Fprintln(stderr, "usage: crosstalk version [--json]")
