@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -50,18 +52,43 @@ func openLock(stateDir string) (*os.File, error) {
 // process or another open of the file holds it. The descriptor is
 // close-on-exec, so an exec or a child process never keeps the lock.
 func TryLock(stateDir string) (release func(), ok bool, err error) {
+	f, err := tryLock(stateDir)
+	if f == nil {
+		return nil, false, err
+	}
+	return func() { f.Close() }, true, nil
+}
+
+func tryLock(stateDir string) (*os.File, error) {
 	f, err := openLock(stateDir)
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
 	if err := unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
 		f.Close()
 		if errors.Is(err, unix.EWOULDBLOCK) {
-			return nil, false, nil
+			return nil, nil
 		}
-		return nil, false, err
+		return nil, err
 	}
-	return func() { f.Close() }, true, nil
+	return f, nil
+}
+
+type lockKey struct{}
+
+// Inherit, inside a follow-up target, gives c upgrade.lock, held until c and
+// every process it leaves running exit, and its own process group. Outside a
+// target it does nothing.
+func Inherit(ctx context.Context, c *exec.Cmd) {
+	f, _ := ctx.Value(lockKey{}).(*os.File)
+	if f == nil {
+		return
+	}
+	c.ExtraFiles = append(c.ExtraFiles, f)
+	if c.SysProcAttr == nil {
+		c.SysProcAttr = &syscall.SysProcAttr{}
+	}
+	c.SysProcAttr.Setpgid = true
 }
 
 // Lock takes upgrade.lock, calling waiting once if it has to wait.
@@ -93,9 +120,10 @@ type Target struct {
 	Eligible func() bool
 }
 
-// Runner is the follow-up of ADR 0031. Run makes one attempt; when that
-// attempt held the lock and a target failed, it tries again every Interval
-// until Bound has passed or every target is done.
+// Runner is the follow-up of ADR 0031. Run makes one attempt; while a target
+// is still pending after it, because a target failed or another process held
+// the lock, it tries again every Interval until Bound has passed or every
+// target is done.
 type Runner struct {
 	StateDir, Version string
 	Targets           []Target
@@ -130,7 +158,7 @@ type outcome struct {
 
 func (r *Runner) Run(ctx context.Context) {
 	took, pending := r.attempt(ctx, true)
-	if !took || !pending || r.Interval <= 0 {
+	if !pending || r.Interval <= 0 {
 		return
 	}
 	after, now := r.After, r.Now
@@ -147,7 +175,9 @@ func (r *Runner) Run(ctx context.Context) {
 			return
 		case <-after(r.Interval):
 		}
-		_, pending = r.attempt(ctx, false)
+		var ran bool
+		ran, pending = r.attempt(ctx, !took)
+		took = took || ran
 	}
 }
 
@@ -168,11 +198,12 @@ func (r *Runner) attempt(ctx context.Context, first bool) (took, pending bool) {
 	if r.beforeLock != nil {
 		r.beforeLock()
 	}
-	release, ok, err := TryLock(r.StateDir)
-	if err != nil || !ok {
+	lock, err := tryLock(r.StateDir)
+	if lock == nil || err != nil {
 		return false, true
 	}
-	defer release()
+	defer lock.Close()
+	ctx = context.WithValue(ctx, lockKey{}, lock)
 	todo := r.pending()
 	if len(todo) == 0 {
 		return true, false

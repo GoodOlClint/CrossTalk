@@ -351,12 +351,27 @@ func pluginStep(env harness.InstallEnv) harness.Step {
 		Title:  "Codex plugin",
 		Change: "codex plugin marketplace add " + env.Marketplace + ", codex plugin marketplace upgrade crosstalk, codex plugin add " + pluginID,
 		Apply: func(ctx context.Context) error {
-			cmds := [][]string{{"plugin", "marketplace", "add", env.Marketplace}}
+			add := []string{"plugin", "marketplace", "add", env.Marketplace}
+			upgrade := []string{"plugin", "marketplace", "upgrade", "crosstalk"}
 			// codex refuses upgrade on a local marketplace, which add already reads live.
-			if !filepath.IsAbs(env.Marketplace) && !strings.HasPrefix(env.Marketplace, ".") {
-				cmds = append(cmds, []string{"plugin", "marketplace", "upgrade", "crosstalk"})
+			local := filepath.IsAbs(env.Marketplace) || strings.HasPrefix(env.Marketplace, ".")
+			if _, err := env.Run(ctx, "codex", add...); err != nil {
+				if local {
+					return err
+				}
+				// codex reads an emptied checkout as another source; upgrade refills it.
+				if _, uerr := env.Run(ctx, "codex", upgrade...); uerr != nil {
+					return err
+				}
+				if _, err := env.Run(ctx, "codex", add...); err != nil {
+					return err
+				}
 			}
-			for _, args := range append(cmds, []string{"plugin", "add", pluginID}) {
+			cmds := [][]string{{"plugin", "add", pluginID}}
+			if !local {
+				cmds = append([][]string{upgrade}, cmds...)
+			}
+			for _, args := range cmds {
 				if _, err := env.Run(ctx, "codex", args...); err != nil {
 					return err
 				}

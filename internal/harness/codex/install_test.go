@@ -307,3 +307,53 @@ func TestInstallNoAutoRefreshWritesEnv(t *testing.T) {
 		}
 	})
 }
+
+const differentSource = "Error: marketplace 'crosstalk' is already added from a different source; remove it before adding this source"
+
+func TestCodexPluginRecoversEmptiedCheckout(t *testing.T) {
+	env, r := codexEnv(t, "config-none.toml")
+	upgraded := false
+	env.Run = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		switch c := name + " " + strings.Join(args, " "); c {
+		case "codex plugin marketplace upgrade crosstalk":
+			upgraded = true
+		case "codex plugin marketplace add GoodOlClint/CrossTalk":
+			if !upgraded {
+				r.calls = append(r.calls, c)
+				return nil, errors.New(c + ": exit status 1: " + differentSource)
+			}
+		}
+		return r.run(ctx, name, args...)
+	}
+	if err := pluginStep(env).Apply(context.Background()); err != nil {
+		t.Fatalf("an emptied marketplace checkout was not recovered: %v\ncalls: %v", err, r.calls)
+	}
+	if !slices.Contains(r.calls, "codex plugin add crosstalk@crosstalk") {
+		t.Fatalf("plugin not added after recovery: %v", r.calls)
+	}
+}
+
+func TestCodexPluginDifferentSourceStillFails(t *testing.T) {
+	for _, mkt := range []string{"GoodOlClint/CrossTalk", "/scratch/mkt"} {
+		env, r := codexEnv(t, "config-none.toml")
+		env.Marketplace = mkt
+		env.Run = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			c := name + " " + strings.Join(args, " ")
+			if c == "codex plugin marketplace add "+mkt {
+				r.calls = append(r.calls, c)
+				return nil, errors.New(c + ": exit status 1: " + differentSource)
+			}
+			return r.run(ctx, name, args...)
+		}
+		err := pluginStep(env).Apply(context.Background())
+		if err == nil || !strings.Contains(err.Error(), "different source") {
+			t.Errorf("%s: a marketplace added from another source: err = %v", mkt, err)
+		}
+		if slices.Contains(r.calls, "codex plugin add crosstalk@crosstalk") {
+			t.Errorf("%s: plugin added over another source: %v", mkt, r.calls)
+		}
+		if filepath.IsAbs(mkt) && slices.Contains(r.calls, "codex plugin marketplace upgrade crosstalk") {
+			t.Errorf("upgrade run for a local marketplace, which codex refuses: %v", r.calls)
+		}
+	}
+}

@@ -113,6 +113,7 @@ func installRun(ctx context.Context, name string, args ...string) ([]byte, error
 	var stderr bytes.Buffer
 	c := exec.CommandContext(ctx, name, args...)
 	c.Stderr = &stderr
+	upgrade.Inherit(ctx, c)
 	out, err := c.Output()
 	if err != nil {
 		return out, fmt.Errorf("%s %s: %w: %s", name, strings.Join(args, " "), err, strings.TrimSpace(stderr.String()))

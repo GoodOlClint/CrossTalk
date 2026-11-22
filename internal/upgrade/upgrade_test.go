@@ -470,17 +470,49 @@ func TestFollowUpNoticeKeepsErrorShort(t *testing.T) {
 	}
 }
 
-func TestFollowUpRetryOnlyByLockHolder(t *testing.T) {
+func TestFollowUpRetryAfterLostLock(t *testing.T) {
 	st := t.TempDir()
 	rel, _, _ := TryLock(st)
 	after, now, waits := fakeClock()
 	var runs atomic.Int32
-	r := &Runner{StateDir: st, Version: ver, Interval: time.Minute, Bound: time.Hour, After: after, Now: now,
+	var notices []string
+	r := &Runner{StateDir: st, Version: ver, Interval: time.Minute, Bound: 3 * time.Minute, Now: now,
+		Notice:  func(n string) { notices = append(notices, n) },
 		Targets: []Target{counting("claude", &runs, errors.New("old"))}}
+	r.After = func(d time.Duration) <-chan time.Time {
+		if rel != nil {
+			rel()
+			rel = nil
+		}
+		return after(d)
+	}
 	r.Run(context.Background())
-	rel()
-	if runs.Load() != 0 || len(*waits) != 0 {
-		t.Fatalf("a shim that did not get the lock retried: runs=%d waits=%d", runs.Load(), len(*waits))
+	if runs.Load() != 3 || len(*waits) != 3 {
+		t.Fatalf("a shim that lost the lock at its first attempt: runs=%d waits=%d, want 3 and 3", runs.Load(), len(*waits))
+	}
+	if len(notices) != 1 || !strings.Contains(notices[0], "could not update claude") {
+		t.Fatalf("its first attempt that ran a target gave notices %q, want one naming the failure", notices)
+	}
+}
+
+func TestFollowUpLostLockStopsWhenHolderFinished(t *testing.T) {
+	st := t.TempDir()
+	rel, _, _ := TryLock(st)
+	defer rel()
+	var waits int
+	var runs atomic.Int32
+	r := &Runner{StateDir: st, Version: ver, Interval: time.Minute, Bound: time.Hour,
+		Targets: []Target{counting("claude", &runs, nil)}}
+	r.After = func(time.Duration) <-chan time.Time {
+		waits++
+		MarkDone(st, ver, "claude")
+		c := make(chan time.Time, 1)
+		c <- time.Time{}
+		return c
+	}
+	r.Run(context.Background())
+	if runs.Load() != 0 || waits != 1 {
+		t.Fatalf("runs=%d waits=%d, want 0 and 1", runs.Load(), waits)
 	}
 }
 
