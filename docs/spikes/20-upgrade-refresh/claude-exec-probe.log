@@ -1,0 +1,15 @@
+16:21:27 pid=43207 ppid=43193 gen=1 start mode=exec initialized=False
+16:21:27 pid=43207 ppid=43193 gen=1 recv server/discover id=server-discover-probe-1
+16:21:27 pid=43207 ppid=43193 gen=1 recv initialize id=0
+16:21:27 pid=43207 ppid=43193 gen=1 recv notifications/initialized id=None
+16:21:27 pid=43207 ppid=43193 gen=1 recv tools/list id=1
+16:21:27 pid=43207 ppid=43193 gen=1 listed ['probe_ping', 'probe_restart']
+16:21:29 pid=43207 ppid=43193 gen=1 recv tools/call id=2
+16:21:31 pid=43207 ppid=43193 gen=1 recv tools/call id=3
+16:21:31 pid=43207 ppid=43193 gen=1 execv in place
+16:21:31 pid=43207 ppid=43193 gen=2 start mode=exec initialized=True
+16:21:31 pid=43207 ppid=43193 gen=2 sent tools/list_changed
+16:21:31 pid=43207 ppid=43193 gen=2 recv tools/list id=4
+16:21:31 pid=43207 ppid=43193 gen=2 listed ['probe_ping', 'probe_restart', 'probe_new']
+16:21:33 pid=43207 ppid=43193 gen=2 recv tools/call id=5
+16:21:37 pid=43207 ppid=43193 gen=2 recv tools/call id=6
