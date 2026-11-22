@@ -794,14 +794,21 @@ func errResult(e *Error) (*mcp.CallToolResult, any, error) {
 // bound; with none bound yet, on the first one that binds.
 func (s *Server) HoldNotice(n string) {
 	s.mu.Lock()
-	if len(s.agents) == 0 {
-		s.held = append(s.held, n)
-		s.mu.Unlock()
-		return
+	var bound []*Agent
+	for _, a := range s.agents {
+		select {
+		case <-a.ready:
+			if a.err == nil {
+				bound = append(bound, a)
+			}
+		default:
+		}
 	}
-	agents := slices.Collect(maps.Values(s.agents))
+	if len(bound) == 0 {
+		s.held = append(s.held, n)
+	}
 	s.mu.Unlock()
-	for _, a := range agents {
+	for _, a := range bound {
 		a.holdNotice(n)
 	}
 }

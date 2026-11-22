@@ -16,6 +16,7 @@ import (
 
 	"github.com/GoodOlClint/crosstalk/internal/harness"
 	"github.com/GoodOlClint/crosstalk/internal/mcpserver"
+	"github.com/GoodOlClint/crosstalk/internal/quiesce"
 	"github.com/GoodOlClint/crosstalk/internal/refresh"
 	"github.com/GoodOlClint/crosstalk/internal/upgrade"
 )
@@ -90,11 +91,12 @@ func fuSandbox(t *testing.T, home string, setUp ...string) (*fuRec, harness.Inst
 			p := filepath.Join(home, ".claude", "plugins", "installed_plugins.json")
 			os.MkdirAll(filepath.Dir(p), 0o755)
 			os.WriteFile(p, []byte(`{"plugins":{"crosstalk@crosstalk":[]}}`), 0o644)
+			os.WriteFile(filepath.Join(home, ".claude.json"), []byte(`{"mcpServers":{"crosstalk":{"type":"stdio","command":"`+filepath.Join(home, "bin", "crosstalk")+`","args":["mcp"]}}}`), 0o644)
 			rec.claudeVer = "0.0.1"
 		case "codex":
 			p := filepath.Join(home, ".codex", "config.toml")
 			os.MkdirAll(filepath.Dir(p), 0o755)
-			os.WriteFile(p, []byte("[mcp_servers.crosstalk]\ncommand = \"/x/crosstalk\"\nargs = [\"mcp\"]\n"), 0o644)
+			os.WriteFile(p, []byte("[mcp_servers.crosstalk]\ncommand = \""+filepath.Join(home, "bin", "crosstalk")+"\"\nargs = [\"mcp\"]\n"), 0o644)
 		}
 	}
 	state := filepath.Join(home, ".local", "state", "crosstalk")
@@ -144,7 +146,6 @@ func TestFollowUpOnlyPluginAndGateway(t *testing.T) {
 	rec, env, hs := fuSandbox(t, home, "claude", "codex")
 	files := []string{filepath.Join(home, ".claude", "settings.json"), filepath.Join(home, ".claude.json"), filepath.Join(home, ".codex", "config.toml")}
 	os.WriteFile(files[0], []byte(`{"permissions":{"allow":[]}}`), 0o644)
-	os.WriteFile(files[1], []byte(`{"mcpServers":{}}`), 0o644)
 	before := map[string]string{}
 	for _, f := range files {
 		b, _ := os.ReadFile(f)
@@ -291,11 +292,11 @@ func TestFollowUpOffAndNotArmed(t *testing.T) {
 	rec, env, hs := fuSandbox(t, "", "claude")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	if startFollowUp(ctx, false, env, hs, fuCfgDir(env), nil) {
+	if _, ok := startFollowUp(ctx, false, env, hs, fuCfgDir(env), nil); ok {
 		t.Error("started with refresh not armed")
 	}
 	t.Setenv(refresh.OffEnv, "1")
-	if startFollowUp(ctx, true, env, hs, fuCfgDir(env), nil) {
+	if _, ok := startFollowUp(ctx, true, env, hs, fuCfgDir(env), nil); ok {
 		t.Errorf("started with %s=1", refresh.OffEnv)
 	}
 	time.Sleep(100 * time.Millisecond)
@@ -303,9 +304,11 @@ func TestFollowUpOffAndNotArmed(t *testing.T) {
 		t.Fatalf("commands ran while off: %v", c)
 	}
 	t.Setenv(refresh.OffEnv, "0")
-	if !startFollowUp(ctx, true, env, hs, fuCfgDir(env), nil) {
+	stop, ok := startFollowUp(ctx, true, env, hs, fuCfgDir(env), nil)
+	if !ok {
 		t.Fatal("did not start when armed")
 	}
+	defer stop()
 	deadline := time.Now().Add(5 * time.Second)
 	for !fuDone(env, "claude") && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
@@ -395,5 +398,205 @@ func TestInstallNoMarkerWhenK1Fails(t *testing.T) {
 	installRunCmd(t, "install", "--yes", "--bin-dir", filepath.Join(home, "bin"))
 	if upgrade.Done(state, mcpserver.Version, "claude") {
 		t.Error("claude marker written though K1 could not pass")
+	}
+}
+
+func TestFollowUpSetUpErrorNotATarget(t *testing.T) {
+	rec, env, hs := fuSandbox(t, "", "codex")
+	p := filepath.Join(env.Home, ".claude", "plugins", "installed_plugins.json")
+	os.MkdirAll(filepath.Dir(p), 0o755)
+	os.WriteFile(p, []byte("{not json"), 0o644)
+	fuRun(env, hs, nil)
+	for _, c := range rec.all() {
+		if strings.HasPrefix(c, "claude ") {
+			t.Errorf("ran %q for a harness whose setup could not be read", c)
+		}
+	}
+	if !fuDone(env, "codex") {
+		t.Error("codex was not updated")
+	}
+}
+
+func TestFollowUpSkipsHarnessRegisteredElsewhere(t *testing.T) {
+	rec, env, hs := fuSandbox(t, "", "claude", "codex")
+	os.WriteFile(filepath.Join(env.Home, ".codex", "config.toml"), []byte("[mcp_servers.crosstalk]\ncommand = \"/elsewhere/crosstalk\"\nargs = [\"mcp\"]\n"), 0o644)
+	fuRun(env, hs, nil)
+	for _, c := range rec.all() {
+		if strings.HasPrefix(c, "codex ") {
+			t.Errorf("ran %q for a harness registered to another binary", c)
+		}
+	}
+}
+
+func TestFollowUpNoMarkerWhenRegistrationLost(t *testing.T) {
+	rec, env, hs := fuSandbox(t, "", "codex")
+	cfg := filepath.Join(env.Home, ".codex", "config.toml")
+	env.Run = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		out, err := rec.run(ctx, name, args...)
+		if name == "codex" && strings.Join(args, " ") == "plugin add crosstalk@crosstalk" {
+			os.WriteFile(cfg, []byte("model = \"x\"\n"), 0o644)
+		}
+		return out, err
+	}
+	var notices []string
+	fuRun(env, hs, func(n string) { notices = append(notices, n) })
+	if fuDone(env, "codex") {
+		t.Fatal("codex marker written though the plugin step dropped the registration")
+	}
+	if len(notices) != 1 || !strings.Contains(notices[0], "run `crosstalk install`") {
+		t.Fatalf("notices = %q", notices)
+	}
+}
+
+func TestFollowUpCountedForRefreshAndJoinedOnStop(t *testing.T) {
+	rec, env, hs := fuSandbox(t, "", "claude")
+	inStep := make(chan struct{})
+	var busy atomic.Int32
+	var finished atomic.Bool
+	env.Run = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if strings.Join(args, " ") == "plugin marketplace add GoodOlClint/CrossTalk" {
+			busy.Store(int32(quiesce.Busy()))
+			close(inStep)
+			<-ctx.Done()
+			finished.Store(true)
+			return nil, ctx.Err()
+		}
+		return rec.run(ctx, name, args...)
+	}
+	stop, ok := startFollowUp(context.Background(), true, env, hs, fuCfgDir(env), nil)
+	if !ok {
+		t.Fatal("not started")
+	}
+	select {
+	case <-inStep:
+	case <-time.After(5 * time.Second):
+		t.Fatal("step never ran")
+	}
+	if busy.Load() < 1 {
+		t.Error("a running follow-up is not counted as work refresh quiescence waits for")
+	}
+	stop()
+	if !finished.Load() {
+		t.Error("stop returned before the running step ended")
+	}
+	if quiesce.Busy() != 0 {
+		t.Errorf("quiesce count %d after stop", quiesce.Busy())
+	}
+}
+
+func TestInstallHandshakeTurnsFollowUpOff(t *testing.T) {
+	dir := t.TempDir()
+	dump := filepath.Join(dir, "env")
+	script := filepath.Join(dir, "crosstalk")
+	os.WriteFile(script, []byte("#!/bin/sh\nenv > "+dump+"\nexit 1\n"), 0o755)
+	installHandshake(context.Background(), script, []string{"mcp"}, []string{refresh.OffEnv + "=0"})
+	b, err := os.ReadFile(dump)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(string(b), "\n")
+	if !slices.Contains(lines, refresh.OffEnv+"=1") || slices.Contains(lines, refresh.OffEnv+"=0") {
+		t.Fatalf("the handshake child can run the follow-up: %s", b)
+	}
+}
+
+func TestUninstallTakesUpgradeLock(t *testing.T) {
+	home := installSandbox(t, "claude")
+	state := filepath.Join(home, ".local", "state", "crosstalk")
+	args := []string{"--yes", "--bin-dir", filepath.Join(home, "bin")}
+	if c, o := installRunCmd(t, "install", args...); c != 0 {
+		t.Fatalf("install: %d\n%s", c, o)
+	}
+	rel, ok, err := upgrade.TryLock(state)
+	if err != nil || !ok {
+		t.Fatalf("TryLock: %v %v", ok, err)
+	}
+	var out syncBuf
+	code := make(chan int, 1)
+	go func() { code <- runInstall("uninstall", args, strings.NewReader(""), false, &out, &out) }()
+	deadline := time.Now().Add(10 * time.Second)
+	for !strings.Contains(out.String(), "upgrade.lock") && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	select {
+	case c := <-code:
+		t.Fatalf("uninstall finished (exit %d) while the lock was held:\n%s", c, out.String())
+	default:
+	}
+	rel()
+	if c := <-code; c != 0 {
+		t.Fatalf("uninstall: %d\n%s", c, out.String())
+	}
+}
+
+func TestStartRefreshNotArmedWhenWatcherCannotStart(t *testing.T) {
+	home := t.TempDir()
+	bin := filepath.Join(home, "bin", "crosstalk")
+	reg := `{"mcpServers":{"crosstalk":{"type":"stdio","command":"` + bin + `","args":["mcp"]}}}`
+	os.WriteFile(filepath.Join(home, ".claude.json"), []byte(reg), 0o600)
+	hs, err := harnesses(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldArgs := os.Args
+	t.Cleanup(func() { os.Args = oldArgs })
+	os.Args = append([]string{bin}, oldArgs[1:]...)
+	if _, _, armed := startRefresh(context.Background(), home, hs, nil); armed {
+		t.Error("armed although the trusted path cannot be stat'd")
+	}
+	os.MkdirAll(filepath.Dir(bin), 0o755)
+	os.WriteFile(bin, []byte("x"), 0o755)
+	old := pollStdin
+	pollStdin = func() (*os.File, error) { return nil, errors.New("no pause") }
+	t.Cleanup(func() { pollStdin = old })
+	if _, _, armed := startRefresh(context.Background(), home, hs, nil); armed {
+		t.Error("armed although stdin cannot be paused")
+	}
+	pollStdin = old
+}
+
+func TestFollowUpRetryDropsUninstalledHarness(t *testing.T) {
+	rec, env, hs := fuSandbox(t, "", "codex")
+	rec.stale = true
+	r := followUpRunner(env, hs, fuCfgDir(env), nil)
+	cfg := filepath.Join(env.Home, ".codex", "config.toml")
+	var waits int
+	r.After = func(time.Duration) <-chan time.Time {
+		waits++
+		os.WriteFile(cfg, []byte("model = \"x\"\n"), 0o644)
+		c := make(chan time.Time, 1)
+		c <- time.Time{}
+		return c
+	}
+	r.Run(context.Background())
+	if n := slices.Index(rec.all(), "codex plugin add crosstalk@crosstalk"); n < 0 || strings.Count(strings.Join(rec.all(), "\n"), "codex plugin add") != 1 {
+		t.Fatalf("a retry ran the plugin step for a harness uninstalled meanwhile: %v", rec.all())
+	}
+	if waits != 1 {
+		t.Errorf("waits = %d, want 1", waits)
+	}
+}
+
+func TestFollowUpRunnerBounds(t *testing.T) {
+	r := followUpRunner(harness.InstallEnv{}, nil, "", nil)
+	if r.TargetTimeout <= 0 || r.Enter == nil || r.Interval != 15*time.Minute || r.Bound != 6*time.Hour {
+		t.Fatalf("runner timeout %v, enter set %v, interval %v, bound %v", r.TargetTimeout, r.Enter != nil, r.Interval, r.Bound)
+	}
+}
+
+func TestFollowUpRetryDropsRemovedUnit(t *testing.T) {
+	unitRec, env, hs, _ := gatewayHome(t, func(bool) (bool, bool) { return false, true })
+	r := followUpRunner(env, hs, fuCfgDir(env), nil)
+	var waits int
+	r.After = func(time.Duration) <-chan time.Time {
+		waits++
+		os.Remove(remoteUnitPath(env.Home))
+		c := make(chan time.Time, 1)
+		c <- time.Time{}
+		return c
+	}
+	r.Run(context.Background())
+	if n := len(unitRec.all()); n != 1 || waits != 1 {
+		t.Fatalf("unit calls %v, waits %d: a retry restarted a gateway whose unit was removed", unitRec.all(), waits)
 	}
 }

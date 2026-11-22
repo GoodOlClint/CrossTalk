@@ -12,6 +12,7 @@ import (
 
 	"github.com/GoodOlClint/crosstalk/internal/harness"
 	"github.com/GoodOlClint/crosstalk/internal/mcpserver"
+	"github.com/GoodOlClint/crosstalk/internal/quiesce"
 	"github.com/GoodOlClint/crosstalk/internal/refresh"
 	"github.com/GoodOlClint/crosstalk/internal/remote"
 	"github.com/GoodOlClint/crosstalk/internal/upgrade"
@@ -78,9 +79,15 @@ func gatewayOnBin(ctx context.Context, stateDir, bin string, wait time.Duration)
 	}
 }
 
+func unitOwned(home, cfgDir string) bool {
+	_, _, present, owned, _ := unitOwnership(home, cfgDir)
+	return present && owned
+}
+
 func gatewayTarget(env harness.InstallEnv, cfgDir string) upgrade.Target {
 	return upgrade.Target{
-		Name: "gateway",
+		Name:     "gateway",
+		Eligible: func() bool { return unitOwned(env.Home, cfgDir) },
 		Run: func(ctx context.Context, w io.Writer) error {
 			held, err := remote.GatewayLockHeld(env.StateDir)
 			if err != nil {
@@ -103,36 +110,44 @@ func gatewayTarget(env harness.InstallEnv, cfgDir string) upgrade.Target {
 	}
 }
 
-// followUpTargets are the harnesses that are found, set up and can update
-// their plugin alone, then the gateway when CrossTalk's login unit exists.
+// followUpTargets are the harnesses that are found, registered to run env.Bin
+// (which implies set up) and can update their plugin alone, then the gateway
+// when CrossTalk's login unit exists.
 func followUpTargets(env harness.InstallEnv, hs []harness.Harness, cfgDir string) []upgrade.Target {
 	var ts []upgrade.Target
 	for _, h := range hs {
 		in, ok := h.(harness.Installer)
 		pu, ok2 := h.(harness.PluginUpdater)
-		if !ok || !ok2 || !in.Found() {
+		if !ok || !ok2 {
 			continue
 		}
-		if up, err := in.SetUp(env); !up && err == nil {
+		eligible := func() bool {
+			if !in.Found() {
+				return false
+			}
+			reg, _ := in.Registered(env)
+			return reg
+		}
+		if !eligible() {
 			continue
 		}
 		step := pu.PluginStep(env)
 		ts = append(ts, upgrade.Target{
-			Name: string(h.Name()),
-			Run: func(ctx context.Context, _ io.Writer) error {
-				ctx, cancel := context.WithTimeout(ctx, followUpStepTimeout)
-				defer cancel()
-				return step.Apply(ctx)
-			},
+			Name:     string(h.Name()),
+			Eligible: eligible,
+			Run:      func(ctx context.Context, _ io.Writer) error { return step.Apply(ctx) },
 			Verify: func(ctx context.Context) error {
 				if r := pu.PluginCheck(ctx, env); !r.OK {
 					return errors.New(r.Detail)
+				}
+				if reg, err := in.Registered(env); err != nil || !reg {
+					return fmt.Errorf("the %s registration no longer runs %s after the plugin step (%v)", h.Name(), env.Bin, err)
 				}
 				return nil
 			},
 		})
 	}
-	if _, _, present, owned, _ := unitOwnership(env.Home, cfgDir); present && owned {
+	if unitOwned(env.Home, cfgDir) {
 		ts = append(ts, gatewayTarget(env, cfgDir))
 	}
 	return ts
@@ -143,15 +158,22 @@ func followUpRunner(env harness.InstallEnv, hs []harness.Harness, cfgDir string,
 		StateDir: env.StateDir, Version: env.Version, Notice: notice,
 		Targets:  followUpTargets(env, hs, cfgDir),
 		Interval: followUpInterval, Bound: followUpBound,
+		TargetTimeout: followUpStepTimeout,
+		Enter:         quiesce.Hold,
 	}
 }
 
 // startFollowUp runs the upgrade follow-up in the background when refresh is
-// armed and not turned off (ADR 0031).
-func startFollowUp(ctx context.Context, armed bool, env harness.InstallEnv, hs []harness.Harness, cfgDir string, notice func(string)) bool {
+// armed and not turned off (ADR 0031); stop cancels it and waits for it.
+func startFollowUp(ctx context.Context, armed bool, env harness.InstallEnv, hs []harness.Harness, cfgDir string, notice func(string)) (stop func(), started bool) {
 	if !armed || refresh.Off() {
-		return false
+		return func() {}, false
 	}
-	go followUpRunner(env, hs, cfgDir, notice).Run(ctx)
-	return true
+	ctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		followUpRunner(env, hs, cfgDir, notice).Run(ctx)
+	}()
+	return func() { cancel(); <-done }, true
 }

@@ -88,6 +88,9 @@ type Target struct {
 	Name   string
 	Run    func(ctx context.Context, log io.Writer) error
 	Verify func(ctx context.Context) error
+	// Eligible, when set, is asked again before every attempt; a target it
+	// rejects is skipped.
+	Eligible func() bool
 }
 
 // Runner is the follow-up of ADR 0031. Run makes one attempt; when that
@@ -99,7 +102,13 @@ type Runner struct {
 	// Notice receives one line after an attempt that ran a target.
 	Notice          func(string)
 	Interval, Bound time.Duration
-	After           func(time.Duration) <-chan time.Time
+	// TargetTimeout bounds one target's Run and Verify together; 0 means none.
+	TargetTimeout time.Duration
+	After         func(time.Duration) <-chan time.Time
+	Now           func() time.Time
+	// Enter, when set, counts an attempt from before the lock until after its
+	// notice; ok false skips the attempt.
+	Enter func(ctx context.Context) (leave func(), ok bool)
 
 	beforeLock func()
 }
@@ -107,7 +116,7 @@ type Runner struct {
 func (r *Runner) pending() []Target {
 	var p []Target
 	for _, t := range r.Targets {
-		if !Done(r.StateDir, r.Version, t.Name) {
+		if !Done(r.StateDir, r.Version, t.Name) && (t.Eligible == nil || t.Eligible()) {
 			p = append(p, t)
 		}
 	}
@@ -124,11 +133,15 @@ func (r *Runner) Run(ctx context.Context) {
 	if !took || !pending || r.Interval <= 0 {
 		return
 	}
-	after := r.After
+	after, now := r.After, r.Now
 	if after == nil {
 		after = time.After
 	}
-	for waited := time.Duration(0); pending && waited+r.Interval <= r.Bound; waited += r.Interval {
+	if now == nil {
+		now = time.Now
+	}
+	start := now()
+	for pending && now().Sub(start)+r.Interval <= r.Bound {
 		select {
 		case <-ctx.Done():
 			return
@@ -144,6 +157,13 @@ func (r *Runner) attempt(ctx context.Context, first bool) (took, pending bool) {
 	before := r.pending()
 	if ctx.Err() != nil || len(before) == 0 {
 		return false, false
+	}
+	if r.Enter != nil {
+		leave, ok := r.Enter(ctx)
+		if !ok {
+			return false, true
+		}
+		defer leave()
 	}
 	if r.beforeLock != nil {
 		r.beforeLock()
@@ -175,7 +195,7 @@ func (r *Runner) attempt(ctx context.Context, first bool) (took, pending bool) {
 			return true, true
 		}
 		fmt.Fprintf(w, "%s %s: start\n", time.Now().UTC().Format(time.RFC3339), t.Name)
-		err := runTarget(ctx, t, w)
+		err := runTarget(ctx, t, w, r.TargetTimeout)
 		if err == nil {
 			err = MarkDone(r.StateDir, r.Version, t.Name)
 		}
@@ -193,7 +213,12 @@ func (r *Runner) attempt(ctx context.Context, first bool) (took, pending bool) {
 	return true, pending
 }
 
-func runTarget(ctx context.Context, t Target, w io.Writer) (err error) {
+func runTarget(ctx context.Context, t Target, w io.Writer, timeout time.Duration) (err error) {
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
 	defer func() {
 		if p := recover(); p != nil {
 			err = fmt.Errorf("panic: %v", p)
@@ -213,7 +238,7 @@ func (r *Runner) notice(outs []outcome, first bool) string {
 		if o.err == nil {
 			ok = append(ok, o.name)
 		} else {
-			bad = append(bad, o.name+" ("+o.err.Error()+")")
+			bad = append(bad, o.name+" ("+brief(o.err)+")")
 		}
 	}
 	if !first && len(ok) == 0 {
@@ -224,7 +249,16 @@ func (r *Runner) notice(outs []outcome, first bool) string {
 		parts = append(parts, "updated "+strings.Join(ok, ", "))
 	}
 	if first && len(bad) > 0 {
-		parts = append(parts, "could not update "+strings.Join(bad, ", ")+"; run `crosstalk install`")
+		parts = append(parts, "could not update "+strings.Join(bad, ", ")+"; run `crosstalk install` (log: "+LogPath(r.StateDir, r.Version)+")")
 	}
 	return "CrossTalk " + r.Version + " upgrade: " + strings.Join(parts, "; ")
+}
+
+// brief is the first line of err, at most 120 bytes; the log has the rest.
+func brief(err error) string {
+	s, _, _ := strings.Cut(err.Error(), "\n")
+	if len(s) > 120 {
+		s = s[:120] + "..."
+	}
+	return s
 }

@@ -252,19 +252,29 @@ func TestFollowUpNoticeText(t *testing.T) {
 	}
 }
 
-func fakeClock() (func(time.Duration) <-chan time.Time, *[]time.Duration) {
+// fakeClock's After fires at once and moves its Now forward by the wait.
+func fakeClock() (func(time.Duration) <-chan time.Time, func() time.Time, *[]time.Duration) {
 	var waits []time.Duration
+	var mu sync.Mutex
+	t0 := time.Unix(0, 0)
 	return func(d time.Duration) <-chan time.Time {
-		waits = append(waits, d)
-		c := make(chan time.Time, 1)
-		c <- time.Time{}
-		return c
-	}, &waits
+			mu.Lock()
+			waits = append(waits, d)
+			t0 = t0.Add(d)
+			mu.Unlock()
+			c := make(chan time.Time, 1)
+			c <- time.Time{}
+			return c
+		}, func() time.Time {
+			mu.Lock()
+			defer mu.Unlock()
+			return t0
+		}, &waits
 }
 
 func TestFollowUpRetryBound(t *testing.T) {
 	st := t.TempDir()
-	after, waits := fakeClock()
+	after, now, waits := fakeClock()
 	var bad, good atomic.Int32
 	passOnThird := Target{
 		Name: "codex",
@@ -277,7 +287,7 @@ func TestFollowUpRetryBound(t *testing.T) {
 		},
 	}
 	var notices []string
-	r := &Runner{StateDir: st, Version: ver, Interval: 15 * time.Minute, Bound: 6 * time.Hour, After: after,
+	r := &Runner{StateDir: st, Version: ver, Interval: 15 * time.Minute, Bound: 6 * time.Hour, After: after, Now: now,
 		Notice:  func(n string) { notices = append(notices, n) },
 		Targets: []Target{counting("claude", &bad, errors.New("old")), passOnThird}}
 	done := make(chan struct{})
@@ -303,7 +313,7 @@ func TestFollowUpRetryBound(t *testing.T) {
 
 func TestFollowUpRetryStopsWhenAllPass(t *testing.T) {
 	st := t.TempDir()
-	after, waits := fakeClock()
+	after, now, waits := fakeClock()
 	var runs atomic.Int32
 	second := Target{
 		Name: "claude",
@@ -315,7 +325,7 @@ func TestFollowUpRetryStopsWhenAllPass(t *testing.T) {
 			return nil
 		},
 	}
-	r := &Runner{StateDir: st, Version: ver, Interval: time.Minute, Bound: time.Hour, After: after, Targets: []Target{second}}
+	r := &Runner{StateDir: st, Version: ver, Interval: time.Minute, Bound: time.Hour, After: after, Now: now, Targets: []Target{second}}
 	r.Run(context.Background())
 	if runs.Load() != 2 || len(*waits) != 1 {
 		t.Fatalf("runs=%d waits=%d, want 2 runs and 1 wait", runs.Load(), len(*waits))
@@ -372,12 +382,100 @@ func TestFollowUpRetryAfterBusyLock(t *testing.T) {
 	}
 }
 
+func TestFollowUpRetryBoundCountsAttemptTime(t *testing.T) {
+	st := t.TempDir()
+	after, now, _ := fakeClock()
+	var runs atomic.Int32
+	r := &Runner{StateDir: st, Version: ver, Interval: 15 * time.Minute, Bound: 6 * time.Hour, After: after, Now: now}
+	r.Targets = []Target{{Name: "claude",
+		Run: func(context.Context, io.Writer) error {
+			runs.Add(1)
+			after(15 * time.Minute)
+			return nil
+		},
+		Verify: func(context.Context) error { return errors.New("old") }}}
+	r.Run(context.Background())
+	if n := runs.Load(); n != 13 {
+		t.Fatalf("%d attempts of 15 minutes each with 15-minute waits, want 13 within 6 hours", n)
+	}
+}
+
+func TestFollowUpEligibleRecheckedEachAttempt(t *testing.T) {
+	st := t.TempDir()
+	after, now, _ := fakeClock()
+	var runs atomic.Int32
+	var setUp atomic.Bool
+	setUp.Store(true)
+	tg := counting("codex", &runs, errors.New("old"))
+	tg.Eligible = setUp.Load
+	r := &Runner{StateDir: st, Version: ver, Interval: time.Minute, Bound: time.Hour, Now: now, Targets: []Target{tg}}
+	r.After = func(d time.Duration) <-chan time.Time {
+		setUp.Store(false)
+		return after(d)
+	}
+	r.Run(context.Background())
+	if runs.Load() != 1 {
+		t.Fatalf("a target no longer set up was run again: runs=%d", runs.Load())
+	}
+}
+
+func TestFollowUpTimeoutCoversVerify(t *testing.T) {
+	st := t.TempDir()
+	r := &Runner{StateDir: st, Version: ver, TargetTimeout: 50 * time.Millisecond, Targets: []Target{{Name: "claude",
+		Run:    func(context.Context, io.Writer) error { return nil },
+		Verify: func(ctx context.Context) error { <-ctx.Done(); return ctx.Err() }}}}
+	done := make(chan struct{})
+	go func() { r.Run(context.Background()); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a hung Verify held the lock past the target timeout")
+	}
+	if Done(st, ver, "claude") {
+		t.Fatal("marker after a timed-out Verify")
+	}
+}
+
+func TestFollowUpEnterCountsAttempt(t *testing.T) {
+	st := t.TempDir()
+	var inside, entered, left atomic.Int32
+	var noticedInside bool
+	r := &Runner{StateDir: st, Version: ver, Targets: []Target{{Name: "claude",
+		Run:    func(context.Context, io.Writer) error { inside.Store(entered.Load() - left.Load()); return nil },
+		Verify: func(context.Context) error { return nil }}}}
+	r.Enter = func(context.Context) (func(), bool) { entered.Add(1); return func() { left.Add(1) }, true }
+	r.Notice = func(string) { noticedInside = entered.Load()-left.Load() == 1 }
+	r.Run(context.Background())
+	if inside.Load() != 1 || !noticedInside || left.Load() != 1 {
+		t.Fatalf("attempt not counted through its notice: inside=%d noticedInside=%v left=%d", inside.Load(), noticedInside, left.Load())
+	}
+	var runs atomic.Int32
+	r2 := &Runner{StateDir: t.TempDir(), Version: ver, Targets: []Target{counting("claude", &runs, nil)},
+		Enter: func(context.Context) (func(), bool) { return nil, false }}
+	r2.Run(context.Background())
+	if runs.Load() != 0 {
+		t.Fatal("ran an attempt Enter refused")
+	}
+}
+
+func TestFollowUpNoticeKeepsErrorShort(t *testing.T) {
+	st := t.TempDir()
+	var notices []string
+	long := errors.New("first line\nsecond line with https://user:secret@example.invalid/repo")
+	r := &Runner{StateDir: st, Version: ver, Notice: func(n string) { notices = append(notices, n) },
+		Targets: []Target{{Name: "claude", Run: func(context.Context, io.Writer) error { return long }, Verify: func(context.Context) error { return nil }}}}
+	r.Run(context.Background())
+	if len(notices) != 1 || strings.Contains(notices[0], "secret") || !strings.Contains(notices[0], "first line") || !strings.Contains(notices[0], LogPath(st, ver)) {
+		t.Fatalf("notice = %q", notices)
+	}
+}
+
 func TestFollowUpRetryOnlyByLockHolder(t *testing.T) {
 	st := t.TempDir()
 	rel, _, _ := TryLock(st)
-	after, waits := fakeClock()
+	after, now, waits := fakeClock()
 	var runs atomic.Int32
-	r := &Runner{StateDir: st, Version: ver, Interval: time.Minute, Bound: time.Hour, After: after,
+	r := &Runner{StateDir: st, Version: ver, Interval: time.Minute, Bound: time.Hour, After: after, Now: now,
 		Targets: []Target{counting("claude", &runs, errors.New("old"))}}
 	r.Run(context.Background())
 	rel()

@@ -306,16 +306,14 @@ func runInstall(mode string, args []string, in io.Reader, tty bool, stdout, stde
 		fmt.Fprintf(stderr, "crosstalk %s: no terminal to confirm on; nothing changed. Run it in a terminal or pass --yes.\n", mode)
 		return 2
 	}
-	if mode != "uninstall" {
-		release, err := upgrade.Lock(ctx, stateDir, func() {
-			fmt.Fprintf(stdout, "waiting for %s: a CrossTalk session is running the upgrade follow-up\n", upgrade.LockPath(stateDir))
-		})
-		if err != nil {
-			fmt.Fprintf(stderr, "crosstalk %s: %v\n", mode, err)
-			return 1
-		}
-		defer release()
+	release, err := upgrade.Lock(ctx, stateDir, func() {
+		fmt.Fprintf(stdout, "waiting for %s: a CrossTalk session is running the upgrade follow-up\n", upgrade.LockPath(stateDir))
+	})
+	if err != nil {
+		fmt.Fprintf(stderr, "crosstalk %s: %v\n", mode, err)
+		return 1
 	}
+	defer release()
 	answers := bufio.NewReader(in)
 	for _, g := range groups {
 		fmt.Fprintf(stdout, "== %s\n", g.title)
@@ -366,7 +364,7 @@ func installMarkers(ctx context.Context, targets []installTarget, env harness.In
 			done = append(done, t.name)
 		}
 	}
-	if _, _, present, owned, _ := unitOwnership(env.Home, cfgDir); present && owned && gatewayOnBin(ctx, env.StateDir, env.Bin, 0) == nil {
+	if unitOwned(env.Home, cfgDir) && gatewayOnBin(ctx, env.StateDir, env.Bin, 0) == nil {
 		done = append(done, "gateway")
 	}
 	for _, n := range done {
@@ -642,7 +640,7 @@ func installHandshake(ctx context.Context, command string, args, env []string) e
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, command, args...)
-	cmd.Env = append(os.Environ(), env...)
+	cmd.Env = append(append(os.Environ(), env...), harness.OffEnv+"=1")
 	c := mcp.NewClient(&mcp.Implementation{Name: "crosstalk-install", Version: mcpserver.Version}, nil)
 	s, err := c.Connect(ctx, &mcp.CommandTransport{Command: cmd}, nil)
 	if err != nil {

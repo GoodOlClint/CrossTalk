@@ -1,6 +1,7 @@
 package mcpserver
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -37,5 +38,22 @@ func TestFollowUpNoticeHeldUntilBind(t *testing.T) {
 	}
 	if res := r.rpc(4, "tools/call", `{"name":"send_message","arguments":{"to":"bob","text":"b"}}`); strings.Contains(string(res["result"]), n) {
 		t.Fatalf("notice repeated: %s", res["result"])
+	}
+}
+
+func TestFollowUpNoticeNotLostWithProvisionalAgent(t *testing.T) {
+	stateDir, sessions := t.TempDir(), t.TempDir()
+	srv := newRigServer(t, stateDir, sessions, 4242, NewFakeBackend())
+	prov := &Agent{id: "provisional", ready: make(chan struct{})}
+	srv.mu.Lock()
+	srv.agents[prov.id] = prov
+	srv.mu.Unlock()
+	srv.HoldNotice("n")
+	srv.mu.Lock()
+	delete(srv.agents, prov.id)
+	held := slices.Clone(srv.held)
+	srv.mu.Unlock()
+	if prov.takeNotice("") != "" || !slices.Contains(held, "n") {
+		t.Fatalf("notice went to an agent still binding: held=%q", held)
 	}
 }
