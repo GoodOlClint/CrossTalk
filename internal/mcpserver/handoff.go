@@ -109,6 +109,21 @@ func (s *Server) Handoff(st SessionState, bin BinaryIdentity) *Handoff {
 		}
 		h.Agents = append(h.Agents, ah)
 	}
+	s.mu.Lock()
+	have := map[string]bool{}
+	for _, ah := range h.Agents {
+		have[ah.ID] = true
+	}
+	for _, m := range []map[string]AgentHandoff{s.pending, s.deferred} {
+		for id, ah := range m {
+			if !have[id] {
+				h.Agents = append(h.Agents, ah)
+				have[id] = true
+			}
+		}
+	}
+	s.mu.Unlock()
+	slices.SortFunc(h.Agents, func(a, b AgentHandoff) int { return strings.Compare(a.ID, b.ID) })
 	for _, hh := range s.harnesses {
 		if rf, ok := hh.(harness.Refreshable); ok {
 			if raw := rf.RefreshState(); len(raw) > 0 {
@@ -196,27 +211,24 @@ func HandoffFromEnv() (*Handoff, error) {
 	if err != nil || fd < 3 {
 		return nil, fmt.Errorf("refresh handoff: bad %s %q", HandoffFDEnv, v)
 	}
-	f := os.NewFile(uintptr(fd), "refresh-handoff")
-	if f == nil {
-		return nil, fmt.Errorf("refresh handoff: bad descriptor %d", fd)
-	}
-	defer f.Close()
-	if err := checkHandoffFile(f); err != nil {
+	if err := checkHandoffFD(fd); err != nil {
 		return nil, err
 	}
+	f := os.NewFile(uintptr(fd), "refresh-handoff")
+	defer f.Close()
 	return ReadHandoff(f)
 }
 
-// checkHandoffFile requires what WriteHandoff makes: a regular file with no
-// name left and no access for group or others, so a stale descriptor number
-// (a pipe, a socket, a file of another purpose) is never read or closed as one.
-func checkHandoffFile(f *os.File) error {
-	fi, err := f.Stat()
-	if err != nil {
+// checkHandoffFD requires what WriteHandoff makes: a regular file with no
+// name left and no access for group or others. It runs before fd is wrapped,
+// so a stale descriptor number (a pipe, a socket, a file of another purpose)
+// is never read or closed as one.
+func checkHandoffFD(fd int) error {
+	var st syscall.Stat_t
+	if err := syscall.Fstat(fd, &st); err != nil {
 		return fmt.Errorf("refresh handoff: %w", err)
 	}
-	st, ok := fi.Sys().(*syscall.Stat_t)
-	if !fi.Mode().IsRegular() || fi.Mode().Perm()&0o077 != 0 || !ok || st.Nlink != 0 {
+	if st.Mode&syscall.S_IFMT != syscall.S_IFREG || st.Mode&0o077 != 0 || st.Nlink != 0 {
 		return errors.New("refresh handoff: descriptor is not a private unlinked regular file")
 	}
 	return nil

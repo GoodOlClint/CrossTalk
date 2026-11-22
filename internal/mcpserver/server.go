@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
+	"slices"
 	"sync"
 	"time"
 
@@ -18,6 +20,7 @@ import (
 	"github.com/GoodOlClint/crosstalk/internal/identity"
 	"github.com/GoodOlClint/crosstalk/internal/journal"
 	"github.com/GoodOlClint/crosstalk/internal/msg"
+	"github.com/GoodOlClint/crosstalk/internal/quiesce"
 	"github.com/GoodOlClint/crosstalk/internal/registry"
 )
 
@@ -68,6 +71,12 @@ type Server struct {
 	closed bool
 	// resumed is set once Resume has run, so Run does not repeat it.
 	resumed bool
+	// deferred holds carried agents a harness registers itself after its
+	// own proof; RegisterSession applies the carried values then.
+	deferred map[string]AgentHandoff
+	// pending holds carried agents Resume is still trying again; a handoff
+	// carries them and deferred ones forward.
+	pending map[string]AgentHandoff
 	// timedOut keeps retired agents reachable: a collected *os.File's finalizer
 	// would drop the agent flock before process exit.
 	timedOut []*Agent
@@ -191,16 +200,102 @@ func (s *Server) Resume(ctx context.Context, h *Handoff) {
 	if again {
 		return
 	}
+	deferred := map[string]bool{}
 	for _, hh := range s.harnesses {
 		if rf, ok := hh.(harness.Refreshable); ok {
 			if raw, ok := h.Harness[string(hh.Name())]; ok {
-				rf.ResumeState(raw)
+				for _, ref := range rf.ResumeState(raw) {
+					deferred[identity.AgentID(string(hh.Name()), ref)] = true
+				}
 			}
 		}
 	}
+	failed := false
 	for _, ah := range h.Agents {
+		if deferred[ah.ID] && !ah.ViaCall {
+			s.mu.Lock()
+			if s.deferred == nil {
+				s.deferred = map[string]AgentHandoff{}
+			}
+			s.deferred[ah.ID] = ah
+			s.mu.Unlock()
+			s.dropStale(ah.ID)
+			continue
+		}
 		if err := s.resumeAgent(ctx, ah); err != nil {
-			slog.Warn("mcpserver: resuming agent", "agent", ah.ID, "err", err)
+			slog.Warn("mcpserver: resuming agent; retrying", "agent", ah.ID, "err", err)
+			s.dropStale(ah.ID)
+			s.mu.Lock()
+			if s.pending == nil {
+				s.pending = map[string]AgentHandoff{}
+			}
+			s.pending[ah.ID] = ah
+			s.mu.Unlock()
+			failed = true
+		}
+	}
+	if failed {
+		go s.retryResume(ctx)
+	}
+}
+
+// ResumeRetries bounds how many times Resume tries again, every supersede
+// interval, an agent whose session did not resolve at resume.
+const ResumeRetries = 15
+
+func (s *Server) retryResume(ctx context.Context) {
+	t := time.NewTicker(s.interval)
+	defer t.Stop()
+	for range ResumeRetries {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		done, ok := quiesce.Hold(ctx)
+		if !ok {
+			return
+		}
+		s.mu.Lock()
+		left := slices.Collect(maps.Values(s.pending))
+		s.mu.Unlock()
+		for _, ah := range left {
+			if s.resumeAgent(ctx, ah) == nil {
+				s.mu.Lock()
+				delete(s.pending, ah.ID)
+				s.mu.Unlock()
+			}
+		}
+		s.mu.Lock()
+		n := len(s.pending)
+		s.mu.Unlock()
+		done()
+		if n == 0 {
+			return
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id := range s.pending {
+		slog.Warn("mcpserver: carried agent not resumed; it binds again on its next call", "agent", id)
+	}
+	s.pending = nil
+}
+
+// dropStale removes the descriptor the previous image of this process left
+// for id: it still passes Registry.Live (same pid and start time) but names
+// endpoints that closed at exec. A descriptor held by a live registration
+// stays.
+func (s *Server) dropStale(id string) {
+	ds, err := s.reg.List()
+	if err != nil {
+		return
+	}
+	for _, d := range ds {
+		if d.AgentID == id && d.PID == os.Getpid() {
+			if _, err := s.reg.RemoveIfOwned(id, d.InstanceID); err != nil {
+				slog.Warn("mcpserver: removing the previous image's descriptor", "agent", id, "err", err)
+			}
 		}
 	}
 }
@@ -223,6 +318,11 @@ func (s *Server) resumeAgent(ctx context.Context, ah AgentHandoff) error {
 		return e
 	}
 	defer a.Done()
+	s.applyHandoff(a, ah)
+	return nil
+}
+
+func (s *Server) applyHandoff(a *Agent, ah AgentHandoff) {
 	a.mu.Lock()
 	if ah.HarnessName != "" {
 		a.harnessName = ah.HarnessName
@@ -234,7 +334,6 @@ func (s *Server) resumeAgent(ctx context.Context, ah AgentHandoff) error {
 	if r, ok := s.backend.(Refresher); ok {
 		r.RefreshResume(a, ah)
 	}
-	return nil
 }
 
 // RetireSuperseded ends the registration of every agent of this process whose
@@ -304,6 +403,7 @@ func (s *Server) RetireSession(ctx context.Context, req harness.RequestContext) 
 	}
 	id := identity.AgentID(string(c.harness), c.sessionRef)
 	s.mu.Lock()
+	delete(s.deferred, id)
 	a := s.agents[id]
 	mine := a != nil && a.isReady() && !a.viaCall
 	if mine {
@@ -643,6 +743,13 @@ func (s *Server) RegisterSession(ctx context.Context, req harness.RequestContext
 	for {
 		a, e := s.agent(ctx, c, false)
 		if e == nil {
+			s.mu.Lock()
+			ah, ok := s.deferred[a.id]
+			delete(s.deferred, a.id)
+			s.mu.Unlock()
+			if ok {
+				s.applyHandoff(a, ah)
+			}
 			a.Done()
 			return nil
 		}

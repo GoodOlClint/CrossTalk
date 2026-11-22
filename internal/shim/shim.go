@@ -76,6 +76,9 @@ type A2AListener struct {
 	CredentialRef string
 	// Close must return by ctx's deadline.
 	Close func(ctx context.Context) error
+	// Pause stops accepting and Unpause accepts again at URL; either may be
+	// nil.
+	Pause, Unpause func() error
 }
 
 type Options struct {

@@ -174,7 +174,7 @@ func (w *Wire) startA2A(_ context.Context, st *shim.AgentState) (shim.A2AListene
 	w.mu.Lock()
 	w.servers[id] = srv
 	w.mu.Unlock()
-	return shim.A2AListener{URL: url, CredentialRef: tok, Close: func(ctx context.Context) error {
+	return shim.A2AListener{URL: url, CredentialRef: tok, Pause: srv.Pause, Unpause: srv.Unpause, Close: func(ctx context.Context) error {
 		w.mu.Lock()
 		if w.servers[id] == srv {
 			delete(w.servers, id)

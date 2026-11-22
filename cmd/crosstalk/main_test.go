@@ -49,6 +49,9 @@ func TestMain(m *testing.M) {
 	if builtMain.dir != "" {
 		os.RemoveAll(builtMain.dir)
 	}
+	if builds.dir != "" {
+		os.RemoveAll(builds.dir)
+	}
 	os.Exit(code)
 }
 

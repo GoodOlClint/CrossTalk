@@ -15,6 +15,7 @@ import (
 	"github.com/GoodOlClint/crosstalk/internal/identity"
 	"github.com/GoodOlClint/crosstalk/internal/journal"
 	"github.com/GoodOlClint/crosstalk/internal/msg"
+	"github.com/GoodOlClint/crosstalk/internal/quiesce"
 	"github.com/GoodOlClint/crosstalk/internal/registry"
 )
 
@@ -108,6 +109,10 @@ func (h *Harness) ServeClaims(ctx context.Context, r harness.SessionRegistrar) e
 	var failed string
 	readFailed := map[string]bool{}
 	for {
+		done, ok := quiesce.Hold(ctx)
+		if !ok {
+			return nil
+		}
 		s, err := h.a.readSession(h.ppid)
 		if err != nil && !errors.Is(err, ErrNoSession) {
 			if e := err.Error(); !readFailed[e] && len(readFailed) < 8 && ctx.Err() == nil {
@@ -127,6 +132,7 @@ func (h *Harness) ServeClaims(ctx context.Context, r harness.SessionRegistrar) e
 				failed = ""
 			}
 		}
+		done()
 		select {
 		case <-ctx.Done():
 			return nil

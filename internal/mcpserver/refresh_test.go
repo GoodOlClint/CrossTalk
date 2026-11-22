@@ -4,12 +4,17 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"os"
+	"runtime"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/GoodOlClint/crosstalk/internal/harness"
 	"github.com/GoodOlClint/crosstalk/internal/registry"
@@ -161,6 +166,22 @@ func TestResumeAcceptsCallWithoutInitialize(t *testing.T) {
 	if ip == nil || ip.Name != "rig-client" {
 		t.Fatalf("carried client info = %+v", ip)
 	}
+	logged := make(chan error, 1)
+	go func() {
+		var err error
+		for ss := range r2.srv.MCP().Sessions() {
+			for _, l := range []mcp.LoggingLevel{"info", "error"} {
+				err = errors.Join(err, ss.Log(context.Background(), &mcp.LoggingMessageParams{Level: l, Data: string(l)}))
+			}
+		}
+		logged <- err
+	}()
+	if f := r2.frame(); string(f["method"]) != `"notifications/message"` || !strings.Contains(string(f["params"]), `"error"`) {
+		t.Fatalf("first log frame after resume = %v, want only the error one (session log level warning)", f)
+	}
+	if err := <-logged; err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestNoHandoffRejectsCallBeforeInitialize(t *testing.T) {
@@ -281,8 +302,20 @@ func TestHandoffFromEnvAcceptsOnlyAPrivateUnlinkedFile(t *testing.T) {
 	}
 	defer pr.Close()
 	defer pw.Close()
-	if _, err := via(pr); err == nil {
+	fd, err := syscall.Dup(int(pr.Fd()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer syscall.Close(fd)
+	t.Setenv(HandoffFDEnv, itoa(fd))
+	if _, err := HandoffFromEnv(); err == nil {
 		t.Fatal("accepted a pipe")
+	}
+	runtime.GC()
+	pw.WriteString("x")
+	b := make([]byte, 1)
+	if n, err := syscall.Read(fd, b); n != 1 || err != nil {
+		t.Fatalf("rejected descriptor closed: read %d %v", n, err)
 	}
 }
 
@@ -304,5 +337,87 @@ func TestHandoffCarriesCwdAndResumeUsesLiveParent(t *testing.T) {
 	srv2.Resume(context.Background(), ho)
 	if srv2.local(ho.Agents[0].ID) == nil {
 		t.Fatal("agent not resumed from the live parent when the saved parent pid differs")
+	}
+}
+
+// provingHarness carries state and, like Codex for its claims, registers the
+// agents of the session refs ResumeState returns itself, after a proof.
+type provingHarness struct {
+	harness.Harness
+	refs []string
+}
+
+func (p provingHarness) RefreshState() json.RawMessage        { return json.RawMessage(`{}`) }
+func (p provingHarness) ResumeState(json.RawMessage) []string { return p.refs }
+
+// A claim-only agent is not published by the resume before its harness proves
+// it; once the harness registers it, the carried values apply.
+func TestResumeDefersAgentsTheHarnessProves(t *testing.T) {
+	stateDir, sessions := t.TempDir(), t.TempDir()
+	writeClaudeSession(t, sessions, 4242, "claude-sess", "alpha", "/work/alpha")
+	id := claudeID("claude-sess")
+	srv1 := newRigServer(t, stateDir, sessions, 4242, NewFakeBackend())
+	if err := srv1.RegisterSession(context.Background(), harnessReq(4242), ""); err != nil {
+		t.Fatal(err)
+	}
+	srv1.local(id).holdNotice("carried")
+	hs := testHarnesses(t, sessions)
+	hs[1] = provingHarness{Harness: hs[1], refs: []string{"claude-sess"}}
+	srv1.harnesses = hs
+	ho := roundTrip(t, srv1.Handoff(SessionState{}, BinaryIdentity{}))
+	srv1.Close()
+
+	fb := NewFakeBackend()
+	fb.Harnesses = hs[1:]
+	srv2 := New(Options{Backend: fb.AsBackend(), Registry: registry.New(stateDir), Harnesses: hs, PPID: 4242})
+	t.Cleanup(func() { srv2.Close() })
+	srv2.Resume(context.Background(), ho)
+	if srv2.local(id) != nil {
+		t.Fatal("resume registered an agent its harness registers only after the proof")
+	}
+	if err := srv2.RegisterSession(context.Background(), harnessReq(4242), ""); err != nil {
+		t.Fatal(err)
+	}
+	a := srv2.local(id)
+	if a == nil {
+		t.Fatal("not registered after the proof")
+	}
+	a.mu.Lock()
+	notices := slices.Clone(a.pendingNotice)
+	a.mu.Unlock()
+	if !slices.Contains(notices, "carried") {
+		t.Fatalf("pending notices after the proof = %v, want the carried one", notices)
+	}
+}
+
+// A carried agent still waiting to resume, or to be proven by its harness,
+// is carried into the next handoff, so a second refresh in that interval
+// loses neither; a deferred agent its harness then drops is not carried on.
+func TestHandoffCarriesPendingRestorations(t *testing.T) {
+	stateDir, sessions := t.TempDir(), t.TempDir()
+	ho := roundTrip(t, &Handoff{RefreshHandoff: HandoffFormat, Agents: []AgentHandoff{
+		{ID: claudeID("gone-sess"), Harness: "claude", SessionRef: "gone-sess", PendingNotice: []string{"kept"}},
+		{ID: claudeID("proof-sess"), Harness: "claude", SessionRef: "proof-sess"},
+		{ID: claudeID("dropped-sess"), Harness: "claude", SessionRef: "dropped-sess"},
+	}, Harness: map[string]json.RawMessage{"claude": json.RawMessage(`{}`)}})
+	hs := testHarnesses(t, sessions)
+	hs[1] = provingHarness{Harness: hs[1], refs: []string{"proof-sess", "dropped-sess"}}
+	fb := NewFakeBackend()
+	fb.Harnesses = hs[1:]
+	srv := New(Options{Backend: fb.AsBackend(), Registry: registry.New(stateDir), Harnesses: hs, PPID: 4242, SupersedeInterval: time.Hour})
+	t.Cleanup(func() { srv.Close() })
+	srv.Resume(context.Background(), ho)
+	writeClaudeSession(t, sessions, 4242, "dropped-sess", "x", "/w")
+	srv.RetireSession(context.Background(), harnessReq(4242))
+	next := srv.Handoff(SessionState{}, BinaryIdentity{})
+	var ids []string
+	for _, a := range next.Agents {
+		ids = append(ids, a.SessionRef)
+		if a.SessionRef == "gone-sess" && !slices.Equal(a.PendingNotice, []string{"kept"}) {
+			t.Errorf("pending agent's notices = %v", a.PendingNotice)
+		}
+	}
+	if !slices.Equal(ids, []string{"gone-sess", "proof-sess"}) && !slices.Equal(ids, []string{"proof-sess", "gone-sess"}) {
+		t.Fatalf("next handoff agents = %v, want the pending and the still-deferred one", ids)
 	}
 }

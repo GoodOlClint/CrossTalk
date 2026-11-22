@@ -18,6 +18,7 @@ import (
 	"github.com/GoodOlClint/crosstalk/internal/harness"
 	"github.com/GoodOlClint/crosstalk/internal/ownerproof"
 	"github.com/GoodOlClint/crosstalk/internal/peercred"
+	"github.com/GoodOlClint/crosstalk/internal/quiesce"
 	"github.com/GoodOlClint/crosstalk/internal/registry"
 )
 
@@ -135,8 +136,13 @@ func (s *ClaimServer) Serve(ctx context.Context) error {
 		case <-ctx.Done():
 			return nil
 		case <-tick.C:
+			done, ok := quiesce.Hold(ctx)
+			if !ok {
+				return nil
+			}
 			s.Claims.Recheck()
 			s.Scan(ctx)
+			done()
 			if s.OnTick != nil {
 				s.OnTick(ctx)
 			}
@@ -181,6 +187,11 @@ func (s *ClaimServer) accept(ctx context.Context, ln *net.UnixListener) {
 
 func (s *ClaimServer) handle(ctx context.Context, conn *net.UnixConn) {
 	defer conn.Close()
+	done, ok := quiesce.Hold(ctx)
+	if !ok {
+		return
+	}
+	defer done()
 	conn.SetDeadline(time.Now().Add(connBound))
 	pid, err := s.PeerPID(conn)
 	if err != nil {

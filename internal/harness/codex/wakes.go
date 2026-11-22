@@ -15,6 +15,8 @@ import (
 
 	"github.com/google/uuid"
 	"golang.org/x/sys/unix"
+
+	"github.com/GoodOlClint/crosstalk/internal/quiesce"
 )
 
 // WakeText is the whole of a wake row's user input: fixed, with no sender,
@@ -145,7 +147,8 @@ func (w *Wakes) lock(thread string) (func(), error) {
 		mu.Unlock()
 		return nil, err
 	}
-	return func() { unlock(); mu.Unlock() }, nil
+	done := quiesce.Enter()
+	return func() { unlock(); mu.Unlock(); done() }, nil
 }
 
 func flockFile(path string, timeout time.Duration) (func(), error) {
@@ -422,6 +425,11 @@ func (w *Wakes) Pulled(ctx context.Context, thread string, more bool, mailboxed 
 // Tick observes every thread this process has loaded, and keep still
 // accepts, with an open generation. It never writes a row.
 func (w *Wakes) Tick(ctx context.Context, keep func(thread string) bool) {
+	done, ok := quiesce.Hold(ctx)
+	if !ok {
+		return
+	}
+	defer done()
 	w.mu.Lock()
 	var threads []string
 	for t := range w.replayed {

@@ -10,6 +10,7 @@ import (
 	"github.com/GoodOlClint/crosstalk/internal/journal"
 	"github.com/GoodOlClint/crosstalk/internal/mcpserver"
 	"github.com/GoodOlClint/crosstalk/internal/msg"
+	"github.com/GoodOlClint/crosstalk/internal/quiesce"
 	"github.com/GoodOlClint/crosstalk/internal/receiver"
 	"github.com/GoodOlClint/crosstalk/internal/remote"
 )
@@ -181,11 +182,17 @@ func (st *AgentState) armReplyRetry(messageID string) {
 				return
 			case <-rp.After(delay):
 			}
+			hold, ok := quiesce.Hold(st.ctx)
+			if !ok {
+				return
+			}
 			if !st.agent.Admit() {
+				hold()
 				return
 			}
 			done := st.retryReply(messageID)
 			st.agent.Done()
+			hold()
 			if done {
 				return
 			}

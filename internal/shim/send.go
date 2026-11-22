@@ -17,6 +17,7 @@ import (
 	"github.com/GoodOlClint/crosstalk/internal/mcpserver"
 	"github.com/GoodOlClint/crosstalk/internal/msg"
 	"github.com/GoodOlClint/crosstalk/internal/prebind"
+	"github.com/GoodOlClint/crosstalk/internal/quiesce"
 	"github.com/GoodOlClint/crosstalk/internal/receiver"
 	"github.com/GoodOlClint/crosstalk/internal/registry"
 )
@@ -579,6 +580,11 @@ func (st *AgentState) rearmDeadlines() {
 // expire tells this agent's own session that an ask got no reply in time
 // (§8 V15). Work already injected at the target is not stopped.
 func (st *AgentState) expire(ask msg.Message) {
+	hold, ok := quiesce.Hold(st.ctx)
+	if !ok {
+		return
+	}
+	defer hold()
 	if !st.agent.Admit() {
 		return
 	}
@@ -732,7 +738,7 @@ func (s *Shim) Reply(ctx context.Context, from *mcpserver.Agent, messageID, text
 	}
 	if !ok {
 		hint := hintNoRouteUnbound
-		if ts, ok := msg.UUIDv7Time(messageID); ok && ts.Before(st.boundAt.Truncate(time.Millisecond)) {
+		if ts, ok := msg.UUIDv7Time(messageID); ok && ts.Before(st.boundTime().Truncate(time.Millisecond)) {
 			hint = hintNoRoutePreBind
 		}
 		return mcpserver.Result{}, &mcpserver.Error{Code: mcpserver.CodeInvalid, Reason: ReasonNoSuchMessage, Hint: hint}

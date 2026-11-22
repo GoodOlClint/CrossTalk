@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -83,6 +85,8 @@ type Conn struct {
 	hasInit  bool
 	partial  bool
 	rd       chan frameRes // the outstanding frame read, if a Read gave up on it
+	reading  bool          // readFrame is inside in.Read at a frame boundary
+	pausing  bool          // the reader stops at the next frame boundary
 	idle     chan struct{} // closed and replaced on every change
 }
 
@@ -170,12 +174,31 @@ type frameRes struct {
 
 // readFrame runs only while a Read waits for it, so it never reads ahead of a
 // frame nobody asked for. It reads one byte at a time up to '\n', so nothing past the frame is
-// consumed. Close closes the input, which unblocks a Read in progress.
+// consumed. Close closes the input, which unblocks a Read in progress. While
+// pausing it waits at a frame boundary instead of reading.
 func (c *Conn) readFrame() ([]byte, error) {
 	var line []byte
 	var one [1]byte
 	for {
+		if len(line) == 0 && !c.boundary() {
+			return nil, io.EOF
+		}
 		n, err := c.in.Read(one[:])
+		if len(line) == 0 {
+			c.smu.Lock()
+			c.reading = false
+			if n > 0 && one[0] != '\n' {
+				c.partial = true
+			}
+			c.changed()
+			c.smu.Unlock()
+		}
+		if n == 0 && errors.Is(err, os.ErrDeadlineExceeded) {
+			if len(line) > 0 {
+				c.setDeadline(time.Time{})
+			}
+			continue
+		}
 		if n == 0 && err != nil {
 			select {
 			case <-c.closed:
@@ -183,7 +206,6 @@ func (c *Conn) readFrame() ([]byte, error) {
 			default:
 			}
 			if len(line) > 0 && errors.Is(err, io.EOF) {
-				c.setPartial(false)
 				return line, nil
 			}
 			c.setPartial(false)
@@ -198,15 +220,67 @@ func (c *Conn) readFrame() ([]byte, error) {
 			}
 			return line, nil
 		}
-		if len(line) == 0 {
-			c.setPartial(true)
-		}
 		line = append(line, one[0])
 		if len(line) > MaxFrame {
 			c.setPartial(false)
 			return nil, errFrameTooLarge
 		}
 	}
+}
+
+// boundary waits out a pause and marks the next read as one at a frame
+// boundary; it reports false once the Conn is closed.
+func (c *Conn) boundary() bool {
+	for {
+		c.smu.Lock()
+		if !c.pausing {
+			c.reading = true
+			c.changed()
+			c.smu.Unlock()
+			return true
+		}
+		ch := c.idle
+		c.smu.Unlock()
+		select {
+		case <-ch:
+		case <-c.closed:
+			return false
+		}
+	}
+}
+
+func (c *Conn) setDeadline(t time.Time) error {
+	d, ok := c.in.(interface{ SetReadDeadline(time.Time) error })
+	if !ok {
+		return errNoPause
+	}
+	return d.SetReadDeadline(t)
+}
+
+var errNoPause = errors.New("input cannot be paused: no read deadline")
+
+// Pause stops the reader at the next frame boundary; a read waiting for the
+// first byte of a frame is interrupted by a read deadline and consumes
+// nothing. The input must support read deadlines.
+func (c *Conn) Pause() error {
+	c.smu.Lock()
+	c.pausing = true
+	c.changed()
+	c.smu.Unlock()
+	if err := c.setDeadline(time.Now()); err != nil {
+		c.Unpause()
+		return err
+	}
+	return nil
+}
+
+// Unpause lets the reader read again.
+func (c *Conn) Unpause() {
+	c.setDeadline(time.Time{})
+	c.smu.Lock()
+	c.pausing = false
+	c.changed()
+	c.smu.Unlock()
 }
 
 func (c *Conn) setPartial(p bool) {
@@ -219,6 +293,14 @@ func (c *Conn) setPartial(p bool) {
 }
 
 func (c *Conn) accept(line []byte) (jsonrpc.Message, error) {
+	m, err := c.decode(line)
+	if err != nil {
+		c.setPartial(false)
+	}
+	return m, err
+}
+
+func (c *Conn) decode(line []byte) (jsonrpc.Message, error) {
 	var arr []json.RawMessage
 	isBatch := json.Unmarshal(line, &arr) == nil
 	var msgs []jsonrpc.Message
@@ -451,14 +533,28 @@ func (c *Conn) Restore(s SessionState) {
 func (c *Conn) Quiescent() bool {
 	c.smu.Lock()
 	defer c.smu.Unlock()
+	return c.quiescent()
+}
+
+func (c *Conn) quiescent() bool {
 	return !c.partial && len(c.pending) == 0 && c.inflight == 0 && len(c.queue) == 0 && c.werr == nil
 }
 
 // WaitQuiescent blocks until Quiescent or ctx ends.
 func (c *Conn) WaitQuiescent(ctx context.Context) error {
+	return c.wait(ctx, c.quiescent)
+}
+
+// WaitPaused blocks until the Conn is quiescent, paused and no read is
+// outstanding, so an exec loses no input byte, or ctx ends.
+func (c *Conn) WaitPaused(ctx context.Context) error {
+	return c.wait(ctx, func() bool { return c.pausing && !c.reading && c.quiescent() })
+}
+
+func (c *Conn) wait(ctx context.Context, done func() bool) error {
 	for {
 		c.smu.Lock()
-		q := !c.partial && len(c.pending) == 0 && c.inflight == 0 && len(c.queue) == 0 && c.werr == nil
+		q := done()
 		ch := c.idle
 		c.smu.Unlock()
 		if q {

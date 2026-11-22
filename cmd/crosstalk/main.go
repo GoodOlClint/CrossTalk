@@ -147,14 +147,20 @@ func runMCP(stderr io.Writer) int {
 	defer stop()
 	srv := mcpserver.New(sh.MCPOptions())
 	var runOpts []mcpserver.RunOption
-	if ho, err := mcpserver.HandoffFromEnv(); err != nil {
+	ho, err := mcpserver.HandoffFromEnv()
+	if err != nil {
 		slog.Warn("crosstalk mcp: refresh handoff unusable; starting normally", "err", err)
+		ho = nil
 	} else if ho != nil {
 		srv.Resume(ctx, ho)
 		runOpts = append(runOpts, mcpserver.WithHandoff(ho))
 	}
+	home, _ := os.UserHomeDir()
+	in, arm := startRefresh(ctx, home, hs, ho)
+	tr := mcpserver.NewTransport(in, os.Stdout)
+	arm(srv, sh, tr.Conn())
 	stopClaims := serveClaims(ctx, hs, srv)
-	err = srv.Run(ctx, mcpserver.NewTransport(os.Stdin, os.Stdout), runOpts...)
+	err = srv.Run(ctx, tr, runOpts...)
 	return finish(srv, err, stopClaims, sh.Close, stderr)
 }
 

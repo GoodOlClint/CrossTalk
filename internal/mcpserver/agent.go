@@ -9,6 +9,7 @@ import (
 	"github.com/GoodOlClint/crosstalk/internal/adapter"
 	"github.com/GoodOlClint/crosstalk/internal/harness"
 	"github.com/GoodOlClint/crosstalk/internal/journal"
+	"github.com/GoodOlClint/crosstalk/internal/quiesce"
 	"github.com/GoodOlClint/crosstalk/internal/registry"
 )
 
@@ -56,10 +57,14 @@ func (a *Agent) Admit() bool {
 		return false
 	}
 	a.calls.Add(1)
+	quiesce.Inc()
 	return true
 }
 
-func (a *Agent) Done() { a.calls.Done() }
+func (a *Agent) Done() {
+	quiesce.Dec()
+	a.calls.Done()
+}
 
 func (a *Agent) stopCalls() {
 	a.callMu.Lock()
