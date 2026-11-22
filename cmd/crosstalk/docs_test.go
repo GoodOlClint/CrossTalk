@@ -114,3 +114,16 @@ func TestSetupDocCoversStaleShims(t *testing.T) {
 		}
 	}
 }
+
+// A refresh does not wait for an A2A client blocked in await (#239 item 4);
+// ADR 0030 and the setup doc name the limit.
+func TestRefreshAwaitLimitDocumented(t *testing.T) {
+	for _, f := range []string{"docs/decisions/0030-the-shim-re-execs-itself-in-place-when-its-binary-is-replaced.md", "docs/setup.md"} {
+		doc := repoFile(t, f)
+		for _, want := range []string{"blocked in a default-wait", "SendMessage", "drops", "`unknown`"} {
+			if !strings.Contains(doc, want) {
+				t.Errorf("%s lacks %q", f, want)
+			}
+		}
+	}
+}

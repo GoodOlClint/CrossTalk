@@ -158,7 +158,7 @@ func runMCP(stderr io.Writer) int {
 	home, _ := os.UserHomeDir()
 	in, arm := startRefresh(ctx, home, hs, ho)
 	tr := mcpserver.NewTransport(in, os.Stdout)
-	arm(srv, sh, tr.Conn())
+	arm(srv, srv, tr.Conn())
 	stopClaims := serveClaims(ctx, hs, srv)
 	err = srv.Run(ctx, tr, runOpts...)
 	return finish(srv, err, stopClaims, sh.Close, stderr)

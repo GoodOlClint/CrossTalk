@@ -299,17 +299,29 @@ func (s *Server) admitted(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		done, ok := quiesce.TryEnter()
 		if !ok {
-			http.Error(w, "server refreshing", http.StatusServiceUnavailable)
+			unavailable(w, "server refreshing")
 			return
 		}
 		defer done()
 		if !s.admit() {
-			http.Error(w, "server closing", http.StatusServiceUnavailable)
+			unavailable(w, "server closing")
 			return
 		}
 		defer s.wg.Done()
 		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), idleKey{}, done)))
 	})
+}
+
+// unavailable answers a request turned away before any handler ran with a
+// JSON-RPC error whose state is unreachable: nothing was delivered.
+func unavailable(w http.ResponseWriter, reason string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusServiceUnavailable)
+	json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": nil, "error": map[string]any{
+		"code":    -32000,
+		"message": "unreachable: " + reason,
+		"data":    []any{map[string]any{MetaKey: map[string]any{"state": string(adapter.Unreachable), "reason": reason}}},
+	}})
 }
 
 // limitBody rejects oversized requests as JSON-RPC invalid-request errors so the
