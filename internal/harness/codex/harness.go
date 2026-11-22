@@ -43,8 +43,9 @@ type Harness struct {
 	claims ClaimsConfig
 	logger *slog.Logger
 
-	mu    sync.Mutex
-	route *wakeRoute
+	mu     sync.Mutex
+	route  *wakeRoute
+	resume []Binding
 }
 
 var _ harness.Harness = (*Harness)(nil)

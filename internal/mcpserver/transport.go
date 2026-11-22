@@ -28,10 +28,10 @@ var errFrameTooLarge = errors.New("inbound JSON-RPC frame exceeded the maximum l
 // params, the protocol version in the server's initialize response, whether
 // notifications/initialized arrived, and the last logging/setLevel params.
 type SessionState struct {
-	InitializeParams json.RawMessage
-	ProtocolVersion  string
-	Initialized      bool
-	SetLevelParams   json.RawMessage
+	InitializeParams json.RawMessage `json:"initialize_params,omitempty"`
+	ProtocolVersion  string          `json:"protocol_version,omitempty"`
+	Initialized      bool            `json:"initialized,omitempty"`
+	SetLevelParams   json.RawMessage `json:"set_level_params,omitempty"`
 }
 
 // Transport is the shim's own mcp.Transport over a byte stream pair. Unlike
@@ -435,6 +435,15 @@ func (c *Conn) State() SessionState {
 	s.InitializeParams = append(json.RawMessage(nil), s.InitializeParams...)
 	s.SetLevelParams = append(json.RawMessage(nil), s.SetLevelParams...)
 	return s
+}
+
+// Restore sets the state a refreshed process inherits, so the next refresh
+// carries it on and the batch rule follows the negotiated version.
+func (c *Conn) Restore(s SessionState) {
+	c.smu.Lock()
+	defer c.smu.Unlock()
+	c.state = s
+	c.hasInit = len(s.InitializeParams) > 0
 }
 
 // Quiescent reports that no frame is half-read, no read request still owes a

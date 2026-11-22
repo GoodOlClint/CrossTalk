@@ -94,6 +94,27 @@ func (s *Shim) state(a *mcpserver.Agent) (*AgentState, error) {
 	return st, nil
 }
 
+// RefreshExport implements mcpserver.Refresher.
+func (s *Shim) RefreshExport(a *mcpserver.Agent, h *mcpserver.AgentHandoff) {
+	s.mu.Lock()
+	st := s.agents[a.ID()]
+	s.mu.Unlock()
+	if st != nil && st.agent == a {
+		h.Binding, h.BoundAt = st.binding, st.boundAt
+	}
+}
+
+// RefreshResume implements mcpserver.Refresher: the pre-bind hint for
+// no_such_message keeps the time the session first bound, not the refresh.
+func (s *Shim) RefreshResume(a *mcpserver.Agent, h mcpserver.AgentHandoff) {
+	s.mu.Lock()
+	st := s.agents[a.ID()]
+	s.mu.Unlock()
+	if st != nil && st.agent == a && !h.BoundAt.IsZero() {
+		st.boundAt = h.BoundAt
+	}
+}
+
 // BindHarness confirms which conversation the agent is (§3 F2) through the
 // harness that identified it.
 func (s *Shim) BindHarness(ctx context.Context, a *mcpserver.Agent) (adapter.Binding, error) {

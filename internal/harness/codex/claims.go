@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -264,6 +265,55 @@ func (c *Claims) Threads() []string {
 	}
 	slices.Sort(out)
 	return out
+}
+
+// Snapshot lists the proven claims, sorted by thread.
+func (c *Claims) Snapshot() []Binding {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]Binding, 0, len(c.byID))
+	for _, b := range c.byID {
+		out = append(out, *b)
+	}
+	slices.SortFunc(out, func(a, b Binding) int { return strings.Compare(a.Claim.SessionID, b.Claim.SessionID) })
+	return out
+}
+
+// Resume proves each carried claim again by the target check only and binds
+// the ones that pass, registering the agent again if the resume could not
+// (RegisterSession finds an existing one). A claim that fails either step is
+// dropped and its agent retired, as Recheck does; a durable file for it is
+// then tried by the normal scan. It returns the dropped
+// threads, sorted.
+func (c *Claims) Resume(ctx context.Context, carried []Binding) []string {
+	var dropped []string
+	for _, b := range carried {
+		t := b.Claim.SessionID
+		err := c.proveTarget(t)
+		c.regMu.Lock()
+		if err == nil {
+			req := harness.RequestContext{Meta: map[string]any{"threadId": t}}
+			err = c.opt.Registrar.RegisterSession(ctx, req, b.Claim.Cwd)
+		}
+		if err == nil {
+			c.mu.Lock()
+			c.byID[t] = &Binding{Claim: b.Claim, Live: b.Live}
+			c.mu.Unlock()
+			c.regMu.Unlock()
+			continue
+		}
+		dropped = append(dropped, t)
+		c.retire(ctx, t, err)
+		c.regMu.Unlock()
+	}
+	slices.Sort(dropped)
+	return dropped
+}
+
+func (c *Claims) retire(ctx context.Context, thread string, why error) {
+	req := harness.RequestContext{Meta: map[string]any{"threadId": thread}}
+	retired, rerr := c.opt.Registrar.RetireSession(ctx, req)
+	c.logger.Info("codex claim dropped on refresh", "thread", thread, "err", why, "retired", retired, "retire_err", rerr)
 }
 
 // Recheck re-runs each claimed thread's own proof and revokes only the

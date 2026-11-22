@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/GoodOlClint/crosstalk/internal/harness/codex"
+	"github.com/GoodOlClint/crosstalk/internal/mcpserver"
 )
 
 func TestRun(t *testing.T) {
@@ -79,5 +81,26 @@ func TestCodexEndpointsFromEnv(t *testing.T) {
 		if !slices.Contains(got, want) {
 			t.Fatalf("KnownEndpoints %v lacks %s", got, want)
 		}
+	}
+}
+
+func TestVersionJSONReportsRefreshHandoff(t *testing.T) {
+	var out, errb bytes.Buffer
+	if code := run([]string{"version", "--json"}, &out, &errb); code != 0 {
+		t.Fatalf("exit %d: %s", code, errb.String())
+	}
+	var got struct {
+		Version        string `json:"version"`
+		RefreshHandoff int    `json:"refresh_handoff"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("not JSON: %q: %v", out.String(), err)
+	}
+	if got.Version != mcpserver.Version || got.RefreshHandoff != mcpserver.HandoffFormat || got.RefreshHandoff < 1 {
+		t.Fatalf("version --json = %+v", got)
+	}
+	out.Reset()
+	if code := run([]string{"version"}, &out, &errb); code != 0 || out.String() != mcpserver.Version+"\n" {
+		t.Fatalf("plain version = %d %q", code, out.String())
 	}
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -57,8 +58,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	case "hook":
 		return runHook(args[1:], os.Stdin, stdout, stderr)
 	case "version":
-		fmt.Fprintln(stdout, mcpserver.Version)
-		return 0
+		return runVersion(args[1:], stdout, stderr)
 	case "help", "-h", "--help":
 		fmt.Fprint(stdout, usage)
 		return 0
@@ -66,6 +66,26 @@ func run(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "crosstalk: unknown command %q\n%s", args[0], usage)
 		return 2
 	}
+}
+
+// runVersion prints the version; --json adds refresh_handoff, the handoff
+// format this binary writes and reads, which a refreshing shim checks before
+// it execs (ADR 0030).
+func runVersion(args []string, stdout, stderr io.Writer) int {
+	switch {
+	case len(args) == 0:
+		fmt.Fprintln(stdout, mcpserver.Version)
+	case len(args) == 1 && args[0] == "--json":
+		b, _ := json.Marshal(struct {
+			Version        string `json:"version"`
+			RefreshHandoff int    `json:"refresh_handoff"`
+		}{mcpserver.Version, mcpserver.HandoffFormat})
+		fmt.Fprintln(stdout, string(b))
+	default:
+		fmt.Fprintln(stderr, "usage: crosstalk version [--json]")
+		return 2
+	}
+	return 0
 }
 
 func isTerminal(f *os.File) bool {
@@ -126,8 +146,15 @@ func runMCP(stderr io.Writer) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	srv := mcpserver.New(sh.MCPOptions())
+	var runOpts []mcpserver.RunOption
+	if ho, err := mcpserver.HandoffFromEnv(); err != nil {
+		slog.Warn("crosstalk mcp: refresh handoff unusable; starting normally", "err", err)
+	} else if ho != nil {
+		srv.Resume(ctx, ho)
+		runOpts = append(runOpts, mcpserver.WithHandoff(ho))
+	}
 	stopClaims := serveClaims(ctx, hs, srv)
-	err = srv.Run(ctx, mcpserver.NewTransport(os.Stdin, os.Stdout))
+	err = srv.Run(ctx, mcpserver.NewTransport(os.Stdin, os.Stdout), runOpts...)
 	return finish(srv, err, stopClaims, sh.Close, stderr)
 }
 

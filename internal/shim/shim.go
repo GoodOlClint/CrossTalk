@@ -133,6 +133,7 @@ var (
 	_ mcpserver.HarnessBinder = (*Shim)(nil)
 	_ mcpserver.AgentCloser   = (*Shim)(nil)
 	_ mcpserver.Publisher     = (*Shim)(nil)
+	_ mcpserver.Refresher     = (*Shim)(nil)
 )
 
 func New(opt Options) (*Shim, error) {
