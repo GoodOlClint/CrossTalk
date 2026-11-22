@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -156,9 +157,10 @@ func runMCP(stderr io.Writer) int {
 		runOpts = append(runOpts, mcpserver.WithHandoff(ho))
 	}
 	home, _ := os.UserHomeDir()
-	in, arm := startRefresh(ctx, home, hs, ho)
+	in, arm, armed := startRefresh(ctx, home, hs, ho)
 	tr := mcpserver.NewTransport(in, os.Stdout)
 	arm(srv, srv, tr.Conn())
+	startFollowUp(ctx, armed, followUpEnv(os.Args[0], home, stateDir), hs, filepath.Join(home, ".config", "crosstalk"), srv.HoldNotice)
 	stopClaims := serveClaims(ctx, hs, srv)
 	err = srv.Run(ctx, tr, runOpts...)
 	return finish(srv, err, stopClaims, sh.Close, stderr)

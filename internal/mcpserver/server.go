@@ -80,6 +80,8 @@ type Server struct {
 	// timedOut keeps retired agents reachable: a collected *os.File's finalizer
 	// would drop the agent flock before process exit.
 	timedOut []*Agent
+	// held are notices for the first agent to bind, when none was bound.
+	held []string
 }
 
 func DefaultOptions(b Backend, hs ...harness.Harness) (Options, error) {
@@ -474,6 +476,13 @@ func (s *Server) agent(ctx context.Context, c caller, viaCall bool) (*Agent, *Er
 		}
 		a.Admit()
 		a.holdNotice(notice)
+		s.mu.Lock()
+		held := s.held
+		s.held = nil
+		s.mu.Unlock()
+		for _, n := range held {
+			a.holdNotice(n)
+		}
 		close(a.ready)
 		return a, nil
 	}
@@ -779,6 +788,22 @@ func errResult(e *Error) (*mcp.CallToolResult, any, error) {
 		e = &c
 	}
 	return &mcp.CallToolResult{IsError: true}, e, nil
+}
+
+// HoldNotice puts n on the next tool result of every agent this process has
+// bound; with none bound yet, on the first one that binds.
+func (s *Server) HoldNotice(n string) {
+	s.mu.Lock()
+	if len(s.agents) == 0 {
+		s.held = append(s.held, n)
+		s.mu.Unlock()
+		return
+	}
+	agents := slices.Collect(maps.Values(s.agents))
+	s.mu.Unlock()
+	for _, a := range agents {
+		a.holdNotice(n)
+	}
 }
 
 func withNotice(out any, notice string) any {

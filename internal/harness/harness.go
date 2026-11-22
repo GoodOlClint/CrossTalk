@@ -232,6 +232,14 @@ type Installer interface {
 	SetUp(env InstallEnv) (bool, error)
 }
 
+// PluginUpdater is implemented by an Installer whose plugin step and K1 can
+// run alone, as the upgrade follow-up does (ADR 0031). PluginStep is the
+// plugin step InstallSteps uses; PluginCheck runs K1 and no other check.
+type PluginUpdater interface {
+	PluginStep(env InstallEnv) Step
+	PluginCheck(ctx context.Context, env InstallEnv) CheckResult
+}
+
 // Leftover is implemented by a harness whose uninstall leaves CrossTalk
 // config in place (Claude's local- and project-scope entries). Uninstall keeps
 // the binary and state while it reports a description or an error. With anyBin

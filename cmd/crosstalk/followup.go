@@ -1,0 +1,157 @@
+package main
+
+import (
+	"cmp"
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"os"
+	"strconv"
+	"time"
+
+	"github.com/GoodOlClint/crosstalk/internal/harness"
+	"github.com/GoodOlClint/crosstalk/internal/mcpserver"
+	"github.com/GoodOlClint/crosstalk/internal/refresh"
+	"github.com/GoodOlClint/crosstalk/internal/remote"
+	"github.com/GoodOlClint/crosstalk/internal/upgrade"
+)
+
+// followUpSettle bounds the wait for a restarted gateway to take gateway.lock.
+var followUpSettle = 10 * time.Second
+
+const (
+	followUpStepTimeout = 5 * time.Minute
+	followUpInterval    = 15 * time.Minute
+	followUpBound       = 6 * time.Hour
+)
+
+func installMarketplace() string {
+	return cmp.Or(os.Getenv("CROSSTALK_MARKETPLACE"), "GoodOlClint/CrossTalk")
+}
+
+var errNoHandshake = errors.New("the upgrade follow-up starts no registered command")
+
+// followUpEnv is the install environment of the follow-up: harness commands
+// run without a terminal and the K6 handshake is refused.
+func followUpEnv(bin, home, stateDir string) harness.InstallEnv {
+	return harness.InstallEnv{
+		Bin: bin, Version: mcpserver.Version, Home: home, StateDir: stateDir,
+		Run:         installRun,
+		Handshake:   func(context.Context, string, []string, []string) error { return errNoHandshake },
+		Marketplace: installMarketplace(),
+		Out:         io.Discard,
+	}
+}
+
+// gatewayOnBin waits up to wait for the process holding gateway.lock to run
+// bin.
+func gatewayOnBin(ctx context.Context, stateDir, bin string, wait time.Duration) error {
+	deadline := time.Now().Add(wait)
+	for {
+		held, err := remote.GatewayLockHeld(stateDir)
+		var why error
+		switch pid, perr := strconv.Atoi(remote.GatewayHolderPID(stateDir)); {
+		case err != nil:
+			why = err
+		case !held || perr != nil:
+			why = errors.New("no gateway is running")
+		default:
+			runs, known := gatewayRunsBin(pid, bin)
+			switch {
+			case runs && known:
+				return nil
+			case !known:
+				why = fmt.Errorf("could not tell which binary the gateway (pid %d) runs", pid)
+			default:
+				why = fmt.Errorf("the gateway (pid %d) does not run %s", pid, bin)
+			}
+		}
+		if !time.Now().Before(deadline) {
+			return why
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+}
+
+func gatewayTarget(env harness.InstallEnv, cfgDir string) upgrade.Target {
+	return upgrade.Target{
+		Name: "gateway",
+		Run: func(ctx context.Context, w io.Writer) error {
+			held, err := remote.GatewayLockHeld(env.StateDir)
+			if err != nil {
+				return err
+			}
+			pid, perr := strconv.Atoi(remote.GatewayHolderPID(env.StateDir))
+			if !held || perr != nil {
+				return nil
+			}
+			runs, known := gatewayRunsBin(pid, env.Bin)
+			if !known {
+				return fmt.Errorf("could not tell which binary the gateway (pid %d) runs; not restarting it unattended", pid)
+			}
+			if runs {
+				return nil
+			}
+			return gatewayRestartStep(env.Home, cfgDir, env.StateDir, env.Bin, w).Apply(ctx)
+		},
+		Verify: func(ctx context.Context) error { return gatewayOnBin(ctx, env.StateDir, env.Bin, followUpSettle) },
+	}
+}
+
+// followUpTargets are the harnesses that are found, set up and can update
+// their plugin alone, then the gateway when CrossTalk's login unit exists.
+func followUpTargets(env harness.InstallEnv, hs []harness.Harness, cfgDir string) []upgrade.Target {
+	var ts []upgrade.Target
+	for _, h := range hs {
+		in, ok := h.(harness.Installer)
+		pu, ok2 := h.(harness.PluginUpdater)
+		if !ok || !ok2 || !in.Found() {
+			continue
+		}
+		if up, err := in.SetUp(env); !up && err == nil {
+			continue
+		}
+		step := pu.PluginStep(env)
+		ts = append(ts, upgrade.Target{
+			Name: string(h.Name()),
+			Run: func(ctx context.Context, _ io.Writer) error {
+				ctx, cancel := context.WithTimeout(ctx, followUpStepTimeout)
+				defer cancel()
+				return step.Apply(ctx)
+			},
+			Verify: func(ctx context.Context) error {
+				if r := pu.PluginCheck(ctx, env); !r.OK {
+					return errors.New(r.Detail)
+				}
+				return nil
+			},
+		})
+	}
+	if _, _, present, owned, _ := unitOwnership(env.Home, cfgDir); present && owned {
+		ts = append(ts, gatewayTarget(env, cfgDir))
+	}
+	return ts
+}
+
+func followUpRunner(env harness.InstallEnv, hs []harness.Harness, cfgDir string, notice func(string)) *upgrade.Runner {
+	return &upgrade.Runner{
+		StateDir: env.StateDir, Version: env.Version, Notice: notice,
+		Targets:  followUpTargets(env, hs, cfgDir),
+		Interval: followUpInterval, Bound: followUpBound,
+	}
+}
+
+// startFollowUp runs the upgrade follow-up in the background when refresh is
+// armed and not turned off (ADR 0031).
+func startFollowUp(ctx context.Context, armed bool, env harness.InstallEnv, hs []harness.Harness, cfgDir string, notice func(string)) bool {
+	if !armed || refresh.Off() {
+		return false
+	}
+	go followUpRunner(env, hs, cfgDir, notice).Run(ctx)
+	return true
+}

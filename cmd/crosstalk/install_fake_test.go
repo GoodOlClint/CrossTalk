@@ -59,7 +59,11 @@ func installFakeClaude(home string, args []string) int {
 		}
 		os.Stdout.Write(b)
 	case a == "plugin install crosstalk@crosstalk", a == "plugin update crosstalk@crosstalk":
-		installFakeWriteJSON(plugins, []map[string]any{{"id": "crosstalk@crosstalk", "version": mcpserver.Version}})
+		v := os.Getenv("INSTALL_FAKE_PLUGIN_VERSION")
+		if v == "" {
+			v = mcpserver.Version
+		}
+		installFakeWriteJSON(plugins, []map[string]any{{"id": "crosstalk@crosstalk", "version": v}})
 	case a == "plugin uninstall crosstalk":
 		os.Remove(plugins)
 	case strings.HasPrefix(a, "plugin marketplace "):

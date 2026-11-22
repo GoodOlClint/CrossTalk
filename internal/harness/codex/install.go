@@ -564,13 +564,14 @@ func (h *Harness) k9(ctx context.Context, env harness.InstallEnv) harness.CheckR
 	return r
 }
 
-func (h *Harness) Checks(ctx context.Context, env harness.InstallEnv) []harness.CheckResult {
+type manifest struct {
+	Version    string `json:"version"`
+	MCPServers any    `json:"mcpServers"`
+}
+
+func k1(env harness.InstallEnv) (harness.CheckResult, *manifest) {
 	k1 := harness.CheckResult{ID: "K1"}
-	k2 := harness.CheckResult{ID: "K2"}
-	var man struct {
-		Version    string `json:"version"`
-		MCPServers any    `json:"mcpServers"`
-	}
+	var man manifest
 	pv := installedVersion(env)
 	mp := pluginManifest(env.Home, pv)
 	b, err := os.ReadFile(mp)
@@ -578,12 +579,29 @@ func (h *Harness) Checks(ctx context.Context, env harness.InstallEnv) []harness.
 		err = json.Unmarshal(b, &man)
 	}
 	if err != nil {
-		k1.Detail, k2.Detail = "plugin "+pluginID+" "+pv+" is not installed: "+err.Error(), "plugin manifest unreadable"
+		k1.Detail = "plugin " + pluginID + " " + pv + " is not installed: " + err.Error()
+		return k1, nil
+	}
+	k1.OK, k1.Detail = harness.PluginAcceptable(env.Version, man.Version), mp+" has version "+man.Version
+	if k1.OK && man.Version != env.Version {
+		k1.Detail += harness.RCNote
+	}
+	return k1, &man
+}
+
+func (h *Harness) PluginStep(env harness.InstallEnv) harness.Step { return pluginStep(env) }
+
+func (h *Harness) PluginCheck(_ context.Context, env harness.InstallEnv) harness.CheckResult {
+	r, _ := k1(env)
+	return r
+}
+
+func (h *Harness) Checks(ctx context.Context, env harness.InstallEnv) []harness.CheckResult {
+	k2 := harness.CheckResult{ID: "K2"}
+	k1, man := k1(env)
+	if man == nil {
+		k2.Detail = "plugin manifest unreadable"
 	} else {
-		k1.OK, k1.Detail = harness.PluginAcceptable(env.Version, man.Version), mp+" has version "+man.Version
-		if k1.OK && man.Version != env.Version {
-			k1.Detail += harness.RCNote
-		}
 		k2.OK, k2.Detail = man.MCPServers == nil, "the installed plugin declares no server"
 		if !k2.OK {
 			k2.Detail = "the installed plugin starts its own server too; update the plugin"

@@ -60,7 +60,13 @@ func TestUninstallReverses(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(bin, "crosstalk")); !os.IsNotExist(err) {
 		t.Errorf("binary still there: %v", err)
 	}
-	if fmt.Sprint(installSnapshot(t, state)) != fmt.Sprint(preState) {
+	postState := installSnapshot(t, state)
+	for p := range postState {
+		if p == filepath.Join(state, "upgrade.lock") || p == filepath.Join(state, "upgrade") || strings.HasPrefix(p, filepath.Join(state, "upgrade")+"/") {
+			delete(postState, p)
+		}
+	}
+	if fmt.Sprint(postState) != fmt.Sprint(preState) {
 		t.Error("state dir changed")
 	}
 	log := installRead(t, filepath.Join(home, "fake.log"))
