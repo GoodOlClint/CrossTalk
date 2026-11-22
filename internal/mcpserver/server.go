@@ -82,6 +82,8 @@ type Server struct {
 	timedOut []*Agent
 	// held are notices for the first agent to bind, when none was bound.
 	held []string
+	// bindHook runs under mu just before a new agent's ready closes; tests only.
+	bindHook func()
 }
 
 func DefaultOptions(b Backend, hs ...harness.Harness) (Options, error) {
@@ -477,13 +479,15 @@ func (s *Server) agent(ctx context.Context, c caller, viaCall bool) (*Agent, *Er
 		a.Admit()
 		a.holdNotice(notice)
 		s.mu.Lock()
-		held := s.held
-		s.held = nil
-		s.mu.Unlock()
-		for _, n := range held {
+		for _, n := range s.held {
 			a.holdNotice(n)
 		}
+		s.held = nil
+		if s.bindHook != nil {
+			s.bindHook()
+		}
 		close(a.ready)
+		s.mu.Unlock()
 		return a, nil
 	}
 	a.viaCall = a.viaCall || viaCall

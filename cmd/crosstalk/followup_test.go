@@ -605,3 +605,24 @@ func TestFollowUpRetryDropsRemovedUnit(t *testing.T) {
 		t.Fatalf("unit calls %v, waits %d: a retry restarted a gateway whose unit was removed", unitRec.all(), waits)
 	}
 }
+
+func TestShimTestsKeepHarnessCLIsOffPath(t *testing.T) {
+	dir := t.TempDir()
+	for _, c := range []string{"claude", "codex"} {
+		os.WriteFile(filepath.Join(dir, c), []byte("#!/bin/sh\nexit 0\n"), 0o755)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	var path string
+	for _, e := range shimEnv(t.TempDir()) {
+		if v, ok := strings.CutPrefix(e, "PATH="); ok {
+			path = v
+		}
+	}
+	for _, c := range []string{"claude", "codex"} {
+		for _, d := range filepath.SplitList(path) {
+			if _, err := os.Stat(filepath.Join(d, c)); err == nil {
+				t.Errorf("a test shim's PATH finds %s in %s: its follow-up would run the real CLI", c, d)
+			}
+		}
+	}
+}

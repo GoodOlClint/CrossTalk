@@ -4,6 +4,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestFollowUpNoticeOnce(t *testing.T) {
@@ -55,5 +56,29 @@ func TestFollowUpNoticeNotLostWithProvisionalAgent(t *testing.T) {
 	srv.mu.Unlock()
 	if prov.takeNotice("") != "" || !slices.Contains(held, "n") {
 		t.Fatalf("notice went to an agent still binding: held=%q", held)
+	}
+}
+
+func TestFollowUpNoticeDuringBindNotLost(t *testing.T) {
+	stateDir, sessions := t.TempDir(), t.TempDir()
+	writeClaudeSession(t, sessions, 4242, "claude-sess", "alpha", "/work/alpha")
+	srv := newRigServer(t, stateDir, sessions, 4242, NewFakeBackend())
+	const n = "CrossTalk 9.9.9 upgrade: updated claude"
+	sent := make(chan struct{})
+	srv.bindHook = func() {
+		srv.bindHook = nil
+		go func() { srv.HoldNotice(n); close(sent) }()
+		time.Sleep(50 * time.Millisecond)
+	}
+	r := startRig(t, srv)
+	r.handshake()
+	first := r.rpc(3, "tools/call", `{"name":"send_message","arguments":{"to":"bob","text":"hi"}}`)
+	<-sent
+	next := r.rpc(4, "tools/call", `{"name":"send_message","arguments":{"to":"bob","text":"a"}}`)
+	if !strings.Contains(string(first["result"])+string(next["result"]), n) {
+		srv.mu.Lock()
+		held := slices.Clone(srv.held)
+		srv.mu.Unlock()
+		t.Fatalf("notice sent while the first agent was binding never reached a tool result (server still holds %q)", held)
 	}
 }

@@ -31,7 +31,7 @@ func TestMCPRegistersClaudeSessionAtStart(t *testing.T) {
 		t.Fatal(err)
 	}
 	cmd := exec.Command(bin, "mcp")
-	cmd.Env = append(os.Environ(), "HOME="+home)
+	cmd.Env = shimEnv(home)
 	in, err := cmd.StdinPipe()
 	if err != nil {
 		t.Fatal(err)

@@ -64,9 +64,16 @@ func startShim(t *testing.T, bin, home string, env ...string) *mcpProc {
 	return startShimCmd(t, exec.Command(bin, "mcp"), home, env...)
 }
 
+// shimEnv is the test process's environment for a real shim under home,
+// with PATH cut to the system directories so its upgrade follow-up never
+// finds the real claude or codex CLI. exec keeps the last of duplicate keys.
+func shimEnv(home string, env ...string) []string {
+	return append(append(os.Environ(), "PATH=/usr/bin:/bin:/usr/sbin:/sbin", "HOME="+home), env...)
+}
+
 func startShimCmd(t *testing.T, cmd *exec.Cmd, home string, env ...string) *mcpProc {
 	t.Helper()
-	cmd.Env = append(append(os.Environ(), "HOME="+home), env...)
+	cmd.Env = shimEnv(home, env...)
 	in, err := cmd.StdinPipe()
 	if err != nil {
 		t.Fatal(err)
@@ -291,7 +298,7 @@ func TestRefreshNotArmedForRelativeArgv0(t *testing.T) {
 	}
 	cmd := exec.Command(bin, "mcp")
 	cmd.Args[0], cmd.Dir = "crosstalk", filepath.Dir(bin)
-	p := startShimCmd(t, cmd, home, "PATH="+filepath.Dir(bin)+string(os.PathListSeparator)+os.Getenv("PATH"))
+	p := startShimCmd(t, cmd, home, "PATH="+filepath.Dir(bin)+":/usr/bin:/bin:/usr/sbin:/sbin")
 	noRefreshAfter(t, p, func() { replaceByRename(t, bin, "9.9.2") })
 }
 
