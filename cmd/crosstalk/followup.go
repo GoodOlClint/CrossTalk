@@ -164,8 +164,10 @@ func followUpRunner(env harness.InstallEnv, hs []harness.Harness, cfgDir string,
 }
 
 // startFollowUp runs the upgrade follow-up in the background when refresh is
-// armed and not turned off (ADR 0031); stop cancels it and waits for it.
-func startFollowUp(ctx context.Context, armed bool, env harness.InstallEnv, hs []harness.Harness, cfgDir string, notice func(string)) (stop func(), started bool) {
+// armed and not turned off (ADR 0031), once bound closes: a shim that serves
+// no session, such as a `claude mcp list` probe, never starts it. stop cancels
+// it and waits for it.
+func startFollowUp(ctx context.Context, armed bool, bound <-chan struct{}, env harness.InstallEnv, hs []harness.Harness, cfgDir string, notice func(string)) (stop func(), started bool) {
 	if !armed || refresh.Off() {
 		return func() {}, false
 	}
@@ -173,6 +175,11 @@ func startFollowUp(ctx context.Context, armed bool, env harness.InstallEnv, hs [
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
+		select {
+		case <-ctx.Done():
+			return
+		case <-bound:
+		}
 		followUpRunner(env, hs, cfgDir, notice).Run(ctx)
 	}()
 	return func() { cancel(); <-done }, true
