@@ -28,6 +28,7 @@ import (
 
 	"github.com/GoodOlClint/crosstalk/internal/adapter"
 	"github.com/GoodOlClint/crosstalk/internal/msg"
+	"github.com/GoodOlClint/crosstalk/internal/quiesce"
 	"github.com/GoodOlClint/crosstalk/internal/receiver"
 	"github.com/GoodOlClint/crosstalk/internal/registry"
 	"github.com/GoodOlClint/crosstalk/internal/udsingress"
@@ -143,6 +144,7 @@ type Server struct {
 
 	tasks   *store
 	waiting int
+	paused  chan struct{} // closed by Unpause; nil when not paused
 
 	beforeReceive func(messageID string)
 }
@@ -295,12 +297,18 @@ func (c *corsStripper) Write(b []byte) (int, error) {
 // does not wait for running handlers, and they write the journal.
 func (s *Server) admitted(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		done, ok := quiesce.TryEnter()
+		if !ok {
+			http.Error(w, "server refreshing", http.StatusServiceUnavailable)
+			return
+		}
+		defer done()
 		if !s.admit() {
 			http.Error(w, "server closing", http.StatusServiceUnavailable)
 			return
 		}
 		defer s.wg.Done()
-		next.ServeHTTP(w, r)
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), idleKey{}, done)))
 	})
 }
 
@@ -334,10 +342,82 @@ func (s *Server) Serve(ctx context.Context) error {
 	}
 	stop := context.AfterFunc(ctx, func() { s.Close() })
 	defer stop()
-	if err := srv.Serve(ln); !errors.Is(err, http.ErrServerClosed) {
-		return err
+	for {
+		err := srv.Serve(ln)
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		if ln = s.unpaused(); ln == nil {
+			return err
+		}
 	}
-	return nil
+}
+
+// idleKey carries a request's quiesce token to await, which releases it: a
+// request waiting for its task holds no work a refresh must wait for.
+type idleKey struct{}
+
+// unpaused waits out a pause and returns the new listener, or nil when the
+// server is not paused, closes meanwhile, or could not listen again.
+func (s *Server) unpaused() net.Listener {
+	s.mu.Lock()
+	ch := s.paused
+	s.mu.Unlock()
+	if ch == nil {
+		return nil
+	}
+	select {
+	case <-ch:
+	case <-s.closed:
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.paused != nil {
+		return nil
+	}
+	return s.ln
+}
+
+// Pause closes the listener, so a peer's dial is refused (unreachable), and
+// keeps Serve waiting for Unpause; idle keep-alive connections are closed.
+func (s *Server) Pause() error {
+	s.mu.Lock()
+	if s.ln == nil || s.paused != nil {
+		s.mu.Unlock()
+		return nil
+	}
+	select {
+	case <-s.closed:
+		s.mu.Unlock()
+		return nil
+	default:
+	}
+	s.paused = make(chan struct{})
+	ln, srv := s.ln, s.srv
+	s.mu.Unlock()
+	srv.SetKeepAlivesEnabled(false)
+	return ln.Close()
+}
+
+// Unpause listens on the same address again, so the published URL stays
+// valid, and lets Serve accept on it.
+func (s *Server) Unpause() error {
+	s.mu.Lock()
+	ch, addr, srv := s.paused, s.ln.Addr().String(), s.srv
+	s.mu.Unlock()
+	if ch == nil {
+		return nil
+	}
+	ln, err := net.Listen("tcp", addr)
+	s.mu.Lock()
+	if err == nil {
+		s.ln, s.paused = ln, nil
+	}
+	s.mu.Unlock()
+	srv.SetKeepAlivesEnabled(true)
+	close(ch)
+	return err
 }
 
 // ErrWorkersRunning: Close gave up waiting for in-flight receives, which may

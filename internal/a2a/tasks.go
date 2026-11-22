@@ -16,6 +16,7 @@ import (
 	"github.com/GoodOlClint/crosstalk/internal/adapter"
 	"github.com/GoodOlClint/crosstalk/internal/journal"
 	"github.com/GoodOlClint/crosstalk/internal/msg"
+	"github.com/GoodOlClint/crosstalk/internal/quiesce"
 	"github.com/GoodOlClint/crosstalk/internal/receiver"
 )
 
@@ -743,6 +744,9 @@ func (s *Server) leaveWait() {
 
 // await blocks until t is terminal; there is no server timeout (§5 Waiting).
 func (s *Server) await(ctx context.Context, t *task) error {
+	if idle, ok := ctx.Value(idleKey{}).(func()); ok {
+		idle()
+	}
 	select {
 	case <-t.done:
 		return nil
@@ -774,8 +778,10 @@ func (s *Server) start(t *task, in receiver.Inbound, resume bool) bool {
 	if !resume {
 		s.armDeadline(t)
 	}
+	done := quiesce.Enter()
 	go func() {
 		defer s.wg.Done()
+		defer done()
 		if s.beforeReceive != nil {
 			s.beforeReceive(t.messageID)
 		}
@@ -793,6 +799,11 @@ func (s *Server) armDeadline(t *task) {
 		return
 	}
 	expire := func() {
+		done, ok := quiesce.Hold(s.base)
+		if !ok {
+			return
+		}
+		defer done()
 		if !s.admit() {
 			return
 		}

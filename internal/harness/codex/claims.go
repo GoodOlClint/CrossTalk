@@ -14,6 +14,7 @@ import (
 
 	"github.com/GoodOlClint/crosstalk/internal/harness"
 	"github.com/GoodOlClint/crosstalk/internal/ownerproof"
+	"github.com/GoodOlClint/crosstalk/internal/quiesce"
 )
 
 var (
@@ -190,6 +191,7 @@ func probeLock(path string) *sync.Mutex {
 // retried up to Tries times, Interval apart, so a transient second opener
 // does not fail it; one that stays does.
 func (c *Claims) proveTarget(thread string) error {
+	defer quiesce.Enter()()
 	if !sessionIDRe.MatchString(thread) {
 		return ErrBadSessionID
 	}

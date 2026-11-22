@@ -40,19 +40,23 @@ func (h *Harness) RefreshState() json.RawMessage {
 	return b
 }
 
-// ResumeState keeps the carried claims for ServeClaims to prove again.
-func (h *Harness) ResumeState(raw json.RawMessage) {
+// ResumeState keeps the carried claims for ServeClaims to prove again and
+// returns their threads, which ServeClaims registers after the proof.
+func (h *Harness) ResumeState(raw json.RawMessage) []string {
 	var st refreshState
 	if json.Unmarshal(raw, &st) != nil {
-		return
+		return nil
 	}
 	var bs []Binding
+	var threads []string
 	for _, c := range st.Claims {
 		bs = append(bs, Binding{Claim: c.Claim, Live: c.Live})
+		threads = append(threads, c.Claim.SessionID)
 	}
 	h.mu.Lock()
 	h.resume = bs
 	h.mu.Unlock()
+	return threads
 }
 
 func (h *Harness) takeResume() []Binding {

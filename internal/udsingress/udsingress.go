@@ -23,6 +23,7 @@ import (
 	"github.com/GoodOlClint/crosstalk/internal/msg"
 	"github.com/GoodOlClint/crosstalk/internal/peercred"
 	"github.com/GoodOlClint/crosstalk/internal/procstart"
+	"github.com/GoodOlClint/crosstalk/internal/quiesce"
 	"github.com/GoodOlClint/crosstalk/internal/receiver"
 	"github.com/GoodOlClint/crosstalk/internal/registry"
 )
@@ -60,10 +61,12 @@ type Server struct {
 	MaxFrame    int
 	ReadTimeout time.Duration
 
-	mu    sync.Mutex
-	ln    *net.UnixListener
-	token string
-	wg    sync.WaitGroup
+	mu      sync.Mutex
+	ln      *net.UnixListener
+	token   string
+	wg      sync.WaitGroup
+	paused  chan struct{} // closed by Unpause or Close; nil when not paused
+	closing bool
 }
 
 // KeyPath is the CrossTalk-issued key next to an agent socket: <uds_path
@@ -165,24 +168,95 @@ func (s *Server) Serve(ctx context.Context) error {
 	if ln == nil {
 		return errors.New("udsingress: Serve before Listen")
 	}
-	stop := context.AfterFunc(ctx, func() { ln.Close() })
+	stop := context.AfterFunc(ctx, func() { s.Close() })
 	defer stop()
 	for {
 		c, err := ln.AcceptUnix()
 		if err != nil {
+			if next := s.unpaused(ctx); next != nil {
+				ln = next
+				continue
+			}
 			s.wg.Wait()
 			if ctx.Err() != nil || errors.Is(err, net.ErrClosed) {
 				return nil
 			}
 			return err
 		}
-		s.wg.Go(func() { s.handle(ctx, c) })
+		done, ok := quiesce.TryEnter()
+		if !ok {
+			c.Close()
+			continue
+		}
+		s.wg.Go(func() {
+			defer done()
+			s.handle(ctx, c)
+		})
 	}
+}
+
+// unpaused waits out a pause and returns the new listener, or nil when the
+// server is not paused or closes meanwhile.
+func (s *Server) unpaused(ctx context.Context) *net.UnixListener {
+	s.mu.Lock()
+	ch := s.paused
+	s.mu.Unlock()
+	if ch == nil {
+		return nil
+	}
+	select {
+	case <-ch:
+	case <-ctx.Done():
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closing || s.paused != nil {
+		return nil
+	}
+	return s.ln
+}
+
+// Pause closes the listener, so a dial to Path fails as for a stopped
+// agent, and keeps Serve waiting for Unpause.
+func (s *Server) Pause() error {
+	s.mu.Lock()
+	if s.ln == nil || s.closing || s.paused != nil {
+		s.mu.Unlock()
+		return nil
+	}
+	s.paused = make(chan struct{})
+	ln := s.ln
+	s.mu.Unlock()
+	return ln.Close()
+}
+
+// Unpause listens on Path again and lets Serve accept on it.
+func (s *Server) Unpause() error {
+	s.mu.Lock()
+	ch := s.paused
+	s.mu.Unlock()
+	if ch == nil {
+		return nil
+	}
+	err := s.Listen()
+	s.mu.Lock()
+	if err == nil {
+		s.paused = nil
+	}
+	s.mu.Unlock()
+	close(ch)
+	return err
 }
 
 func (s *Server) Close() error {
 	s.mu.Lock()
 	ln := s.ln
+	s.closing = true
+	if s.paused != nil {
+		close(s.paused)
+		s.paused = nil
+	}
 	s.mu.Unlock()
 	if ln == nil {
 		return nil

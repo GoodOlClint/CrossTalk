@@ -196,7 +196,9 @@ func (s *Shim) Bind(ctx context.Context, a *mcpserver.Agent) (mcpserver.BindInfo
 		if err != nil {
 			return mcpserver.BindInfo{}, err
 		}
+		st.mu.Lock()
 		st.a2a = l
+		st.mu.Unlock()
 		info.A2AURL, info.CredentialRef = l.URL, l.CredentialRef
 	}
 	st.rearmDeadlines()
@@ -370,4 +372,52 @@ func (i injector) MailPulled(ctx context.Context, target adapter.Binding, more b
 		return nil
 	}
 	return ps.MailPulled(ctx, target, more, mailboxed)
+}
+
+type pausable interface {
+	Pause() error
+	Unpause() error
+}
+
+// PauseIngress closes every agent's unix socket and A2A listener, so a peer
+// dial fails as for a stopped agent (ADR 0030 quiesce); the returned func
+// listens again at the same endpoints. Work already admitted is counted by
+// package quiesce, not here.
+func (s *Shim) PauseIngress() (unpause func()) {
+	s.mu.Lock()
+	sts := make([]*AgentState, 0, len(s.agents))
+	for _, st := range s.agents {
+		sts = append(sts, st)
+	}
+	s.mu.Unlock()
+	var undo []func() error
+	for _, st := range sts {
+		st.mu.Lock()
+		up, uds, a2a := st.up && !st.closed, st.uds, st.a2a
+		st.mu.Unlock()
+		if !up {
+			continue
+		}
+		if p, ok := uds.(pausable); ok {
+			if err := p.Pause(); err != nil {
+				s.log.Warn("shim: pausing uds ingress", "agent", st.agent.ID(), "err", err)
+			}
+			undo = append(undo, p.Unpause)
+		}
+		if a2a.Pause != nil {
+			if err := a2a.Pause(); err != nil {
+				s.log.Warn("shim: pausing a2a listener", "agent", st.agent.ID(), "err", err)
+			}
+			if a2a.Unpause != nil {
+				undo = append(undo, a2a.Unpause)
+			}
+		}
+	}
+	return func() {
+		for _, f := range undo {
+			if err := f(); err != nil {
+				s.log.Warn("shim: reopening ingress after a refresh gave up", "err", err)
+			}
+		}
+	}
 }

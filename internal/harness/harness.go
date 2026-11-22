@@ -163,10 +163,11 @@ type ClaimSource interface {
 // must carry across its exec (ADR 0030). RefreshState returns the document to
 // carry, or nil when there is none; ResumeState hands it to the new process
 // before the harness's claim source runs, and the harness proves it again
-// there.
+// there. ResumeState returns the session refs whose agents the harness
+// registers itself once proven; the resume does not register those before.
 type Refreshable interface {
 	RefreshState() json.RawMessage
-	ResumeState(state json.RawMessage)
+	ResumeState(state json.RawMessage) []string
 }
 
 // Supersession is implemented by a harness that can prove a session ended
