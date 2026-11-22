@@ -8,10 +8,8 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -72,23 +70,6 @@ func tryLock(stateDir string) (*os.File, error) {
 		return nil, err
 	}
 	return f, nil
-}
-
-type lockKey struct{}
-
-// Inherit, inside a follow-up target, gives c upgrade.lock, held until c and
-// every process it leaves running exit, and its own process group. Outside a
-// target it does nothing.
-func Inherit(ctx context.Context, c *exec.Cmd) {
-	f, _ := ctx.Value(lockKey{}).(*os.File)
-	if f == nil {
-		return
-	}
-	c.ExtraFiles = append(c.ExtraFiles, f)
-	if c.SysProcAttr == nil {
-		c.SysProcAttr = &syscall.SysProcAttr{}
-	}
-	c.SysProcAttr.Setpgid = true
 }
 
 // Lock takes upgrade.lock, calling waiting once if it has to wait.
@@ -157,7 +138,7 @@ type outcome struct {
 }
 
 func (r *Runner) Run(ctx context.Context) {
-	took, pending := r.attempt(ctx, true)
+	ran, pending := r.attempt(ctx, true)
 	if !pending || r.Interval <= 0 {
 		return
 	}
@@ -175,15 +156,15 @@ func (r *Runner) Run(ctx context.Context) {
 			return
 		case <-after(r.Interval):
 		}
-		var ran bool
-		ran, pending = r.attempt(ctx, !took)
-		took = took || ran
+		var now bool
+		now, pending = r.attempt(ctx, !ran)
+		ran = ran || now
 	}
 }
 
-// attempt reports whether it held the lock and whether a target is still
+// attempt reports whether it ran a target and whether a target is still
 // pending after it.
-func (r *Runner) attempt(ctx context.Context, first bool) (took, pending bool) {
+func (r *Runner) attempt(ctx context.Context, first bool) (ran, pending bool) {
 	before := r.pending()
 	if ctx.Err() != nil || len(before) == 0 {
 		return false, false
@@ -206,10 +187,10 @@ func (r *Runner) attempt(ctx context.Context, first bool) (took, pending bool) {
 	ctx = context.WithValue(ctx, lockKey{}, lock)
 	todo := r.pending()
 	if len(todo) == 0 {
-		return true, false
+		return false, false
 	}
 	if err := os.MkdirAll(dir(r.StateDir, r.Version), 0o700); err != nil {
-		return true, true
+		return false, true
 	}
 	log, err := os.OpenFile(LogPath(r.StateDir, r.Version), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
 	if err != nil {
@@ -223,7 +204,7 @@ func (r *Runner) attempt(ctx context.Context, first bool) (took, pending bool) {
 	var outs []outcome
 	for _, t := range todo {
 		if ctx.Err() != nil {
-			return true, true
+			return false, true
 		}
 		fmt.Fprintf(w, "%s %s: start\n", time.Now().UTC().Format(time.RFC3339), t.Name)
 		err := runTarget(ctx, t, w, r.TargetTimeout)

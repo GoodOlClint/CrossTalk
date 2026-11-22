@@ -495,6 +495,27 @@ func TestFollowUpRetryAfterLostLock(t *testing.T) {
 	}
 }
 
+func TestFollowUpFirstRunNoticeAfterFailedSetup(t *testing.T) {
+	st := t.TempDir()
+	if err := os.WriteFile(filepath.Join(st, "upgrade"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	after, now, _ := fakeClock()
+	var runs atomic.Int32
+	var notices []string
+	r := &Runner{StateDir: st, Version: ver, Interval: time.Minute, Bound: 2 * time.Minute, Now: now,
+		Notice:  func(n string) { notices = append(notices, n) },
+		Targets: []Target{counting("claude", &runs, errors.New("old"))}}
+	r.After = func(d time.Duration) <-chan time.Time {
+		os.Remove(filepath.Join(st, "upgrade"))
+		return after(d)
+	}
+	r.Run(context.Background())
+	if runs.Load() == 0 || len(notices) != 1 || !strings.Contains(notices[0], "could not update claude") {
+		t.Fatalf("runs=%d notices=%q, want the first run that ran a target to name its failure", runs.Load(), notices)
+	}
+}
+
 func TestFollowUpLostLockStopsWhenHolderFinished(t *testing.T) {
 	st := t.TempDir()
 	rel, _, _ := TryLock(st)

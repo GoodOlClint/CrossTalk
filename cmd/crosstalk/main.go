@@ -23,6 +23,7 @@ import (
 	"github.com/GoodOlClint/crosstalk/internal/registry"
 	"github.com/GoodOlClint/crosstalk/internal/shim"
 	"github.com/GoodOlClint/crosstalk/internal/udsingress"
+	"github.com/GoodOlClint/crosstalk/internal/upgrade"
 	"github.com/GoodOlClint/crosstalk/internal/wire"
 )
 
@@ -60,6 +61,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return runHook(args[1:], os.Stdin, stdout, stderr)
 	case "version":
 		return runVersion(args[1:], stdout, stderr)
+	case upgrade.SuperviseCmd:
+		return upgrade.Supervise(args[1:], stderr)
 	case "help", "-h", "--help":
 		fmt.Fprint(stdout, usage)
 		return 0

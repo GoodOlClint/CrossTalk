@@ -346,6 +346,13 @@ func writeVerified(ctx context.Context, env harness.InstallEnv, cfg string, chec
 	return fmt.Errorf("%w; %s restored", err, path)
 }
 
+// checkoutEmpty reports that Codex's checkout of the crosstalk marketplace
+// is missing or has no entries.
+func checkoutEmpty(home string) bool {
+	es, err := os.ReadDir(filepath.Join(codexHome(home), ".tmp", "marketplaces", "crosstalk"))
+	return len(es) == 0 && (err == nil || errors.Is(err, os.ErrNotExist))
+}
+
 func pluginStep(env harness.InstallEnv) harness.Step {
 	return harness.Step{
 		Title:  "Codex plugin",
@@ -355,20 +362,19 @@ func pluginStep(env harness.InstallEnv) harness.Step {
 			upgrade := []string{"plugin", "marketplace", "upgrade", "crosstalk"}
 			// codex refuses upgrade on a local marketplace, which add already reads live.
 			local := filepath.IsAbs(env.Marketplace) || strings.HasPrefix(env.Marketplace, ".")
+			cmds := [][]string{{"plugin", "add", pluginID}}
 			if _, err := env.Run(ctx, "codex", add...); err != nil {
-				if local {
+				// codex reads an emptied checkout as another source; upgrade refills it.
+				if local || !checkoutEmpty(env.Home) {
 					return err
 				}
-				// codex reads an emptied checkout as another source; upgrade refills it.
 				if _, uerr := env.Run(ctx, "codex", upgrade...); uerr != nil {
-					return err
+					return errors.Join(err, uerr)
 				}
 				if _, err := env.Run(ctx, "codex", add...); err != nil {
 					return err
 				}
-			}
-			cmds := [][]string{{"plugin", "add", pluginID}}
-			if !local {
+			} else if !local {
 				cmds = append([][]string{upgrade}, cmds...)
 			}
 			for _, args := range cmds {
