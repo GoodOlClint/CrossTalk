@@ -168,6 +168,7 @@ func (s *Server) runResumed(ctx context.Context, t mcp.Transport, h *Handoff) er
 	if err != nil {
 		slog.Warn("mcpserver: carried session state unreadable; serving a new session", "err", err)
 		state = nil
+		h.Session.Listens = nil
 	}
 	if tr, ok := t.(*Transport); ok && (state != nil || len(h.Session.Listens) > 0) {
 		tr.Conn().Restore(h.Session)

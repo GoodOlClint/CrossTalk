@@ -5,6 +5,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/GoodOlClint/crosstalk/internal/mcpserver"
@@ -21,14 +23,14 @@ func (r *rec) watcher(path string, id mcpserver.BinaryIdentity, stat func(string
 		Path: path,
 		ID:   id,
 		Stat: func(p string) (mcpserver.BinaryIdentity, error) { r.stats++; return stat(p) },
-		Probe: func(_ context.Context, p string) error {
+		Probe: func(_ context.Context, p string) (Probed, error) {
 			r.probes++
 			cur, _ := mcpserver.IdentityOf(p)
 			r.probed = append(r.probed, cur.Ino)
-			return nil
+			return Probed{}, nil
 		},
 		Quiesce: func(context.Context) (func(), error) { r.quiesces++; return func() { r.undos++ }, nil },
-		Exec:    func(mcpserver.BinaryIdentity) error { r.execs++; return nil },
+		Exec:    func(mcpserver.BinaryIdentity, Probed) error { r.execs++; return nil },
 	}
 }
 
@@ -113,7 +115,7 @@ func TestRefreshRetriesAfterTransientExecError(t *testing.T) {
 	var r rec
 	w := r.watcher(bin, id, mcpserver.IdentityOf)
 	errs := []error{errors.New("disk full"), ErrExecFailed}
-	w.Exec = func(mcpserver.BinaryIdentity) error { r.execs++; e := errs[0]; errs = errs[1:]; return e }
+	w.Exec = func(mcpserver.BinaryIdentity, Probed) error { r.execs++; e := errs[0]; errs = errs[1:]; return e }
 	for range 3 {
 		w.Tick(context.Background())
 	}
@@ -140,7 +142,7 @@ func TestRefreshUndoesQuiesceAfterFailedExec(t *testing.T) {
 		}
 		return func() { r.undos++; quiesce.Unpause() }, nil
 	}
-	w.Exec = func(mcpserver.BinaryIdentity) error { r.execs++; return ErrExecFailed }
+	w.Exec = func(mcpserver.BinaryIdentity, Probed) error { r.execs++; return ErrExecFailed }
 	w.Tick(context.Background())
 	if r.execs != 1 || r.undos != 1 {
 		t.Fatalf("%+v, want one exec and one undo", r)
@@ -166,12 +168,12 @@ func TestRefreshStopsAfterBoundedQuiesceTries(t *testing.T) {
 	w := r.watcher(bin, id, mcpserver.IdentityOf)
 	w.QuiesceTries = 3
 	w.Quiesce = func(context.Context) (func(), error) { r.quiesces++; return nil, context.DeadlineExceeded }
-	var gaveUp []int
-	w.GaveUp = func(_ string, n int) { gaveUp = append(gaveUp, n) }
+	var gaveUp []string
+	w.GaveUp = func(_, why string) { gaveUp = append(gaveUp, why) }
 	for range 6 {
 		w.Tick(context.Background())
 	}
-	if r.quiesces != 3 || r.execs != 0 || len(gaveUp) != 1 || gaveUp[0] != 3 {
+	if r.quiesces != 3 || r.execs != 0 || len(gaveUp) != 1 || !strings.Contains(gaveUp[0], "3 attempts") {
 		t.Fatalf("%+v, gave up %v: want 3 quiesce attempts, no exec, one give-up after 3", r, gaveUp)
 	}
 	os.WriteFile(bin+".n", []byte("v3"), 0o755)
@@ -194,9 +196,9 @@ func TestRefreshStopsAfterBoundedExecErrors(t *testing.T) {
 	var r rec
 	w := r.watcher(bin, id, mcpserver.IdentityOf)
 	w.QuiesceTries = 2
-	w.Exec = func(mcpserver.BinaryIdentity) error { r.execs++; return errors.New("handoff too large") }
+	w.Exec = func(mcpserver.BinaryIdentity, Probed) error { r.execs++; return errors.New("handoff too large") }
 	gaveUp := 0
-	w.GaveUp = func(string, int) { gaveUp++ }
+	w.GaveUp = func(string, string) { gaveUp++ }
 	for range 4 {
 		w.Tick(context.Background())
 	}
@@ -205,13 +207,79 @@ func TestRefreshStopsAfterBoundedExecErrors(t *testing.T) {
 	}
 }
 
-func TestReplaysListensReadsVersionJSON(t *testing.T) {
+func TestProbeReadsRefreshListens(t *testing.T) {
 	dir := t.TempDir()
 	for name, out := range map[string]string{"old": `{"version":"0.2.4","refresh_handoff":1}`, "new": `{"version":"0.2.5","refresh_handoff":1,"refresh_listens":true}`} {
 		p := filepath.Join(dir, name)
 		os.WriteFile(p, []byte("#!/bin/sh\necho '"+out+"'\n"), 0o755)
-		if got, want := ReplaysListens(context.Background(), p), name == "new"; got != want {
-			t.Fatalf("%s: ReplaysListens = %v, want %v", name, got, want)
+		got, err := Probe(context.Background(), p)
+		if err != nil || got.ReplaysListens != (name == "new") {
+			t.Fatalf("%s: Probe = %+v, %v", name, got, err)
 		}
+	}
+}
+
+// With a listen open, a file that cannot replay it is refused before any
+// quiesce, so ingress is never closed for it, and GaveUp says why; a file
+// that can is probed once, before quiesce, and the probe result reaches Exec.
+func TestRefreshListenCapabilityDecidedBeforeQuiesce(t *testing.T) {
+	for _, replays := range []bool{false, true} {
+		dir := t.TempDir()
+		bin := filepath.Join(dir, "crosstalk")
+		os.WriteFile(bin, []byte("v1"), 0o755)
+		id, _ := mcpserver.IdentityOf(bin)
+		os.WriteFile(bin+".n", []byte("v2"), 0o755)
+		os.Rename(bin+".n", bin)
+		var events []string
+		var gaveUp []string
+		w := &Watcher{
+			Path: bin, ID: id,
+			Probe: func(context.Context, string) (Probed, error) {
+				events = append(events, "probe")
+				return Probed{ReplaysListens: replays}, nil
+			},
+			OpenListens: func() bool { return true },
+			Quiesce:     func(context.Context) (func(), error) { events = append(events, "quiesce"); return func() {}, nil },
+			Exec: func(_ mcpserver.BinaryIdentity, p Probed) error {
+				events = append(events, "exec")
+				if !p.ReplaysListens {
+					t.Error("Exec got a probe result without listen replay")
+				}
+				return errors.New("transient")
+			},
+			GaveUp: func(_, why string) { gaveUp = append(gaveUp, why) },
+		}
+		w.Tick(context.Background())
+		w.Tick(context.Background())
+		if !replays {
+			if len(events) != 1 || events[0] != "probe" || len(gaveUp) != 1 || !strings.Contains(gaveUp[0], "subscriptions/listen") {
+				t.Fatalf("no replay: events %v, gave up %v: want one probe, no quiesce, one give-up naming the listen", events, gaveUp)
+			}
+			continue
+		}
+		if want := []string{"probe", "quiesce", "exec", "probe", "quiesce", "exec"}; !slices.Equal(events, want) {
+			t.Fatalf("replay: events %v, want %v (no probe inside the quiesce window)", events, want)
+		}
+	}
+}
+
+// An exec refused or failed (ErrExecFailed) reaches GaveUp, so the session
+// is told.
+func TestRefreshExecFailedGivesNotice(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "crosstalk")
+	os.WriteFile(bin, []byte("v1"), 0o755)
+	id, _ := mcpserver.IdentityOf(bin)
+	os.WriteFile(bin+".n", []byte("v2"), 0o755)
+	os.Rename(bin+".n", bin)
+	var r rec
+	w := r.watcher(bin, id, mcpserver.IdentityOf)
+	w.Exec = func(mcpserver.BinaryIdentity, Probed) error { r.execs++; return ErrExecFailed }
+	gaveUp := 0
+	w.GaveUp = func(string, string) { gaveUp++ }
+	w.Tick(context.Background())
+	w.Tick(context.Background())
+	if r.execs != 1 || gaveUp != 1 {
+		t.Fatalf("%+v, gave up %d: want one exec and one give-up", r, gaveUp)
 	}
 }

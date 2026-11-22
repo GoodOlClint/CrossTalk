@@ -58,17 +58,21 @@ type Watcher struct {
 	// Stat reads the identity of Path; nil means mcpserver.IdentityOf.
 	Stat func(path string) (mcpserver.BinaryIdentity, error)
 	// Probe checks that the file at path can take the handoff; nil means
-	// Probe.
-	Probe func(ctx context.Context, path string) error
+	// Probe. It runs before Quiesce, so nothing is run while ingress is
+	// closed.
+	Probe func(ctx context.Context, path string) (Probed, error)
+	// OpenListens reports whether the session holds an open
+	// subscriptions/listen, which only a file that replays listens may take.
+	OpenListens func() bool
 	// Quiesce stops new work and waits for running work until ctx ends; undo
 	// restarts it.
 	Quiesce func(ctx context.Context) (undo func(), err error)
-	// Exec hands over to the file whose identity is id; it returns only on
-	// failure.
-	Exec func(id mcpserver.BinaryIdentity) error
-	// GaveUp, when set, is told that the file at Path failed to quiesce or to
-	// take the handoff in QuiesceTries attempts in a row and is not tried again until the path changes.
-	GaveUp func(path string, tries int)
+	// Exec hands over to the file whose identity is id and whose probe gave
+	// p; it returns only on failure.
+	Exec func(id mcpserver.BinaryIdentity, p Probed) error
+	// GaveUp, when set, is told why the file at Path will not be taken; it is
+	// not tried again until the path changes.
+	GaveUp func(path, why string)
 	Log    *slog.Logger
 
 	bad   mcpserver.BinaryIdentity
@@ -112,11 +116,15 @@ func (w *Watcher) Tick(ctx context.Context) {
 		probe = Probe
 	}
 	pctx, cancel := context.WithTimeout(ctx, orDefault(w.ProbeTimeout, DefaultProbeTimeout))
-	err = probe(pctx, w.Path)
+	p, err := probe(pctx, w.Path)
 	cancel()
 	if err != nil {
 		w.bad = cur
 		w.log().Warn("refresh: new binary not taken", "path", w.Path, "err", err)
+		return
+	}
+	if !p.ReplaysListens && w.OpenListens != nil && w.OpenListens() {
+		w.giveUp(cur, "it cannot take over the session's open subscriptions/listen", nil)
 		return
 	}
 	qctx, cancel := context.WithTimeout(ctx, orDefault(w.QuiesceCap, DefaultQuiesceCap))
@@ -132,14 +140,22 @@ func (w *Watcher) Tick(ctx context.Context) {
 		undo()
 		return
 	}
-	err = w.Exec(cur)
+	err = w.Exec(cur, p)
 	undo()
 	if errors.Is(err, ErrExecFailed) {
-		w.bad = cur
+		w.giveUp(cur, "it could not be exec'd", err)
+		return
 	}
 	w.log().Warn("refresh: not exec'd; staying on this binary", "path", w.Path, "err", err)
-	if !errors.Is(err, ErrExecFailed) {
-		w.failed(cur, err)
+	w.failed(cur, err)
+}
+
+// giveUp leaves cur until the path changes again and says why.
+func (w *Watcher) giveUp(cur mcpserver.BinaryIdentity, why string, err error) {
+	w.bad = cur
+	w.log().Warn("refresh: staying on this binary until the path changes again", "path", w.Path, "why", why, "err", err)
+	if w.GaveUp != nil {
+		w.GaveUp(w.Path, why)
 	}
 }
 
@@ -153,11 +169,7 @@ func (w *Watcher) failed(cur mcpserver.BinaryIdentity, err error) bool {
 	if w.tries < orDefaultInt(w.QuiesceTries, DefaultQuiesceTries) {
 		return false
 	}
-	w.bad = cur
-	w.log().Warn("refresh: never handed over; staying on this binary until the path changes again", "path", w.Path, "tries", w.tries, "err", err)
-	if w.GaveUp != nil {
-		w.GaveUp(w.Path, w.tries)
-	}
+	w.giveUp(cur, fmt.Sprintf("it did not take the handoff in %d attempts", w.tries), err)
 	return true
 }
 
@@ -182,41 +194,35 @@ func (w *Watcher) log() *slog.Logger {
 	return slog.Default()
 }
 
-// ReplaysListens reports whether the file at path says, in `version
-// --json`, that it takes over the open subscriptions/listen requests a
-// handoff carries; a binary from before that ignores them.
-func ReplaysListens(ctx context.Context, path string) bool {
-	out, err := exec.CommandContext(ctx, path, "version", "--json").Output()
-	if err != nil {
-		return false
-	}
-	var v struct {
-		RefreshListens bool `json:"refresh_listens"`
-	}
-	return json.Unmarshal(out, &v) == nil && v.RefreshListens
+// Probed is what a probe learned about the new file.
+type Probed struct {
+	// ReplaysListens: the file takes over the open subscriptions/listen
+	// requests a handoff carries (`refresh_listens` in `version --json`).
+	ReplaysListens bool
 }
 
 // Probe runs `path version --json` and requires a version and the
 // refresh_handoff format this binary writes.
-func Probe(ctx context.Context, path string) error {
+func Probe(ctx context.Context, path string) (Probed, error) {
 	out, err := exec.CommandContext(ctx, path, "version", "--json").Output()
 	if err != nil {
-		return fmt.Errorf("version --json: %w", err)
+		return Probed{}, fmt.Errorf("version --json: %w", err)
 	}
 	var v struct {
 		Version        string `json:"version"`
 		RefreshHandoff *int   `json:"refresh_handoff"`
+		RefreshListens bool   `json:"refresh_listens"`
 	}
 	if err := json.Unmarshal(out, &v); err != nil {
-		return fmt.Errorf("version --json: %w", err)
+		return Probed{}, fmt.Errorf("version --json: %w", err)
 	}
 	switch {
 	case v.Version == "":
-		return errors.New("version --json: no version")
+		return Probed{}, errors.New("version --json: no version")
 	case v.RefreshHandoff == nil:
-		return errors.New("version --json: no refresh_handoff")
+		return Probed{}, errors.New("version --json: no refresh_handoff")
 	case *v.RefreshHandoff != mcpserver.HandoffFormat:
-		return fmt.Errorf("version --json: refresh_handoff %d, this binary writes %d", *v.RefreshHandoff, mcpserver.HandoffFormat)
+		return Probed{}, fmt.Errorf("version --json: refresh_handoff %d, this binary writes %d", *v.RefreshHandoff, mcpserver.HandoffFormat)
 	}
-	return nil
+	return Probed{ReplaysListens: v.RefreshListens}, nil
 }

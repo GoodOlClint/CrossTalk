@@ -88,7 +88,7 @@ func TestExecHandoffRefusesAFileReplacedDuringPreparation(t *testing.T) {
 	os.WriteFile(path+".n", []byte("b"), 0o755)
 	os.Rename(path+".n", path)
 	srv := mcpserver.New(mcpserver.Options{})
-	err := execHandoff(srv, mcpserver.NewConn(strings.NewReader(""), io.Discard), path, probed)
+	err := execHandoff(srv, mcpserver.NewConn(strings.NewReader(""), io.Discard), path, probed, refresh.Probed{})
 	if !errors.Is(err, errChanged) || errors.Is(err, refresh.ErrExecFailed) {
 		t.Fatalf("exec of a replaced file: %v, want errChanged", err)
 	}

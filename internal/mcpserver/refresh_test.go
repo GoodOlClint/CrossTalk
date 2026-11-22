@@ -421,3 +421,18 @@ func TestHandoffCarriesPendingRestorations(t *testing.T) {
 		t.Fatalf("next handoff agents = %v, want the pending and the still-deferred one", ids)
 	}
 }
+
+// Carried session state that cannot be read starts a new session; its
+// listens are dropped with it rather than replayed into that session.
+func TestResumeUnreadableStateDropsListens(t *testing.T) {
+	const listen = `{"jsonrpc":"2.0","id":3,"method":"subscriptions/listen","params":{"notifications":{"toolsListChanged":true}}}`
+	ho := &Handoff{RefreshHandoff: HandoffFormat, Agents: []AgentHandoff{}, Session: SessionState{InitializeParams: json.RawMessage(`"nope"`), Listens: []json.RawMessage{json.RawMessage(listen)}}}
+	r := startRig(t, newRigServer(t, t.TempDir(), t.TempDir(), 999999, NewFakeBackend()), WithHandoff(ho))
+	res := r.rpc(1, "initialize", `{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"rig-client","version":"9"}}`)
+	if res["error"] != nil || string(res["id"]) != "1" {
+		t.Fatalf("first frame = %v, want the initialize response of a new session", res)
+	}
+	if n := len(r.tr.Conn().State().Listens); n != 0 {
+		t.Fatalf("carried listens = %d after unreadable state, want 0", n)
+	}
+}
