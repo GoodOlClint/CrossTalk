@@ -12,7 +12,7 @@ From 0.2.0 you can pair your own machines (same user, a LAN or a tailnet) and me
 
 ## Do I have to start my agents a special way?
 
-No. `crosstalk install` registers the CrossTalk server with each harness once. After that, start `claude` and `codex` as you always do and restart any session that was already running when you installed. After an upgrade, running sessions refresh on their own. For Codex, start plain `codex`: some launch options make a session send-only (next question).
+No. `crosstalk install` registers the CrossTalk server with each harness once. After that, start `claude` and `codex` as you always do and restart any session that was already running when you installed. After an upgrade, running sessions refresh on their own once idle, unless you turned that off with `CROSSTALK_NO_AUTO_REFRESH=1` or the session started before the feature existed; those need a restart (`crosstalk install --check` lists them). For Codex, start plain `codex`: some launch options make a session send-only (next question).
 
 ## Known issue: why can my Codex session send but not receive?
 
