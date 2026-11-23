@@ -50,14 +50,14 @@ func openLock(stateDir string) (*os.File, error) {
 // process or another open of the file holds it. The descriptor is
 // close-on-exec, so an exec or a child process never keeps the lock.
 func TryLock(stateDir string) (release func(), ok bool, err error) {
-	f, err := tryLock(stateDir)
+	f, err := tryLock(context.Background(), stateDir, nil)
 	if f == nil {
 		return nil, false, err
 	}
 	return func() { f.Close() }, true, nil
 }
 
-func tryLock(stateDir string) (*os.File, error) {
+func tryLock(ctx context.Context, stateDir string, waiting func()) (*os.File, error) {
 	f, err := openLock(stateDir)
 	if err != nil {
 		return nil, err
@@ -69,15 +69,23 @@ func tryLock(stateDir string) (*os.File, error) {
 		}
 		return nil, err
 	}
+	reapOrphan(ctx, ChildPath(stateDir), waiting)
+	if ctx.Err() != nil {
+		f.Close()
+		return nil, ctx.Err()
+	}
 	return f, nil
 }
 
 // Lock takes upgrade.lock, calling waiting once if it has to wait.
 func Lock(ctx context.Context, stateDir string, waiting func()) (release func(), err error) {
 	for first := true; ; first = false {
-		rel, ok, err := TryLock(stateDir)
-		if err != nil || ok {
-			return rel, err
+		f, err := tryLock(ctx, stateDir, waiting)
+		if err != nil {
+			return nil, err
+		}
+		if f != nil {
+			return func() { f.Close() }, nil
 		}
 		if first && waiting != nil {
 			waiting()
@@ -179,7 +187,7 @@ func (r *Runner) attempt(ctx context.Context, first bool) (ran, pending bool) {
 	if r.beforeLock != nil {
 		r.beforeLock()
 	}
-	lock, err := tryLock(r.StateDir)
+	lock, err := tryLock(ctx, r.StateDir, nil)
 	if lock == nil || err != nil {
 		return false, true
 	}
