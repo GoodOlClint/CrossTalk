@@ -55,11 +55,14 @@ type Response struct {
 	Body   []byte
 }
 
+const maxBody = 16 << 20
+
 const defaultTimeout = 30 * time.Second
 
 type Client struct {
 	ServicePath string
 	Timeout     time.Duration
+	PinOrigin   string
 	http        *http.Client
 }
 
@@ -110,6 +113,9 @@ func (c *Client) do(ctx context.Context, method, path string, body []byte) (*Res
 	if err != nil {
 		return nil, &Error{Kind: KindUnreachable, Msg: "service file refused; nothing sent", Err: err}
 	}
+	if c.PinOrigin != "" && svc.Origin != c.PinOrigin {
+		return nil, &Error{Kind: KindUnreachable, Msg: "service origin differs from the pinned origin; nothing sent"}
+	}
 	timeout := c.Timeout
 	if timeout <= 0 {
 		timeout = defaultTimeout
@@ -131,20 +137,26 @@ func (c *Client) do(ctx context.Context, method, path string, body []byte) (*Res
 	resp, err := c.http.Do(req)
 	if err != nil {
 		if errors.Is(err, syscall.ECONNREFUSED) {
-			return nil, &Error{Kind: KindUnreachable, Msg: "connection refused", Err: err}
+			return nil, &Error{Kind: KindUnreachable, Msg: "connection refused"}
 		}
-		return nil, &Error{Kind: KindUnknown, Msg: "request failed after send", Err: err}
+		msg := "request failed after send"
+		if ctx.Err() != nil {
+			msg = "request timed out or was canceled"
+		}
+		return nil, &Error{Kind: KindUnknown, Msg: msg}
 	}
 	defer resp.Body.Close()
-	out, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
-	if err != nil {
-		return nil, &Error{Kind: KindUnknown, Status: resp.StatusCode, Msg: "response body not read", Err: err}
+	switch resp.StatusCode {
+	case http.StatusUnauthorized:
+		return nil, &Error{Kind: KindUnreachable, Status: 401, Msg: "service refused the credential"}
+	case http.StatusNotFound:
+		return nil, &Error{Kind: KindNotFound, Status: 404, Msg: "not found"}
+	}
+	out, err := io.ReadAll(io.LimitReader(resp.Body, maxBody+1))
+	if err != nil || len(out) > maxBody {
+		return nil, &Error{Kind: KindUnknown, Status: resp.StatusCode, Msg: "response body unreadable or too large"}
 	}
 	switch {
-	case resp.StatusCode == http.StatusUnauthorized:
-		return nil, &Error{Kind: KindUnreachable, Status: 401, Msg: "service refused the credential"}
-	case resp.StatusCode == http.StatusNotFound:
-		return nil, &Error{Kind: KindNotFound, Status: 404, Msg: "not found"}
 	case resp.StatusCode < 200 || resp.StatusCode > 299:
 		return nil, &Error{Kind: KindUnknown, Status: resp.StatusCode, Msg: fmt.Sprintf("status %d", resp.StatusCode)}
 	case !json.Valid(out):

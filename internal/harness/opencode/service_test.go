@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -79,6 +80,28 @@ func TestReadServiceRefusals(t *testing.T) {
 			}
 			return p
 		}, ReasonJSON},
+		{"fifo", func(t *testing.T, dir string) string {
+			p := filepath.Join(dir, "service.json")
+			if err := syscall.Mkfifo(p, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			return p
+		}, ReasonNotRegular},
+		{"oversized", func(t *testing.T, dir string) string {
+			p := filepath.Join(dir, "service.json")
+			body := `{"pid":1,"url":"http://127.0.0.1:1","password":"x"}` + strings.Repeat(" ", maxServiceFile)
+			if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			return p
+		}, ReasonRead},
+		{"zero pid", func(t *testing.T, dir string) string {
+			p := filepath.Join(dir, "service.json")
+			if err := os.WriteFile(p, []byte(`{"pid":0,"url":"http://127.0.0.1:1","password":"x"}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			return p
+		}, ReasonJSON},
 		{"empty password", func(t *testing.T, dir string) string {
 			return writeService(t, dir, "http://127.0.0.1:1", "", 0o600)
 		}, ReasonPassword},
@@ -147,6 +170,10 @@ func TestDefaultServicePath(t *testing.T) {
 	t.Setenv("XDG_STATE_HOME", "/x/state")
 	if got := DefaultServicePath(); got != "/x/state/opencode/service.json" {
 		t.Errorf("got %q", got)
+	}
+	t.Setenv("XDG_STATE_HOME", "rel/state")
+	if got := DefaultServicePath(); got != "" {
+		t.Errorf("relative state dir accepted: %q", got)
 	}
 	t.Setenv("XDG_STATE_HOME", "")
 	t.Setenv("HOME", "/h")

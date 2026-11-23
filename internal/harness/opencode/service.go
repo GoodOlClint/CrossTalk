@@ -36,6 +36,8 @@ func (e *ServiceError) Error() string {
 	return fmt.Sprintf("opencode service file %s: %s", e.File, e.Reason)
 }
 
+const maxServiceFile = 1 << 16
+
 var currentUID = os.Geteuid
 
 type Service struct {
@@ -52,15 +54,21 @@ func (s Service) Format(f fmt.State, _ rune) {
 func DefaultServicePath() string {
 	base := os.Getenv("XDG_STATE_HOME")
 	if base == "" {
-		home, _ := os.UserHomeDir()
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return ""
+		}
 		base = filepath.Join(home, ".local", "state")
+	}
+	if !filepath.IsAbs(base) {
+		return ""
 	}
 	return filepath.Join(base, "opencode", "service.json")
 }
 
 func ReadService(path string) (Service, error) {
 	fail := func(r Reason) (Service, error) { return Service{}, &ServiceError{File: path, Reason: r} }
-	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
 	switch {
 	case errors.Is(err, os.ErrNotExist):
 		return fail(ReasonMissing)
@@ -83,8 +91,8 @@ func ReadService(path string) (Service, error) {
 	if st, ok := fi.Sys().(*syscall.Stat_t); !ok || int(st.Uid) != currentUID() {
 		return fail(ReasonOwner)
 	}
-	raw, err := io.ReadAll(io.LimitReader(f, 1<<16))
-	if err != nil {
+	raw, err := io.ReadAll(io.LimitReader(f, maxServiceFile+1))
+	if err != nil || len(raw) > maxServiceFile {
 		return fail(ReasonRead)
 	}
 	var doc struct {
@@ -99,6 +107,9 @@ func ReadService(path string) (Service, error) {
 	origin, ok := loopbackOrigin(doc.URL)
 	if !ok {
 		return fail(ReasonURL)
+	}
+	if doc.PID <= 0 {
+		return fail(ReasonJSON)
 	}
 	if doc.Password == "" {
 		return fail(ReasonPassword)

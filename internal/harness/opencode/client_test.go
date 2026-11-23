@@ -3,6 +3,7 @@ package opencode
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -29,12 +30,20 @@ func newFake(t *testing.T, h func(w http.ResponseWriter, r *http.Request)) *fake
 	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
 		f.mu.Lock()
-		f.reqs = append(f.reqs, recorded{r.Method, r.URL.Path, r.Header.Get("Authorization"), string(b)})
+		f.reqs = append(f.reqs, recorded{r.Method, r.URL.Path, basic(r), string(b)})
 		f.mu.Unlock()
 		h(w, r)
 	}))
 	t.Cleanup(f.srv.Close)
 	return f
+}
+
+func basic(r *http.Request) string {
+	u, p, ok := r.BasicAuth()
+	if !ok {
+		return ""
+	}
+	return u + ":" + p
 }
 
 func (f *fake) requests() []recorded {
@@ -97,14 +106,14 @@ func TestClientCalls(t *testing.T) {
 	if len(reqs) != len(calls) {
 		t.Fatalf("recorded %d requests, want %d", len(reqs), len(calls))
 	}
-	wantAuth := "Basic b3BlbmNvZGU6" + "" // prefix check below
+	wantAuth := "opencode:" + testPassword
 	for i, tc := range calls {
 		rq := reqs[i]
 		if rq.Method != tc.method || rq.Path != tc.path {
 			t.Errorf("%s: sent %s %s", tc.name, rq.Method, rq.Path)
 		}
-		if !strings.HasPrefix(rq.Auth, wantAuth) {
-			t.Errorf("%s: auth %q", tc.name, rq.Auth)
+		if rq.Auth != wantAuth {
+			t.Errorf("%s: wrong credential sent", tc.name)
 		}
 		if strings.Contains(rq.Path, "/tui/") {
 			t.Errorf("%s: /tui/ path %q", tc.name, rq.Path)
@@ -249,11 +258,8 @@ func TestClientRereadsPassword(t *testing.T) {
 		t.Fatal(err)
 	}
 	reqs := f.requests()
-	if len(reqs) != 2 || reqs[0].Auth == reqs[1].Auth {
-		t.Fatalf("auth did not change: %+v", reqs)
-	}
-	if !strings.HasPrefix(reqs[0].Auth, "Basic ") {
-		t.Errorf("auth %q", reqs[0].Auth)
+	if len(reqs) != 2 || reqs[0].Auth != "opencode:first-pw" || reqs[1].Auth != "opencode:second-pw" {
+		t.Fatal("credential not re-read per request")
 	}
 }
 
@@ -264,5 +270,53 @@ func TestClientNeverPrintsPassword(t *testing.T) {
 		for _, fm := range []string{"%v", "%+v", "%#v"} {
 			noPassword(t, fm, sprintf(fm, v))
 		}
+	}
+}
+
+func TestClientErrorsCarryNoResponseData(t *testing.T) {
+	const marker = "LEAK-MARKER-9f3"
+	f := newFake(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", "http://[bad"+marker)
+		w.WriteHeader(307)
+	})
+	_, err := clientFor(t, f).Session(context.Background(), sid)
+	e := wantKind(t, err, KindUnknown)
+	for _, s := range []string{e.Error(), fmt.Sprintf("%#v", e), fmt.Sprintf("%+v", e)} {
+		if strings.Contains(s, marker) {
+			t.Errorf("response data in error: %q", s)
+		}
+	}
+}
+
+func TestClient401WithBrokenBodyIsUnreachable(t *testing.T) {
+	f := newFake(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "100")
+		w.WriteHeader(401)
+		_, _ = w.Write([]byte("x"))
+	})
+	_, err := clientFor(t, f).Session(context.Background(), sid)
+	wantKind(t, err, KindUnreachable)
+}
+
+func TestClientOversizedBodyIsUnknown(t *testing.T) {
+	f := newFake(t, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`"` + strings.Repeat("a", maxBody) + `"`))
+	})
+	_, err := clientFor(t, f).Session(context.Background(), sid)
+	wantKind(t, err, KindUnknown)
+}
+
+func TestClientPinOrigin(t *testing.T) {
+	f := newFake(t, jsonOK(`{}`))
+	c := clientFor(t, f)
+	c.PinOrigin = "http://127.0.0.1:1"
+	_, err := c.Sessions(context.Background())
+	wantKind(t, err, KindUnreachable)
+	if len(f.requests()) != 0 {
+		t.Error("request sent to an unpinned origin")
+	}
+	c.PinOrigin = f.srv.URL
+	if _, err := c.Sessions(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 }
