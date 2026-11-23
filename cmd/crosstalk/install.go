@@ -10,10 +10,12 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -256,7 +258,8 @@ func runInstall(mode string, args []string, in io.Reader, tty bool, stdout, stde
 	if o.queueWake && mode != "uninstall" {
 		env.Experimental = map[string]bool{codex.QueueWakeOption: true}
 	}
-	ctx := context.Background()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 	cfgDir := filepath.Join(home, ".config", "crosstalk")
 	var remoteSteps []harness.Step
 	if mode != "uninstall" && o.remote && o.set["bind"] && !o.check {
@@ -413,7 +416,7 @@ func installMarkers(ctx context.Context, targets []installTarget, env harness.In
 	var done []string
 	for _, t := range targets {
 		if pu, ok := t.in.(harness.PluginUpdater); ok && pu.PluginCheck(ctx, env).OK {
-			done = append(done, t.name)
+			done = append(done, markerKey(t.name, env.Home))
 		}
 	}
 	if unitOwned(env.Home, cfgDir) && gatewayOnBin(ctx, env.StateDir, env.Bin, 0) == nil {
