@@ -429,10 +429,10 @@ func TestInstallNamesComeFromRegisteredHarnesses(t *testing.T) {
 	}
 }
 
-func TestInstallNoPathMessageTwoHarnesses(t *testing.T) {
+func TestInstallNoPathMessageNamesEveryHarness(t *testing.T) {
 	installSandbox(t)
 	code, out := installRunCmd(t, "install", "--yes")
-	if code != 1 || !strings.Contains(out, "crosstalk: neither claude nor codex is on PATH") {
+	if code != 1 || !strings.Contains(out, "crosstalk: neither claude, codex nor opencode is on PATH") {
 		t.Errorf("exit %d\n%s", code, out)
 	}
 }
