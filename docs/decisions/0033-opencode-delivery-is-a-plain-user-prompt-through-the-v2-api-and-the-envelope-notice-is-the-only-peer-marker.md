@@ -17,6 +17,8 @@ No OpenCode API delivers a message as a tool result or a role weaker than user. 
 4. State mapping follows ADR 0007: a 200 with an admitted message id is `accepted` (`steer`) or `queued` (`queue`); a refusal before any byte is sent (service down, 401, 404, refused major, unsafe `service.json`) is `unreachable`; a malformed success or a loss after sending is `unknown` and is never retried.
 5. The password is read from `service.json` per request and never logged or stored in a binding, descriptor, journal or error. The adapter refuses a file that is not mode 0600 and owned by the current user, and a `url` whose host is not loopback.
 6. The operator sees what the model sees: delivery is visible in the TUI as a prompt.
+7. Raw peer text is a user prompt only for a verified local registered agent. A remote sender, a script sender and an inbox copy are mailboxed (`Inject` returns `mailboxed`, the journal holds the body) and announced by one fixed prompt with no peer words, "A CrossTalk message is waiting: call receive_message"; the body then arrives as a tool result with the information notice. This follows ADR 0007's rule that the only user-role wake carries fixed text and ADR 0028's mailbox path. The operator may widen it to every class (as Claude does); that is plan Q8.
+8. The package opens `service.json` with no-follow, checks mode 0600 and owner on the opened descriptor, builds one canonical loopback origin used for the binding and every request, and disables redirects on authenticated requests.
 
 ## Rejected alternatives
 
@@ -31,7 +33,7 @@ No OpenCode API delivers a message as a tool result or a role weaker than user. 
 - A peer message is a user-role message for OpenCode, as it is for Claude and stronger than for Codex; the notice text is the model-facing marker. Whether a real model honors it is measured before the render slice (plan M1); if it does not, the notice is strengthened or `command`/`ask` delivery to OpenCode waits.
 - An `inform` to an idle session starts a paid model turn unless M6 shows `resume: false` stores without one; setup docs say so.
 - Any same-user process can inject with or without CrossTalk (ADR 0004 Consequences); CrossTalk adds no hole and cannot attribute a message it did not send.
-- A second local user is excluded by the 0600 password file; the second-account probe (plan M2) has not been run.
+- A second local user is excluded by the 0600 password files (the state and the config copy); the second-account probe (plan M2) has not been run.
 
 ## Trial record
 

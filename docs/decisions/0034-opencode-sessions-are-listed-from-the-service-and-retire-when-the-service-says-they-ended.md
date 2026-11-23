@@ -11,9 +11,9 @@ The v2 service lists every stored session (`GET /api/session`) and the running o
 
 ## Decision
 
-1. `Discover` lists sessions that are not archived, are top-level (no `parentID`), and were updated within 24 hours, newest 30 at most (named constants). A session CrossTalk has bound is always listed regardless of age. The row's name is the session title, cwd the session's directory, status busy or idle from `/api/session/active`. A service that is down or a missing `service.json` yields no rows and no error.
+1. `Discover` lists sessions that are not archived, are top-level (no `parentID`), and were updated within 24 hours, newest 30 at most (named constants). A session CrossTalk has bound is always listed regardless of age: the package is given the registry directory (as Codex's is) and fetches each bound session by id. The row's name is the session title, cwd the session's directory, status busy or idle from `/api/session/active`. A service that is down or a missing `service.json` yields no rows and no error.
 2. There is no `ClaimSource` and no polling loop or event subscription. A listed session that never called CrossTalk is an unbound row, reachable by native name through `Register` and `Inject`, and binds at its first CrossTalk tool call (the Codex pattern).
-3. The package implements `Supersession`: `Superseded` is true only when the service answers 404 for the session or reports it archived. An idle session is not superseded. Every error, a down service or a missing file answers false. Answers are cached for a few seconds so the registry's 2 s sweep sends at most one request per agent per interval. The process id is never used as evidence.
+3. The package implements `Supersession`: `Superseded` is true only when the service answers 404 for the session or reports it archived. An idle session is not superseded. Every error, a down service or a missing file answers false. `Identify` records the service pid in the descriptor, and `Superseded` acts only when the reader's own `service.json` names that pid and the request authenticates, so a 404 from another profile's service proves nothing. The answer comes from one cached session list per service pid per 5 seconds, false when the list may be truncated, with a 1.5 s deadline. A bare process id is never evidence.
 
 ## Rejected alternatives
 
@@ -24,7 +24,7 @@ The v2 service lists every stored session (`GET /api/session`) and the running o
 
 ## Consequences
 
-- A session older than 24 hours that never called CrossTalk is not listed until it is active again; it can still be reached by a send that names its id through a bound peer, not by name. The operator may change the window (plan section 10, Q2).
+- A session older than 24 hours or past the 30th that never called CrossTalk is not listed and cannot be reached by name or by id (`resolveLocal` matches ids only against descriptors and listed rows) until it is active again or calls CrossTalk. A bound session is always listed with real status. The operator may change the window (plan section 10, Q2).
 - A deleted or archived session drops from `list_agents` within a sweep; a send to it is `unreachable`.
 - The 24-hour and 30-session values are not measured against real use; the live run records what `list_agents` shows.
 - If `GET /api/session/<id>` 404 or the archived field behave differently from the source reading, slice 3 changes; measurement M6 checks both.
