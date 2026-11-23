@@ -110,11 +110,18 @@ type scopedKernel struct {
 	t *testing.T
 }
 
-func (k scopedKernel) Openers(path string) ([]int, error) {
+func (k scopedKernel) pids() []int {
 	childrenMu.Lock()
-	pids := append([]int{os.Getpid()}, children[k.t]...)
-	childrenMu.Unlock()
-	return ownerproof.OpenersAmong(path, pids)
+	defer childrenMu.Unlock()
+	return append([]int{os.Getpid()}, children[k.t]...)
+}
+
+func (k scopedKernel) Openers(path string) ([]int, error) {
+	return ownerproof.OpenersAmong(path, k.pids())
+}
+
+func (k scopedKernel) OpenersSplit(path string) ([]int, []int, error) {
+	return ownerproof.OpenersAmongSplit(path, k.pids())
 }
 
 func realClaims(t *testing.T, parentPID int, dir string) (*Claims, *fakeRegistrar) {

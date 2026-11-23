@@ -80,10 +80,10 @@ func userPIDs() ([]int, error) {
 	return pids, nil
 }
 
-func openersAmong(path string, pids []int) ([]int, error) {
+func scanAmong(path string, pids []int) ([]int, []int, error) {
 	target, err := os.Stat(path)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	self, uid := os.Getpid(), os.Geteuid()
 	var out []int
@@ -97,7 +97,7 @@ func openersAmong(path string, pids []int) ([]int, error) {
 			continue
 		}
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		if !mine {
 			continue
@@ -107,13 +107,13 @@ func openersAmong(path string, pids []int) ([]int, error) {
 			continue
 		}
 		if err != nil {
-			return nil, fmt.Errorf("ownerproof: open files of %d: %w", pid, err)
+			return nil, nil, fmt.Errorf("ownerproof: open files of %d: %w", pid, err)
 		}
 		if found {
 			out = append(out, pid)
 		}
 	}
-	return out, nil
+	return out, nil, nil
 }
 
 // ownedBy reads the Uid line of /proc/<pid>/status (real, effective, saved,

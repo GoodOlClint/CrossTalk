@@ -33,6 +33,7 @@ type fakeSys struct {
 	reads   map[string]int
 	locks   map[string]int
 	lockErr error
+	unread  map[string][]int
 }
 
 func (f *fakeSys) lockReads(path string) int {
@@ -120,6 +121,13 @@ func (f *fakeSys) Openers(path string) ([]int, error) {
 	i := min(f.reads[path], len(seq)-1)
 	f.reads[path]++
 	return slices.Clone(seq[i]), nil
+}
+
+func (f *fakeSys) OpenersSplit(path string) ([]int, []int, error) {
+	confirmed, err := f.Openers(path)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return confirmed, slices.Clone(f.unread[path]), err
 }
 
 // fakeRegistrar records RegisterSession calls; fail makes a session's
@@ -547,5 +555,25 @@ func TestLiveClaim_AncestorStartedAfterChild_ExpectNotDescendant(t *testing.T) {
 	}
 	if c.Bound("T1") {
 		t.Fatal("bound through a chain with a reused pid")
+	}
+}
+
+func TestProof_UnreadableProcessBesideConfirmedParent_ExpectSecondOpener(t *testing.T) {
+	sys, reg := newFakeSys(), &fakeRegistrar{}
+	sys.set("T1", true, []int{parentPID})
+	sys.unread = map[string][]int{lockPath(lockDir, "T1"): {outsider}}
+	c := newTestClaims(t, sys, reg)
+	if err := c.AcceptDurable(context.Background(), claim("T1")); !errors.Is(err, ErrSecondOpener) {
+		t.Fatalf("err %v, want ErrSecondOpener", err)
+	}
+}
+
+func TestProof_ParentOnlyUnreadable_ExpectParentNotOpener(t *testing.T) {
+	sys, reg := newFakeSys(), &fakeRegistrar{}
+	sys.set("T1", true, nil)
+	sys.unread = map[string][]int{lockPath(lockDir, "T1"): {parentPID}}
+	c := newTestClaims(t, sys, reg)
+	if err := c.AcceptDurable(context.Background(), claim("T1")); !errors.Is(err, ErrParentNotOpener) {
+		t.Fatalf("err %v, want ErrParentNotOpener: an unreadable fd is not proof the parent opened the lock", err)
 	}
 }

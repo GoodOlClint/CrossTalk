@@ -78,14 +78,16 @@ func LockHeld(path string) (bool, error) { return lockHeld(path) }
 // Openers returns the pids of processes this user can inspect that have the
 // file at path open, matched by device and inode, excluding this process.
 // A process that exits mid-walk is skipped; one whose fds cannot be listed is
-// an error. On macOS a single fd that fails with EBADF (closed mid-walk), EPERM
-// (denied) or ENOENT (revoked) is skipped.
+// an error. On macOS a single fd that fails with EBADF (closed mid-walk) or
+// ENOENT (revoked) is skipped; one that fails with EPERM (denied) makes the
+// process a counted opener unless its executable is an Apple binary under
+// /System (not /System/Volumes), /usr (not /usr/local), /bin or /sbin.
 func Openers(path string) ([]int, error) {
 	pids, err := userPIDs()
 	if err != nil {
 		return nil, err
 	}
-	return openersAmong(path, pids)
+	return OpenersAmong(path, pids)
 }
 
 // ExecutableIs reports whether pid's mapped executable is the file now at
@@ -98,5 +100,29 @@ func ExecutableIs(pid int, path string) (bool, error) {
 	return executableIs(pid, path)
 }
 
-// OpenersAmong is Openers over the given pids only, by the same rules.
-func OpenersAmong(path string, pids []int) ([]int, error) { return openersAmong(path, pids) }
+// OpenersAmong is Openers over the given pids only, by the same rules. Its
+// result is the confirmed openers followed by the unreadable ones.
+func OpenersAmong(path string, pids []int) ([]int, error) {
+	confirmed, unreadable, err := scanAmong(path, pids)
+	if err != nil {
+		return nil, err
+	}
+	return append(confirmed, unreadable...), nil
+}
+
+// OpenersSplit is Openers with the two kinds kept apart: confirmed processes
+// matched by device and inode, and unreadable ones that could not be ruled out
+// (macOS only: an EPERM fd, unless the process is an Apple system binary). An
+// unreadable process is never proof that a file is open.
+func OpenersSplit(path string) (confirmed, unreadable []int, err error) {
+	pids, err := userPIDs()
+	if err != nil {
+		return nil, nil, err
+	}
+	return scanAmong(path, pids)
+}
+
+// OpenersAmongSplit is OpenersSplit over the given pids only.
+func OpenersAmongSplit(path string, pids []int) (confirmed, unreadable []int, err error) {
+	return scanAmong(path, pids)
+}
