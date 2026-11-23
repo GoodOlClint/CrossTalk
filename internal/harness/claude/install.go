@@ -262,7 +262,7 @@ func applyPlugin(ctx context.Context, env harness.InstallEnv) error {
 
 // mismatch recognises Claude's refusal to switch a marketplace between sources.
 func mismatch(env harness.InstallEnv, err error) error {
-	if err != nil && strings.Contains(err.Error(), "extraKnownMarketplaces") {
+	if err != nil && strings.Contains(err.Error(), "match its extraKnownMarketplaces") {
 		return harness.MarketplaceMismatch("claude", env.Marketplace, err)
 	}
 	return err

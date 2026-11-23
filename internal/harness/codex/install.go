@@ -369,6 +369,10 @@ func pluginStep(env harness.InstallEnv) harness.Step {
 					return mismatch(env, err)
 				}
 				if _, uerr := env.Run(ctx, "codex", upgrade...); uerr != nil {
+					// the installed marketplace is local: upgrade refuses it, and only the user can switch.
+					if strings.Contains(uerr.Error(), "is not configured as a Git marketplace") {
+						return mismatch(env, err)
+					}
 					return errors.Join(err, uerr)
 				}
 				if _, err := env.Run(ctx, "codex", add...); err != nil {

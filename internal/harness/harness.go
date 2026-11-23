@@ -294,7 +294,7 @@ func MarketplaceMismatch(cli, want string, cause error) error {
 }
 
 func (e *marketplaceMismatch) Error() string {
-	return fmt.Sprintf("the %s marketplace %q came from a different source than %s; CrossTalk does not replace it: run `%s plugin marketplace remove crosstalk`, then `crosstalk install` (it adds %s again): %v", e.cli, "crosstalk", e.want, e.cli, e.want, e.cause)
+	return fmt.Sprintf("the %s marketplace %q came from a different source than %s; CrossTalk does not replace it: run `%s plugin marketplace remove crosstalk`, then `CROSSTALK_MARKETPLACE=%s crosstalk install` (the override keeps this source): %v", e.cli, "crosstalk", e.want, e.cli, e.want, e.cause)
 }
 
 func (e *marketplaceMismatch) Unwrap() error { return e.cause }

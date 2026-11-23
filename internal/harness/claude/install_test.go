@@ -270,14 +270,14 @@ func TestClaudePluginMarketplaceMismatch(t *testing.T) {
 	if !errors.Is(err, harness.ErrMarketplaceMismatch) || !errors.Is(err, cause) {
 		t.Fatalf("err = %v, want ErrMarketplaceMismatch wrapping the CLI error", err)
 	}
-	for _, want := range []string{"claude plugin marketplace remove crosstalk", "crosstalk install", "/scratch/mkt"} {
+	for _, want := range []string{"claude plugin marketplace remove crosstalk", "CROSSTALK_MARKETPLACE=/scratch/mkt crosstalk install"} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("err = %v, missing %q", err, want)
 		}
 	}
-	r2 := &recorder{fail: "claude plugin marketplace add GoodOlClint/CrossTalk", failErr: errors.New("network down")}
+	r2 := &recorder{fail: "claude plugin marketplace add /tmp/extraKnownMarketplaces", failErr: errors.New("claude plugin marketplace add /tmp/extraKnownMarketplaces: exit status 1: cannot read")}
+	env.Marketplace = "/tmp/extraKnownMarketplaces"
 	env.Run = r2.run
-	env.Marketplace = "GoodOlClint/CrossTalk"
 	if err := pluginStep(env).Apply(context.Background()); errors.Is(err, harness.ErrMarketplaceMismatch) {
 		t.Errorf("an unrelated failure was reported as a mismatch: %v", err)
 	}
