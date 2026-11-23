@@ -3,6 +3,7 @@ package opencode
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"strings"
 	"testing"
 
@@ -36,7 +37,7 @@ func parseRendered(t *testing.T, s string) envelope {
 	if err := dec.Decode(&e); err != nil {
 		t.Fatalf("envelope: %v in %q", err, rest)
 	}
-	if dec.More() {
+	if err := dec.Decode(new(json.RawMessage)); err != io.EOF {
 		t.Fatalf("more than one JSON value after the preamble: %q", rest)
 	}
 	return e

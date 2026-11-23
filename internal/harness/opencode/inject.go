@@ -46,13 +46,16 @@ func (h *Harness) prompt(ctx context.Context, target adapter.Binding, text, deli
 	if err != nil {
 		return adapter.Unreachable, fmt.Errorf("opencode: deliver %s: %w", id, err)
 	}
-	if target.HarnessEndpoint != "" && c.PinOrigin != target.HarnessEndpoint {
+	if target.HarnessEndpoint == "" || c.PinOrigin != target.HarnessEndpoint {
 		return adapter.Unreachable, fmt.Errorf("opencode: deliver %s: service origin differs from the bound endpoint; nothing sent", id)
 	}
 	body, _ := json.Marshal(struct {
 		Text     string `json:"text"`
 		Delivery string `json:"delivery"`
 	}{text, delivery})
+	if ctx.Err() != nil {
+		return adapter.Unreachable, fmt.Errorf("opencode: deliver %s: canceled before send; nothing sent", id)
+	}
 	r, err := c.Prompt(ctx, id, body)
 	if err != nil {
 		var e *Error
@@ -68,14 +71,10 @@ func (h *Harness) prompt(ctx context.Context, target adapter.Binding, text, deli
 			Delivery  string `json:"delivery"`
 		} `json:"data"`
 	}
-	if json.Unmarshal(r.Body, &doc) != nil || doc.Data.ID == "" || doc.Data.SessionID != id {
+	if r.Status != 200 || json.Unmarshal(r.Body, &doc) != nil || doc.Data.ID == "" || doc.Data.SessionID != id {
 		return adapter.Unknown, fmt.Errorf("opencode: deliver %s: response does not admit a message to the session", id)
 	}
-	got := doc.Data.Delivery
-	if got == "" {
-		got = delivery
-	}
-	switch got {
+	switch doc.Data.Delivery {
 	case "steer":
 		return adapter.Accepted, nil
 	case "queue":

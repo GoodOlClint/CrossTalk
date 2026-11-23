@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/GoodOlClint/crosstalk/internal/adapter"
 	"github.com/GoodOlClint/crosstalk/internal/msg"
@@ -84,5 +85,24 @@ func TestMailSignalFailure(t *testing.T) {
 			}
 			hygiene(t, r)
 		})
+	}
+}
+
+func TestMailSignalDeadline(t *testing.T) {
+	old := wakeTimeout
+	wakeTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { wakeTimeout = old })
+	r := newRig(t, "2.4.0", nil)
+	r.svc.set(func(s *service) { s.prompt.Delay = 10 * time.Second })
+	start := time.Now()
+	err := r.h.MailSignal(context.Background(), peerMsg(msg.Immediate), scriptSender(r))
+	if err == nil {
+		t.Fatal("no error for an unacknowledged wake")
+	}
+	if el := time.Since(start); el > 3*time.Second {
+		t.Fatalf("MailSignal took %v", el)
+	}
+	if n := len(r.prompts()); n != 1 {
+		t.Fatalf("%d POSTs, want 1", n)
 	}
 }

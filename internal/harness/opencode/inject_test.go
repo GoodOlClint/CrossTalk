@@ -178,6 +178,18 @@ func TestInjectFailureStates(t *testing.T) {
 				s.prompt.Raw = `{"data":{"id":"msg_1","sessionID":"` + sid + `","delivery":"later"}}`
 			})
 		}, adapter.Unknown, 1},
+		{"202 with admitted fields", func(_ *testing.T, r *rig, _ *adapter.Delivery) {
+			r.svc.set(func(s *service) {
+				s.prompt.Raw, s.prompt.RawStatus = `{"data":{"id":"msg_1","sessionID":"`+sid+`","delivery":"steer"}}`, 202
+			})
+		}, adapter.Unknown, 1},
+		{"200 without delivery", func(_ *testing.T, r *rig, _ *adapter.Delivery) {
+			r.svc.set(func(s *service) { s.prompt.Raw = `{"data":{"id":"msg_1","sessionID":"` + sid + `"}}` })
+		}, adapter.Unknown, 1},
+		{"200 with null delivery", func(_ *testing.T, r *rig, _ *adapter.Delivery) {
+			r.svc.set(func(s *service) { s.prompt.Raw = `{"data":{"id":"msg_1","sessionID":"` + sid + `","delivery":null}}` })
+		}, adapter.Unknown, 1},
+		{"binding has no endpoint", func(_ *testing.T, _ *rig, d *adapter.Delivery) { d.Target.HarnessEndpoint = "" }, adapter.Unreachable, 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -240,5 +252,18 @@ func TestInjectD15Matrix(t *testing.T) {
 			}
 			hygiene(t, r)
 		})
+	}
+}
+
+func TestInjectCanceledBeforeSend(t *testing.T) {
+	r := newRig(t, "2.4.0", nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	st, err := r.h.Inject(ctx, peerMsg(msg.Immediate), teammate(r))
+	if st != adapter.Unreachable || err == nil {
+		t.Fatalf("%v %v, want unreachable", st, err)
+	}
+	if n := len(r.f.requests()); n != 0 {
+		t.Fatalf("%d requests sent", n)
 	}
 }

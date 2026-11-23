@@ -64,6 +64,9 @@ type promptMode struct {
 	Raw     string
 	Session string
 	Drop    bool
+	Delay   time.Duration
+	// RawStatus is the status sent with Raw; 0 means 200.
+	RawStatus int
 }
 
 func (s *service) set(f func(*service)) {
@@ -194,6 +197,11 @@ func (c *clock) add(d time.Duration) {
 }
 
 func servePrompt(w http.ResponseWriter, r *http.Request, pm promptMode) {
+	select {
+	case <-time.After(pm.Delay):
+	case <-r.Context().Done():
+		return
+	}
 	switch {
 	case pm.Drop:
 		if c, _, err := w.(http.Hijacker).Hijack(); err == nil {
@@ -205,6 +213,9 @@ func servePrompt(w http.ResponseWriter, r *http.Request, pm promptMode) {
 		return
 	case pm.Raw != "":
 		w.Header().Set("Content-Type", "application/json")
+		if pm.RawStatus != 0 {
+			w.WriteHeader(pm.RawStatus)
+		}
 		_, _ = w.Write([]byte(pm.Raw))
 		return
 	}
