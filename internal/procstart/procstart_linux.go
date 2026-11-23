@@ -72,10 +72,21 @@ func startTicks(pid int) (int64, error) {
 }
 
 // Token is a string that is equal across two readings of one process and
-// differs for another process with the pid.
+// differs for another process with the pid, also after a reboot.
 func Token(pid int) (string, error) {
 	t, err := startTicks(pid)
-	return strconv.FormatInt(t, 10), err
+	if err != nil {
+		return "", err
+	}
+	id, err := os.ReadFile("/proc/sys/kernel/random/boot_id")
+	if err != nil {
+		return "", err
+	}
+	return token(strings.TrimSpace(string(id)), t), nil
+}
+
+func token(bootID string, ticks int64) string {
+	return bootID + ":" + strconv.FormatInt(ticks, 10)
 }
 
 func StartTime(pid int) (time.Time, error) {

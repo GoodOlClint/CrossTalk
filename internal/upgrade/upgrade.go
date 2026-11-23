@@ -71,13 +71,15 @@ func ClearMarkers(stateDir, target string) error {
 		if err := os.Remove(filepath.Join(vd, target+".done")); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
-		keyed, err := filepath.Glob(filepath.Join(vd, target+"-*.done"))
+		ms, err := os.ReadDir(vd)
 		if err != nil {
 			return err
 		}
-		for _, m := range keyed {
-			if err := os.Remove(m); err != nil && !errors.Is(err, os.ErrNotExist) {
-				return err
+		for _, m := range ms {
+			if n := m.Name(); strings.HasPrefix(n, target+"-") && strings.HasSuffix(n, ".done") {
+				if err := os.Remove(filepath.Join(vd, n)); err != nil && !errors.Is(err, os.ErrNotExist) {
+					return err
+				}
 			}
 		}
 	}

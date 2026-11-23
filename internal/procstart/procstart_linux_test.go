@@ -23,3 +23,9 @@ func TestTokenIgnoresBootTimeStep(t *testing.T) {
 		t.Fatalf("token changed with the boot time: %s vs %s", a, b)
 	}
 }
+
+func TestTokenDiffersAcrossBoots(t *testing.T) {
+	if token("boot-a", 42) == token("boot-b", 42) {
+		t.Fatal("identical ticks on two boots compare equal")
+	}
+}

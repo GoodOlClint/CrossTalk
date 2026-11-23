@@ -182,10 +182,8 @@ func reapOrphan(ctx context.Context, path string, waiting func()) {
 		cur := startTime(pgid)
 		return cur == "" || cur == f[2]
 	}
-	deadline := time.Unix(0, ns)
-	if capped := time.Now().Add(time.Duration(lim)); capped.Before(deadline) {
-		deadline = capped
-	}
+	remaining := min(time.Until(time.Unix(0, ns)), time.Duration(lim))
+	deadline := time.Now().Add(remaining)
 	for told := false; groupAlive(pgid) && ours() && time.Now().Before(deadline); {
 		if !told && waiting != nil {
 			waiting()

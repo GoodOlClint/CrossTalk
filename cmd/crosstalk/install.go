@@ -258,8 +258,7 @@ func runInstall(mode string, args []string, in io.Reader, tty bool, stdout, stde
 	if o.queueWake && mode != "uninstall" {
 		env.Experimental = map[string]bool{codex.QueueWakeOption: true}
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+	ctx := context.Background()
 	cfgDir := filepath.Join(home, ".config", "crosstalk")
 	var remoteSteps []harness.Step
 	if mode != "uninstall" && o.remote && o.set["bind"] && !o.check {
@@ -361,9 +360,11 @@ func runInstall(mode string, args []string, in io.Reader, tty bool, stdout, stde
 		fmt.Fprintf(stderr, "crosstalk %s: no terminal to confirm on; nothing changed. Run it in a terminal or pass --yes.\n", mode)
 		return 2
 	}
-	release, err := upgrade.Lock(ctx, stateDir, func() {
+	lockCtx, stopSignals := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	release, err := upgrade.Lock(lockCtx, stateDir, func() {
 		fmt.Fprintf(stdout, "waiting for %s: a CrossTalk session is running the upgrade follow-up\n", upgrade.LockPath(stateDir))
 	})
+	stopSignals()
 	if err != nil {
 		fmt.Fprintf(stderr, "crosstalk %s: %v\n", mode, err)
 		return 1
