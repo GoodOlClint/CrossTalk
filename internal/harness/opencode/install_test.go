@@ -29,6 +29,8 @@ type fakeCLI struct {
 	cfgPath   string
 	version   string
 	ignoreEnv bool
+	onAdd     func()
+	failAdd   bool
 	calls     []string
 }
 
@@ -41,6 +43,12 @@ func (f *fakeCLI) run(_ context.Context, name string, args ...string) ([]byte, e
 	case len(args) == 1 && args[0] == "--version":
 		return []byte("opencode v" + f.version + "\n"), nil
 	case len(args) >= 4 && args[0] == "mcp" && args[1] == "add" && args[2] == "crosstalk" && args[3] == "--global":
+		if f.onAdd != nil {
+			f.onAdd()
+		}
+		if f.failAdd {
+			return nil, errors.New("add failed")
+		}
 		rest := args[4:]
 		env := map[string]string{}
 		for len(rest) >= 2 && rest[0] == "--env" {
@@ -549,4 +557,97 @@ func TestChecksK2K5K6K13(t *testing.T) {
 			t.Errorf("missing service.json = %+v", r)
 		}
 	})
+}
+
+func TestInstallRefusesToReAddExistingEntryForEnvironment(t *testing.T) {
+	s := newSandbox(t)
+	s.env.NoAutoRefresh = true
+	body := `{"mcp":{"servers":{"crosstalk":{` + entryJSON(testBin) + `,"environment":{"MY_VAR":"1"},"timeout":9}}}}` + "\n"
+	s.write(t, body)
+	err := s.applyInstall(t)
+	if err == nil || !strings.Contains(err.Error(), harness.OffEnv) {
+		t.Fatalf("err = %v", err)
+	}
+	if s.read(t) != body || s.cli.adds() != 0 {
+		t.Errorf("an existing entry was rewritten:\n%s", s.read(t))
+	}
+}
+
+func TestInstallRollbackLeavesSiblingFile(t *testing.T) {
+	s := newSandbox(t)
+	sibling := filepath.Join(filepath.Dir(s.cfgPath), "opencode.jsonc")
+	s.cli.failAdd = true
+	s.cli.onAdd = func() {
+		os.MkdirAll(filepath.Dir(sibling), 0o755)
+		os.WriteFile(sibling, []byte("{}\n"), 0o644)
+	}
+	if err := s.applyInstall(t); err == nil {
+		t.Fatal("want failure")
+	}
+	if b, err := os.ReadFile(sibling); err != nil || string(b) != "{}\n" {
+		t.Errorf("rollback touched the sibling file: %q, %v", b, err)
+	}
+}
+
+func TestInstallAndUninstallRefuseSymlinkedConfig(t *testing.T) {
+	s := newSandbox(t)
+	real := filepath.Join(t.TempDir(), "dotfiles.json")
+	body := `{"mcp":{"servers":{"crosstalk":{` + entryJSON(testBin) + `}}}}` + "\n"
+	os.WriteFile(real, []byte(body), 0o644)
+	os.MkdirAll(filepath.Dir(s.cfgPath), 0o755)
+	if err := os.Symlink(real, s.cfgPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.applyUninstall(t); err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Errorf("uninstall err = %v", err)
+	}
+	os.Remove(s.cfgPath)
+	os.WriteFile(real, []byte("{}\n"), 0o644)
+	os.Symlink(real, s.cfgPath)
+	if err := s.applyInstall(t); err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Errorf("install err = %v", err)
+	}
+	if fi, err := os.Lstat(s.cfgPath); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("the link was replaced")
+	}
+}
+
+func TestChecksEmptyCommandAndDisabledEntry(t *testing.T) {
+	ctx := context.Background()
+	s := newSandbox(t)
+	t.Chdir(t.TempDir())
+	s.write(t, `{"mcp":{"servers":{"crosstalk":{"type":"local","command":[]}}}}`)
+	rs := s.h.Checks(ctx, s.env)
+	if k2, _ := checkByID(rs, "K2"); k2.OK {
+		t.Errorf("K2 passes with an empty command: %+v", k2)
+	}
+	s.write(t, `{"mcp":{"servers":{"crosstalk":{`+entryJSON(testBin)+`,"enabled":false}}}}`)
+	if k2, _ := checkByID(s.h.Checks(ctx, s.env), "K2"); k2.OK || !strings.Contains(k2.Detail, "disabled") {
+		t.Errorf("K2 on a disabled entry: %+v", k2)
+	}
+	if err := s.applyInstall(t); err == nil || !strings.Contains(err.Error(), "disabled") {
+		t.Errorf("install over a disabled entry: %v", err)
+	}
+}
+
+func TestK6NeverStartsProjectOrMismatchedCommand(t *testing.T) {
+	ctx := context.Background()
+	s := newSandbox(t)
+	started := false
+	s.env.Handshake = func(context.Context, string, []string, []string) error { started = true; return nil }
+	proj := t.TempDir()
+	t.Chdir(proj)
+	os.WriteFile(filepath.Join(proj, "opencode.json"), []byte(`{"mcp":{"servers":{"crosstalk":{`+entryJSON("/repo/evil")+`}}}}`), 0o644)
+	rs := s.h.Checks(ctx, s.env)
+	if started {
+		t.Error("handshake started a project-only entry")
+	}
+	if k6, _ := checkByID(rs, "K6"); k6.OK {
+		t.Errorf("K6 passes: %+v", k6)
+	}
+	s.write(t, `{"mcp":{"servers":{"crosstalk":{`+entryJSON("/other/bin/crosstalk")+`}}}}`)
+	s.h.Checks(ctx, s.env)
+	if started {
+		t.Error("handshake started a command K5 rejected")
+	}
 }

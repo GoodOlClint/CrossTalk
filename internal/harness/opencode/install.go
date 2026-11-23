@@ -130,20 +130,23 @@ type snapshot struct {
 	existed bool
 }
 
-func snapshotGlobal(home string) ([]snapshot, error) {
-	var out []snapshot
-	for _, f := range globalFiles(home) {
-		b, err := os.ReadFile(f)
-		switch {
-		case err == nil:
-			out = append(out, snapshot{f, b, true})
-		case errors.Is(err, os.ErrNotExist):
-			out = append(out, snapshot{path: f})
-		default:
-			return nil, err
-		}
+func snapshotTarget(home string) ([]snapshot, error) {
+	f := writeTarget(home)
+	b, err := os.ReadFile(f)
+	switch {
+	case err == nil:
+		return []snapshot{{f, b, true}}, nil
+	case errors.Is(err, os.ErrNotExist):
+		return []snapshot{{path: f}}, nil
 	}
-	return out, nil
+	return nil, err
+}
+
+func refuseLink(path string) error {
+	if fi, err := os.Lstat(path); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%s is a symlink, which install and uninstall do not replace; edit its target by hand", path)
+	}
+	return nil
 }
 
 func restore(snaps []snapshot) error {
@@ -180,6 +183,9 @@ func (h *Harness) configStep(env harness.InstallEnv) harness.Step {
 				if !ownEntry(e, env.Bin) {
 					return fmt.Errorf("%s has a crosstalk entry (%s) that runs %q, not %s; install changed nothing: edit or remove that entry by hand, then run install again", e.file, e.shape, strings.Join(e.command, " "), env.Bin)
 				}
+				if e.disabled {
+					return fmt.Errorf("%s has the crosstalk entry (%s) disabled, so OpenCode never starts it; install changed nothing: enable it by hand", e.file, e.shape)
+				}
 				own = append(own, e)
 			}
 			if len(own) > 1 {
@@ -188,10 +194,13 @@ func (h *Harness) configStep(env harness.InstallEnv) harness.Step {
 			if len(own) == 1 && envWanted(own[0], env) {
 				return nil
 			}
-			if len(own) == 1 && own[0].shape == shapeV1 {
-				return fmt.Errorf("%s has the %s entry without environment %s=1, which install does not edit; add it by hand", own[0].file, shapeV1, harness.OffEnv)
+			if len(own) == 1 {
+				return fmt.Errorf("%s has the %s entry without environment %s=1, and install does not edit an existing entry (a re-add would drop its other settings); add \"environment\": {\"%s\": \"1\"} to it by hand", own[0].file, own[0].shape, harness.OffEnv, harness.OffEnv)
 			}
-			snaps, err := snapshotGlobal(env.Home)
+			if err := refuseLink(writeTarget(env.Home)); err != nil {
+				return err
+			}
+			snaps, err := snapshotTarget(env.Home)
 			if err != nil {
 				return err
 			}
@@ -262,9 +271,13 @@ func (h *Harness) UninstallSteps(env harness.InstallEnv) []harness.Step {
 				if c.comments {
 					var lines []string
 					for _, sp := range spans {
-						lines = append(lines, lineSpan(c.src, sp))
+						l, n := lineSpan(c.src, sp)
+						lines = append(lines, fmt.Sprintf("from line %d:\n%s", n, l))
 					}
-					return fmt.Errorf("%s has comments, so uninstall does not rewrite it (a rewrite would drop them); delete the crosstalk entry by hand, these lines:\n%s", c.path, strings.Join(lines, "\n"))
+					return fmt.Errorf("%s has comments, so uninstall does not rewrite it (a rewrite would drop them); delete the crosstalk entry by hand, these lines (check that the commas around them stay valid, and that they hold no other setting):\n%s", c.path, strings.Join(lines, "\n"))
+				}
+				if err := refuseLink(c.path); err != nil {
+					return err
 				}
 				out := cutMembers(c.src, spans)
 				nc, err := parseConfig(c.path, out)
@@ -312,10 +325,11 @@ func sameFile(a, b string) bool {
 
 func (h *Harness) Checks(ctx context.Context, env harness.InstallEnv) []harness.CheckResult {
 	k2, k5, k6 := harness.CheckResult{ID: "K2"}, harness.CheckResult{ID: "K5"}, harness.CheckResult{ID: "K6"}
-	var es []entry
+	var es, glob []entry
 	cs, err := loadGlobal(env.Home)
 	if err == nil {
-		es = entriesOf(cs)
+		glob = entriesOf(cs)
+		es = slices.Clone(glob)
 		for _, f := range projectFiles() {
 			if slices.ContainsFunc(globalFiles(env.Home), func(g string) bool { return sameFile(f, g) }) {
 				continue
@@ -332,6 +346,8 @@ func (h *Harness) Checks(ctx context.Context, env harness.InstallEnv) []harness.
 	switch {
 	case err != nil:
 		k2.Detail = "cannot read the OpenCode config: " + err.Error()
+	case len(es) == 1 && es[0].disabled:
+		k2.Detail = "the CrossTalk entry in " + es[0].file + " is disabled, so OpenCode never starts it"
 	case len(es) == 1:
 		k2.OK, k2.Detail = true, "one CrossTalk entry, "+es[0].file+" ("+es[0].shape+")"
 	case len(es) == 0:
@@ -344,11 +360,11 @@ func (h *Harness) Checks(ctx context.Context, env harness.InstallEnv) []harness.
 		k2.Detail = fmt.Sprintf("%d CrossTalk entries, want one: %s", len(es), strings.Join(where, ", "))
 	}
 
-	if len(es) == 0 {
-		k5.Detail, k6.Detail = "no registered server", "no registered server to start"
+	if len(glob) == 0 {
+		k5.Detail, k6.Detail = "no registered server in the global OpenCode config (project entries are only counted by K2)", "no registered server to start"
 	} else {
-		e := es[0]
-		for _, c := range es {
+		e := glob[0]
+		for _, c := range glob {
 			if runsBin(c, env.Bin) {
 				e = c
 				break
@@ -357,15 +373,19 @@ func (h *Harness) Checks(ctx context.Context, env harness.InstallEnv) []harness.
 		fi, serr := os.Stat(e.command[0])
 		k5.OK = ownEntry(e, env.Bin) && serr == nil && fi.Mode().Perm()&0o111 != 0
 		k5.Detail = fmt.Sprintf("registered %q, want %q [mcp], executable", e.command, env.Bin)
-		var envs []string
-		for k, v := range e.env {
-			envs = append(envs, k+"="+v)
-		}
-		slices.Sort(envs)
-		if err := env.Handshake(ctx, e.command[0], e.command[1:], envs); err != nil {
-			k6.Detail = err.Error()
+		if !k5.OK {
+			k6.Detail = "not started: the registered command is not the installed binary"
 		} else {
-			k6.OK, k6.Detail = true, "registered server lists the CrossTalk tools at "+env.Version
+			var envs []string
+			for k, v := range e.env {
+				envs = append(envs, k+"="+v)
+			}
+			slices.Sort(envs)
+			if err := env.Handshake(ctx, e.command[0], e.command[1:], envs); err != nil {
+				k6.Detail = err.Error()
+			} else {
+				k6.OK, k6.Detail = true, "registered server lists the CrossTalk tools at "+env.Version
+			}
 		}
 	}
 	return []harness.CheckResult{k2, k5, k6, h.k13()}

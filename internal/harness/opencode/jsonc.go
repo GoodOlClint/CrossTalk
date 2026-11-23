@@ -166,8 +166,9 @@ func cutMembers(src []byte, spans []span) []byte {
 	return out
 }
 
-// lineSpan widens sp to whole lines of src.
-func lineSpan(src []byte, sp span) string {
+// lineSpan widens sp to whole lines of src and returns them with the first
+// line number.
+func lineSpan(src []byte, sp span) (string, int) {
 	s, e := sp.start, sp.end
 	for s > 0 && src[s-1] != '\n' {
 		s--
@@ -175,15 +176,16 @@ func lineSpan(src []byte, sp span) string {
 	for e < len(src) && src[e] != '\n' {
 		e++
 	}
-	return string(src[s:e])
+	return string(src[s:e]), bytes.Count(src[:s], []byte{'\n'}) + 1
 }
 
 type entry struct {
-	shape   string
-	file    string
-	command []string
-	env     map[string]string
-	path    []string
+	shape    string
+	file     string
+	command  []string
+	env      map[string]string
+	path     []string
+	disabled bool
 }
 
 const (
@@ -224,6 +226,8 @@ func parseConfig(path string, src []byte) (*config, error) {
 		var e struct {
 			Command     json.RawMessage   `json:"command"`
 			Environment map[string]string `json:"environment"`
+			Enabled     *bool             `json:"enabled"`
+			Disabled    bool              `json:"disabled"`
 		}
 		if err := json.Unmarshal(raw, &e); err != nil {
 			return fmt.Errorf(`"%s" is not a readable server entry`, shape)
@@ -232,7 +236,11 @@ func parseConfig(path string, src []byte) (*config, error) {
 		if err := json.Unmarshal(e.Command, &cmd); err != nil {
 			return fmt.Errorf(`"%s" has no readable command array`, shape)
 		}
-		c.entries = append(c.entries, entry{shape: shape, file: path, command: cmd, env: e.Environment, path: p})
+		if len(cmd) == 0 {
+			return fmt.Errorf(`"%s" has an empty command`, shape)
+		}
+		off := e.Disabled || (e.Enabled != nil && !*e.Enabled)
+		c.entries = append(c.entries, entry{shape: shape, file: path, command: cmd, env: e.Environment, path: p, disabled: off})
 		return nil
 	}
 	if raw, ok := mcp["servers"]; ok {
