@@ -2241,3 +2241,85 @@ func TestHarnessCompatOpenCodeLegShape(t *testing.T) {
 		}
 	}
 }
+
+func TestHarnessCompatCompareOpenCodeChecksTheCandidateVersion(t *testing.T) {
+	for _, tool := range []string{"jq", "python3", "lsof"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			t.Skip(tool + " not on PATH")
+		}
+	}
+	bin, home := t.TempDir(), t.TempDir()
+	fake := "#!/bin/sh\ncase \"$1\" in --version) echo 'opencode v2.4.0' ;; esac\n"
+	if err := os.WriteFile(filepath.Join(bin, "opencode"), []byte(fake), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(filepath.Join(releaseRepoRoot(t), "scripts", "harness-compat.sh"), "compare-opencode", home, "2.4.1")
+	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	out, err := cmd.CombinedOutput()
+	if err == nil || !strings.Contains(string(out), "candidate") {
+		t.Fatalf("a different opencode on PATH must fail with the candidate named: %v\n%s", err, out)
+	}
+}
+
+func TestHarnessCompatOpenCodeLegKeepsAnExistingConfig(t *testing.T) {
+	home := t.TempDir()
+	cfg := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if err := os.MkdirAll(filepath.Dir(cfg), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfg, []byte("sentinel"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(filepath.Join(releaseRepoRoot(t), "scripts", "harness-compat-live.sh"), "leg", "opencode-linux", home)
+	cmd.Env = append(os.Environ(), "OPENROUTER_API_KEY=k", "OPENCODE_MODEL=m", "CROSSTALK_BIN=/usr/bin/true", "LIVE_LOGS="+t.TempDir())
+	out, err := cmd.CombinedOutput()
+	if err == nil || !strings.Contains(string(out), "scratch home") {
+		t.Fatalf("an existing opencode.json must stop the leg: %v\n%s", err, out)
+	}
+	if b, _ := os.ReadFile(cfg); string(b) != "sentinel" {
+		t.Errorf("the config was overwritten: %q", b)
+	}
+}
+
+func TestHarnessCompatStageLogsScrubsTheOpenCodeServicePassword(t *testing.T) {
+	raw, dest := t.TempDir(), filepath.Join(t.TempDir(), "out")
+	pw := "svc-pass-xyz"
+	basic := "b3BlbmNvZGU6c3ZjLXBhc3MteHl6"
+	if err := os.WriteFile(filepath.Join(raw, "opencode-service.log"), []byte("start password="+pw+" Authorization: Basic "+basic+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(filepath.Join(releaseRepoRoot(t), "scripts", "harness-compat-live.sh"), "stage-logs", raw, dest)
+	cmd.Env = append(os.Environ(), "OPENROUTER_API_KEY=k-123", "OPENCODE_SERVICE_PASSWORD="+pw)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	got, _ := os.ReadFile(filepath.Join(dest, "opencode-service.log"))
+	if strings.Contains(string(got), pw) || strings.Contains(string(got), basic) {
+		t.Errorf("staged log keeps the service credential: %s", got)
+	}
+}
+
+func TestHarnessCompatOpenCodeServiceMustBeTheLaunchedPid(t *testing.T) {
+	for _, tool := range []string{"jq", "lsof"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			t.Skip(tool + " not on PATH")
+		}
+	}
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	f := filepath.Join(t.TempDir(), "service.json")
+	doc := fmt.Sprintf(`{"url":"http://127.0.0.1:%d","pid":%d,"password":"x"}`, l.Addr().(*net.TCPAddr).Port, os.Getpid())
+	if err := os.WriteFile(f, []byte(doc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(releaseRepoRoot(t), "scripts", "harness-compat-live.sh")
+	if out, err := exec.Command(script, "opencode-service", f, fmt.Sprint(os.Getpid())).CombinedOutput(); err != nil {
+		t.Errorf("launched pid matches: %v\n%s", err, out)
+	}
+	if out, err := exec.Command(script, "opencode-service", f, fmt.Sprint(os.Getpid()+1)).CombinedOutput(); err == nil {
+		t.Errorf("a service this leg did not launch was accepted:\n%s", out)
+	}
+}

@@ -135,8 +135,9 @@ compare-codex)
 	echo "$q"
 	;;
 compare-opencode)
-	usage="usage: harness-compat.sh compare-opencode HOME"
+	usage="usage: harness-compat.sh compare-opencode HOME [VERSION]"
 	home="${2:?$usage}"
+	want="${3-}"
 	port="${COMPAT_OPENCODE_PORT:-49374}"
 	xt="${CROSSTALK_BIN:-$home/.local/bin/crosstalk}"
 	mkdir -p "$home/.config" "$home/.local/state" "$home/.local/share" "$home/.cache"
@@ -145,6 +146,10 @@ compare-opencode)
 	out="$(opencode --version)"
 	[ "$(printf '%s\n' "$out" | wc -l)" -eq 1 ] && printf '%s\n' "$out" | grep -Eq '^opencode v[0-9]+\.[0-9]+\.[0-9]+[[:space:]]*$' || {
 		echo "opencode --version no longer parses: $out" >&2
+		exit 1
+	}
+	[ -z "$want" ] || [ "$out" = "opencode v$want" ] || {
+		echo "opencode --version is '$out', want the candidate opencode v$want: another opencode is on PATH" >&2
 		exit 1
 	}
 	command -v lsof >/dev/null 2>&1 || {
@@ -173,6 +178,10 @@ compare-opencode)
 		echo "service.json mode is not 0600 or not owned by this user, or it is a symlink: $f" >&2
 		exit 1
 	}
+	if [ -n "$want" ] && [ "$(jq -r '.version // ""' "$f")" != "$want" ]; then
+		echo "service.json version is not the candidate $want" >&2
+		exit 1
+	fi
 	url="$(jq -r 'if (.password | type == "string" and length > 0) then .url // "" else "NO-PASSWORD" end' "$f")" || {
 		echo "service.json is not JSON: $f" >&2
 		exit 1
@@ -188,8 +197,8 @@ compare-opencode)
 	uport="$(printf '%s\n' "$url" | sed -E 's|^.*:([0-9]+)/?$|\1|')"
 	spid="$(jq -r '.pid | if type == "number" then tostring else "" end' "$f")"
 	listener="$(lsof -nP -iTCP:"$uport" -sTCP:LISTEN -t 2>/dev/null || true)"
-	[ -n "$spid" ] && [ "$spid" = "$listener" ] || {
-		echo "service.json pid '$spid' is not the listener of port $uport ('$listener')" >&2
+	[ -n "$spid" ] && [ "$spid" = "$listener" ] && [ "$spid" = "$pid" ] || {
+		echo "service.json pid '$spid' is not the listener of port $uport ('$listener') or not the service this check launched ('$pid')" >&2
 		exit 1
 	}
 	auth() { printf 'user = "opencode:%s"\n' "$(jq -r .password "$f")"; }
@@ -209,7 +218,7 @@ compare-opencode)
 	req="$(jq -nc --arg id "$ses" '{jsonrpc: "2.0", id: 2, method: "tools/call", params: {name: "list_agents", arguments: {}, _meta: {"ai.opencode/sessionID": $id}}}')"
 	init='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"compat","version":"0"}}}'
 	resp="$( (printf '%s\n' "$init"; sleep 1; printf '%s\n' '{"jsonrpc":"2.0","method":"notifications/initialized"}'; printf '%s\n' "$req"; sleep 3) | "$xt" mcp 2>/dev/null | jq -c 'select(.id == 2)' )" || true
-	printf '%s' "$resp" | jq -e '[.. | objects | select(.harness? == "opencode" and .you? == true)] | length == 1' >/dev/null 2>&1 || {
+	printf '%s' "$resp" | jq -e '[.. | objects | select(.harness? == "opencode" and .you? == true and .name? == "compat")] | length == 1' >/dev/null 2>&1 || {
 		echo "a tools/call carrying _meta ai.opencode/sessionID $ses did not bind to an opencode row" >&2
 		exit 1
 	}

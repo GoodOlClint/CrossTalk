@@ -282,7 +282,11 @@ stage-logs)
 	python3 -I - "${2:?usage: harness-compat-live.sh stage-logs RAW DEST}" "${3:?}" <<'PY'
 import os, shutil, sys
 raw, dest = sys.argv[1], sys.argv[2]
-key = os.environ.get("OPENROUTER_API_KEY", "")
+import base64
+secrets = [os.environ.get("OPENROUTER_API_KEY", "")]
+pw = os.environ.get("OPENCODE_SERVICE_PASSWORD", "")
+if pw:
+    secrets += [pw, base64.b64encode(("opencode:" + pw).encode()).decode()]
 try:
     shutil.rmtree(dest, ignore_errors=True)
     for root, _, files in os.walk(raw):
@@ -290,8 +294,9 @@ try:
         os.makedirs(out, exist_ok=True)
         for f in files:
             b = open(os.path.join(root, f), "rb").read()
-            if key:
-                b = b.replace(key.encode(), b"***")
+            for secret in secrets:
+                if secret:
+                    b = b.replace(secret.encode(), b"***")
             open(os.path.join(out, f), "wb").write(b)
 except Exception as e:
     shutil.rmtree(dest, ignore_errors=True)
@@ -326,7 +331,8 @@ assert-discovery)
 	fi
 	;;
 opencode-service)
-	f="${2:?usage: harness-compat-live.sh opencode-service SERVICE_JSON}"
+	f="${2:?usage: harness-compat-live.sh opencode-service SERVICE_JSON [LAUNCHED_PID]}"
+	launched="${3-}"
 	command -v lsof >/dev/null 2>&1 || {
 		echo "lsof not found: cannot check which process owns the service port" >&2
 		exit 1
@@ -345,6 +351,10 @@ opencode-service)
 	listener="$(lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null || true)"
 	[ -n "$spid" ] && [ "$spid" = "$listener" ] || {
 		echo "service.json pid '$spid' is not the listener of port $port ('$listener')" >&2
+		exit 1
+	}
+	[ -z "$launched" ] || [ "$spid" = "$launched" ] || {
+		echo "service.json pid '$spid' is not the service this leg launched ('$launched')" >&2
 		exit 1
 	}
 	printf '%s\n' "$url"
@@ -616,9 +626,9 @@ PY
 	oc_api() { # method path [body]: the Basic header goes through curl --config - so it is never on a command line
 		oc_url="$(cat "$logs/opencode-service.url")"
 		if [ $# -ge 3 ]; then
-			printf 'user = "opencode:%s"\n' "$(jq -r .password "$XDG_STATE_HOME/opencode/service.json")" | curl -fsS --max-time 30 --config - -X "$1" -H 'content-type: application/json' --data "$3" "$oc_url$2"
+			printf 'user = "opencode:%s"\n' "$OPENCODE_SERVICE_PASSWORD" | curl -fsS --max-time 30 --config - -X "$1" -H 'content-type: application/json' --data "$3" "$oc_url$2"
 		else
-			printf 'user = "opencode:%s"\n' "$(jq -r .password "$XDG_STATE_HOME/opencode/service.json")" | curl -fsS --max-time 30 --config - -X "$1" "$oc_url$2"
+			printf 'user = "opencode:%s"\n' "$OPENCODE_SERVICE_PASSWORD" | curl -fsS --max-time 30 --config - -X "$1" "$oc_url$2"
 		fi
 	}
 	oc_new_session() { # title
@@ -628,6 +638,10 @@ PY
 		oc_api POST "/api/session/$1/prompt" "$(jq -nc --arg t "$2" '{text: $t, delivery: "steer"}')" >"$logs/oc-prompt.json"
 	}
 	install_opencode() {
+		[ ! -e "$XDG_CONFIG_HOME/opencode/opencode.json" ] || {
+			echo "opencode-* needs a scratch home: $XDG_CONFIG_HOME/opencode/opencode.json already exists and is not overwritten" >&2
+			return 1
+		}
 		mkdir -p "$XDG_CONFIG_HOME/opencode"
 		jq -n --arg m "$OPENCODE_MODEL" '{model: $m}' >"$XDG_CONFIG_HOME/opencode/opencode.json"
 		"$xt" install opencode --yes </dev/null >"$logs/install-opencode.log" 2>&1
@@ -650,9 +664,10 @@ PY
 			cd "$home/work"
 			exec opencode serve --service ${COMPAT_OPENCODE_PORT:+--port "$COMPAT_OPENCODE_PORT"}
 		) >"$logs/opencode-service.log" 2>&1 &
-		pids="$pids $!"
+		launched=$!
+		pids="$pids $launched"
 		w=0
-		until "$0" opencode-service "$XDG_STATE_HOME/opencode/service.json" >"$logs/opencode-service.url" 2>"$logs/opencode-service.err"; do
+		until "$0" opencode-service "$XDG_STATE_HOME/opencode/service.json" "$launched" >"$logs/opencode-service.url" 2>"$logs/opencode-service.err"; do
 			w=$((w + 1))
 			[ "$w" -lt 60 ] || {
 				cat "$logs/opencode-service.err" >&2
@@ -660,6 +675,8 @@ PY
 			}
 			sleep 1
 		done
+		OPENCODE_SERVICE_PASSWORD="$(jq -r .password "$XDG_STATE_HOME/opencode/service.json")"
+		export OPENCODE_SERVICE_PASSWORD
 	}
 	opencode_roundtrip() {
 		install_opencode

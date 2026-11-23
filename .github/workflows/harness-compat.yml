@@ -98,6 +98,7 @@ jobs:
       - name: Harness probes
         env:
           HARNESS: ${{ matrix.harness }}
+          VERSION: ${{ matrix.version }}
         run: |
           set -eu
           case "$HARNESS" in
@@ -107,7 +108,7 @@ jobs:
               CROSSTALK_COMPAT_QUEUE_DB="$q" go test ./internal/harness/codex -run TestInstalledCodexQueueSchema -count=1 -v
               ;;
             opencode)
-              CROSSTALK_BIN="$SCRATCH_HOME/.local/bin/crosstalk" scripts/harness-compat.sh compare-opencode "$SCRATCH_HOME"
+              CROSSTALK_BIN="$SCRATCH_HOME/.local/bin/crosstalk" scripts/harness-compat.sh compare-opencode "$SCRATCH_HOME" "$VERSION"
               ;;
             *)
               scripts/harness-compat.sh compare-claude "$SCRATCH_HOME"
@@ -200,7 +201,7 @@ jobs:
           case "$HARNESS" in
             claude-code) npm install -g "@anthropic-ai/claude-code@$VERSION"; claude --version ;;
             codex) npm install -g "@openai/codex@$VERSION"; codex --version ;;
-            opencode) npm install -g "@opencode/cli@$VERSION"; opencode --version ;;
+            opencode) npm install -g "@opencode/cli@$VERSION"; [ "$(opencode --version)" = "opencode v$VERSION" ] || { echo "::error::opencode --version is not v$VERSION"; exit 1; } ;;
             *) echo "unknown harness: $HARNESS" >&2; exit 1 ;;
           esac
       - name: Run the leg
