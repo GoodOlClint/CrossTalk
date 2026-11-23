@@ -2,7 +2,7 @@
 
 ## Which agents does it work with?
 
-Claude Code and Codex, in any pairing: Claude to Claude, Codex to Codex, or across. Other harnesses (the agent programs) are possible later, because each harness lives in its own package behind one interface ([contributing](contributing.md#add-a-harness)). None is planned for a release yet.
+Claude Code and Codex, in any pairing: Claude to Claude, Codex to Codex, or across. OpenCode (the v2 line only; 1.x is unsupported) is built on the main branch and is not yet in a release; it is planned for v0.3.0, and its live end-to-end run is not yet verified. Other harnesses (the agent programs) are possible later, because each harness lives in its own package behind one interface ([contributing](contributing.md#add-a-harness)).
 
 ## Does it work across machines?
 
