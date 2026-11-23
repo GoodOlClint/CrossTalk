@@ -150,7 +150,7 @@ func (s *Server) listAgents(ctx context.Context) ([]Row, []string) {
 		if r.Cwd == "" {
 			r.Cwd = d.Cwd
 		}
-		if r.DeliveryMode == "" {
+		if r.DeliveryMode == "" && !s.owns(d.AgentID) {
 			r.DeliveryMode = d.DeliveryMode
 		}
 	}
@@ -195,4 +195,13 @@ func (s *Server) addInboxes(rows map[string]*Row, ds []registry.Descriptor) {
 	for _, r := range rows {
 		sort.Slice(r.Inboxes, func(i, j int) bool { return r.Inboxes[i].Name < r.Inboxes[j].Name })
 	}
+}
+
+// owns reports whether this shim serves the agent, whose own Discover is
+// then the only evidence of its delivery mode.
+func (s *Server) owns(agentID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.agents[agentID]
+	return ok
 }

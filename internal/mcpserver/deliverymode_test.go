@@ -82,3 +82,15 @@ func TestDeliveryModeOfDeadOwnerIsNotShown(t *testing.T) {
 		}
 	}
 }
+
+func TestOwnRowTrustsFreshDiscoverOverDescriptor(t *testing.T) {
+	fb := NewFakeBackend()
+	fb.SetSessions(Session{Harness: "codex", SessionRef: "tab", Name: "tab", Cwd: "/w", DeliveryMode: queueWake})
+	e := newEnv(t, 999999, fb)
+	e.mustOK(thread("tab"), "list_agents", nil)
+	e.srv.syncDeliveryModes(context.Background())
+	fb.SetSessions(Session{Harness: "codex", SessionRef: "tab", Name: "tab", Cwd: "/w"})
+	if got := rowOf(t, e.srv, codexID("tab")).DeliveryMode; got != "" {
+		t.Fatalf("own row between ticks = %q, want the fresh default", got)
+	}
+}

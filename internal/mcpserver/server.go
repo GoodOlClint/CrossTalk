@@ -16,6 +16,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/GoodOlClint/crosstalk/internal/adapter"
 	"github.com/GoodOlClint/crosstalk/internal/harness"
 	"github.com/GoodOlClint/crosstalk/internal/identity"
 	"github.com/GoodOlClint/crosstalk/internal/journal"
@@ -1104,7 +1105,7 @@ func (s *Server) syncDeliveryModes(ctx context.Context) {
 	s.mu.Lock()
 	ready := make([]*Agent, 0, len(s.agents))
 	for _, a := range s.agents {
-		if a.isReady() {
+		if a.isReady() && a.harness == adapter.Codex {
 			ready = append(ready, a)
 		}
 	}
@@ -1116,6 +1117,11 @@ func (s *Server) syncDeliveryModes(ctx context.Context) {
 	if err != nil {
 		return
 	}
+	done, ok := quiesce.Hold(ctx)
+	if !ok {
+		return
+	}
+	defer done()
 	for _, a := range ready {
 		mode := ""
 		for _, ss := range sessions {
