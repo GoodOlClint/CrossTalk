@@ -705,3 +705,53 @@ func TestFollowUpMarketplaceMismatchNotRetried(t *testing.T) {
 		t.Errorf("notices = %q, want one naming the remove command", notices)
 	}
 }
+
+func TestFollowUpCodexMarkerPerCodexHome(t *testing.T) {
+	rec, env, hs := fuSandbox(t, "", "codex")
+	adds := func() (n int) {
+		for _, c := range rec.all() {
+			if c == "codex plugin add crosstalk@crosstalk" {
+				n++
+			}
+		}
+		return
+	}
+	fuRun(env, hs, nil)
+	first := adds()
+	if first == 0 || !fuDone(env, "codex") {
+		t.Fatalf("default home: adds %d, marker %v", first, fuDone(env, "codex"))
+	}
+	other := filepath.Join(env.Home, "profile-b")
+	t.Setenv("CODEX_HOME", other)
+	os.MkdirAll(other, 0o755)
+	cfg, _ := os.ReadFile(filepath.Join(env.Home, ".codex", "config.toml"))
+	os.WriteFile(filepath.Join(other, "config.toml"), cfg, 0o644)
+	if k := markerKey("codex", env.Home); k == "codex" || !strings.HasPrefix(k, "codex-") {
+		t.Fatalf("markerKey for a second home = %q", k)
+	}
+	fuRun(env, hs, nil)
+	if adds() == first {
+		t.Fatal("a second CODEX_HOME skipped its own update because the first home's marker exists")
+	}
+}
+
+func TestMarkerKey(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("CODEX_HOME", "")
+	if k := markerKey("codex", home); k != "codex" {
+		t.Errorf("default home key = %q", k)
+	}
+	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+	if k := markerKey("codex", home); k != "codex" {
+		t.Errorf("explicit default home key = %q", k)
+	}
+	t.Setenv("CODEX_HOME", filepath.Join(home, "a"))
+	a := markerKey("codex", home)
+	t.Setenv("CODEX_HOME", filepath.Join(home, "b"))
+	if b := markerKey("codex", home); a == b || a == "codex" {
+		t.Errorf("keys a=%q b=%q", a, b)
+	}
+	if markerKey("claude", home) != "claude" || markerKey("gateway", home) != "gateway" {
+		t.Error("only codex is keyed")
+	}
+}

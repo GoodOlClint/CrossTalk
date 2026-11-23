@@ -3,6 +3,7 @@ package procstart
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -24,4 +25,11 @@ func StartTime(pid int) (time.Time, error) {
 	}
 	tv := kp.Proc.P_starttime
 	return time.Unix(int64(tv.Sec), int64(tv.Usec)*1000).UTC(), nil
+}
+
+// Token is a string that is equal across two readings of one process and
+// differs for another process with the pid.
+func Token(pid int) (string, error) {
+	t, err := StartTime(pid)
+	return strconv.FormatInt(t.UnixNano(), 10), err
 }

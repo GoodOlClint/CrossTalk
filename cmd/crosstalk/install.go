@@ -10,10 +10,12 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -358,9 +360,11 @@ func runInstall(mode string, args []string, in io.Reader, tty bool, stdout, stde
 		fmt.Fprintf(stderr, "crosstalk %s: no terminal to confirm on; nothing changed. Run it in a terminal or pass --yes.\n", mode)
 		return 2
 	}
-	release, err := upgrade.Lock(ctx, stateDir, func() {
+	lockCtx, stopSignals := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+	release, err := upgrade.Lock(lockCtx, stateDir, func() {
 		fmt.Fprintf(stdout, "waiting for %s: a CrossTalk session is running the upgrade follow-up\n", upgrade.LockPath(stateDir))
 	})
+	stopSignals()
 	if err != nil {
 		fmt.Fprintf(stderr, "crosstalk %s: %v\n", mode, err)
 		return 1
@@ -413,7 +417,7 @@ func installMarkers(ctx context.Context, targets []installTarget, env harness.In
 	var done []string
 	for _, t := range targets {
 		if pu, ok := t.in.(harness.PluginUpdater); ok && pu.PluginCheck(ctx, env).OK {
-			done = append(done, t.name)
+			done = append(done, markerKey(t.name, env.Home))
 		}
 	}
 	if unitOwned(env.Home, cfgDir) && gatewayOnBin(ctx, env.StateDir, env.Bin, 0) == nil {

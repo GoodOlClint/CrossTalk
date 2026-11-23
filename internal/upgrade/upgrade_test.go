@@ -592,7 +592,7 @@ func orphanGroup(t *testing.T) (c *exec.Cmd, exited <-chan struct{}) {
 func TestReapOrphanLeavesReusedGroup(t *testing.T) {
 	c, exited := orphanGroup(t)
 	st := t.TempDir()
-	rec := fmt.Sprintf("%d %d 1\n", c.Process.Pid, time.Now().Add(-time.Second).UnixNano())
+	rec := fmt.Sprintf("%d %d 1 1000000000\n", c.Process.Pid, time.Now().Add(-time.Second).UnixNano())
 	os.WriteFile(ChildPath(st), []byte(rec), 0o600)
 	rel, ok, _ := TryLock(st)
 	if !ok {
@@ -609,7 +609,7 @@ func TestReapOrphanLeavesReusedGroup(t *testing.T) {
 func TestReapOrphanKillsPastDeadline(t *testing.T) {
 	c, exited := orphanGroup(t)
 	st := t.TempDir()
-	rec := fmt.Sprintf("%d %d %s\n", c.Process.Pid, time.Now().Add(-time.Second).UnixNano(), startTime(c.Process.Pid))
+	rec := fmt.Sprintf("%d %d %s 1000000000\n", c.Process.Pid, time.Now().Add(-time.Second).UnixNano(), startTime(c.Process.Pid))
 	os.WriteFile(ChildPath(st), []byte(rec), 0o600)
 	rel, ok, _ := TryLock(st)
 	if !ok {
@@ -626,7 +626,7 @@ func TestReapOrphanKillsPastDeadline(t *testing.T) {
 func TestReapOrphanWaitStopsOnCancel(t *testing.T) {
 	c, exited := orphanGroup(t)
 	st := t.TempDir()
-	rec := fmt.Sprintf("%d %d %s\n", c.Process.Pid, time.Now().Add(time.Minute).UnixNano(), startTime(c.Process.Pid))
+	rec := fmt.Sprintf("%d %d %s 60000000000\n", c.Process.Pid, time.Now().Add(time.Minute).UnixNano(), startTime(c.Process.Pid))
 	os.WriteFile(ChildPath(st), []byte(rec), 0o600)
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
@@ -677,5 +677,85 @@ func TestFollowUpNotRetryableStopsTarget(t *testing.T) {
 	}
 	if len(notices) != 2 || !strings.Contains(notices[0], "codex: remove it: boom") || strings.Count(strings.Join(notices, "\n"), "remove it") != 1 {
 		t.Errorf("notices = %q, want the codex line once", notices)
+	}
+}
+
+func TestClearMarkersRemovesKeyedMarkers(t *testing.T) {
+	st := t.TempDir()
+	for _, n := range []string{"codex", "codex-ab12cd34", "claude"} {
+		if err := MarkDone(st, ver, n); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := ClearMarkers(st, "codex"); err != nil {
+		t.Fatal(err)
+	}
+	if Done(st, ver, "codex") || Done(st, ver, "codex-ab12cd34") {
+		t.Error("a codex marker survived ClearMarkers")
+	}
+	if !Done(st, ver, "claude") {
+		t.Error("ClearMarkers removed another target's marker")
+	}
+}
+
+func TestReapOrphanBackwardClockStepBounded(t *testing.T) {
+	c, exited := orphanGroup(t)
+	st := t.TempDir()
+	rec := fmt.Sprintf("%d %d %s 300000000\n", c.Process.Pid, time.Now().Add(time.Hour).UnixNano(), startTime(c.Process.Pid))
+	os.WriteFile(ChildPath(st), []byte(rec), 0o600)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	rel, err := Lock(ctx, st, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rel()
+	select {
+	case <-exited:
+	case <-time.After(5 * time.Second):
+		t.Fatal("a deadline an hour ahead of the recorded limit lengthened the wait")
+	}
+}
+
+func TestReapOrphanDropsOldFormatRecord(t *testing.T) {
+	c, exited := orphanGroup(t)
+	st := t.TempDir()
+	rec := fmt.Sprintf("%d %d %s\n", c.Process.Pid, time.Now().Add(-time.Second).UnixNano(), startTime(c.Process.Pid))
+	os.WriteFile(ChildPath(st), []byte(rec), 0o600)
+	rel, ok, _ := TryLock(st)
+	if !ok {
+		t.Fatal("lock busy")
+	}
+	rel()
+	select {
+	case <-exited:
+		t.Fatal("a record of the old format was acted on")
+	case <-time.After(300 * time.Millisecond):
+	}
+	if _, err := os.Stat(ChildPath(st)); err == nil {
+		t.Error("the old-format record was kept")
+	}
+}
+
+func TestLockWaitingCalledOnceForLockAndOrphan(t *testing.T) {
+	c, _ := orphanGroup(t)
+	st := t.TempDir()
+	rel, ok, _ := TryLock(st)
+	if !ok {
+		t.Fatal("lock busy")
+	}
+	rec := fmt.Sprintf("%d %d %s 400000000\n", c.Process.Pid, time.Now().Add(400*time.Millisecond).UnixNano(), startTime(c.Process.Pid))
+	os.WriteFile(ChildPath(st), []byte(rec), 0o600)
+	go func() { time.Sleep(150 * time.Millisecond); rel() }()
+	var n atomic.Int32
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	r, err := Lock(ctx, st, func() { n.Add(1) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	r()
+	if n.Load() != 1 {
+		t.Fatalf("waiting called %d times, want 1", n.Load())
 	}
 }

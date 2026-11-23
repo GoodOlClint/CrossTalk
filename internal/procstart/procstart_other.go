@@ -10,3 +10,5 @@ import (
 func StartTime(int) (time.Time, error) {
 	return time.Time{}, errors.New("procstart: unsupported platform")
 }
+
+func Token(int) (string, error) { return "", errors.New("procstart: unsupported platform") }

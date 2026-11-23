@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -27,6 +28,14 @@ func LogPath(stateDir, version string) string {
 	return filepath.Join(dir(stateDir, version), "follow-up.log")
 }
 
+// key is the marker name of a target: Marker when set, else Name.
+func (t Target) key() string {
+	if t.Marker != "" {
+		return t.Marker
+	}
+	return t.Name
+}
+
 func Done(stateDir, version, target string) bool {
 	_, err := os.Stat(MarkerPath(stateDir, version, target))
 	return err == nil
@@ -39,8 +48,9 @@ func MarkDone(stateDir, version, target string) error {
 	return os.WriteFile(MarkerPath(stateDir, version, target), []byte(time.Now().UTC().Format(time.RFC3339)+"\n"), 0o600)
 }
 
-// ClearMarkers removes target's marker in every version directory. It does
-// not follow a symlink at upgrade/ or at a version directory.
+// ClearMarkers removes target's marker, and every keyed marker "target-<key>",
+// in every version directory. It does not follow a symlink at upgrade/ or at
+// a version directory.
 func ClearMarkers(stateDir, target string) error {
 	root := filepath.Join(stateDir, "upgrade")
 	if fi, err := os.Lstat(root); err != nil || !fi.IsDir() {
@@ -57,8 +67,20 @@ func ClearMarkers(stateDir, target string) error {
 		if !e.IsDir() {
 			continue
 		}
-		if err := os.Remove(filepath.Join(root, e.Name(), target+".done")); err != nil && !errors.Is(err, os.ErrNotExist) {
+		vd := filepath.Join(root, e.Name())
+		if err := os.Remove(filepath.Join(vd, target+".done")); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
+		}
+		ms, err := os.ReadDir(vd)
+		if err != nil {
+			return err
+		}
+		for _, m := range ms {
+			if n := m.Name(); strings.HasPrefix(n, target+"-") && strings.HasSuffix(n, ".done") {
+				if err := os.Remove(filepath.Join(vd, n)); err != nil && !errors.Is(err, os.ErrNotExist) {
+					return err
+				}
+			}
 		}
 	}
 	return nil
@@ -102,8 +124,14 @@ func tryLock(ctx context.Context, stateDir string, waiting func()) (*os.File, er
 	return f, nil
 }
 
-// Lock takes upgrade.lock, calling waiting once if it has to wait.
+// Lock takes upgrade.lock, calling waiting once if it has to wait, whether
+// for the lock or for an orphaned command.
 func Lock(ctx context.Context, stateDir string, waiting func()) (release func(), err error) {
+	if waiting != nil {
+		var once sync.Once
+		w := waiting
+		waiting = func() { once.Do(w) }
+	}
 	for first := true; ; first = false {
 		f, err := tryLock(ctx, stateDir, waiting)
 		if err != nil {
@@ -132,7 +160,10 @@ var ErrNotRetryable = errors.New("not retryable")
 // Target is one thing an upgrade brings up to date: Run is its install step,
 // Verify the check that it is now at the binary's version.
 type Target struct {
-	Name   string
+	Name string
+	// Marker names the target's marker file; "" means Name. A target whose
+	// state depends on more than the CrossTalk state directory sets it.
+	Marker string
 	Run    func(ctx context.Context, log io.Writer) error
 	Verify func(ctx context.Context) error
 	// Eligible, when set, is asked again before every attempt; a target it
@@ -165,7 +196,7 @@ type Runner struct {
 func (r *Runner) pending() []Target {
 	var p []Target
 	for _, t := range r.Targets {
-		if !r.stopped[t.Name] && !Done(r.StateDir, r.Version, t.Name) && (t.Eligible == nil || t.Eligible()) {
+		if !r.stopped[t.Name] && !Done(r.StateDir, r.Version, t.key()) && (t.Eligible == nil || t.Eligible()) {
 			p = append(p, t)
 		}
 	}
@@ -253,7 +284,7 @@ func (r *Runner) attempt(ctx context.Context, first bool) (ran, pending bool) {
 			return false, true
 		}
 		if err == nil {
-			err = MarkDone(r.StateDir, r.Version, t.Name)
+			err = MarkDone(r.StateDir, r.Version, t.key())
 		}
 		if errors.Is(err, ErrNotRetryable) {
 			if r.stopped == nil {

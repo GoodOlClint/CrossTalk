@@ -86,7 +86,7 @@ func Supervise(args []string, stderr io.Writer) int {
 		return 127
 	}
 	if m := os.Getenv(childEnv); m != "" {
-		writeChild(m, c.Process.Pid, time.Now().Add(limit))
+		writeChild(m, c.Process.Pid, time.Now().Add(limit), limit)
 		defer os.Remove(m)
 	}
 	done := make(chan error, 1)
@@ -122,27 +122,27 @@ func (b bestEffort) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// writeChild records "pgid deadline-unix-nano start-time-unix-nano" for
-// reapOrphan, through a rename so a kill never leaves a partial record. It
-// writes nothing when the leader's start time is unknown.
-func writeChild(path string, pgid int, deadline time.Time) {
+// writeChild records "pgid deadline-unix-nano start-token limit-nanoseconds"
+// for reapOrphan, through a rename so a kill never leaves a partial record.
+// It writes nothing when the leader's start token is unknown.
+func writeChild(path string, pgid int, deadline time.Time, limit time.Duration) {
 	st := startTime(pgid)
 	if st == "" {
 		return
 	}
 	tmp := path + ".tmp"
-	if os.WriteFile(tmp, []byte(fmt.Sprintf("%d %d %s\n", pgid, deadline.UnixNano(), st)), 0o600) == nil {
+	if os.WriteFile(tmp, []byte(fmt.Sprintf("%d %d %s %d\n", pgid, deadline.UnixNano(), st, int64(limit))), 0o600) == nil {
 		os.Rename(tmp, path)
 	}
 }
 
-// startTime is pid's start time in unix nanoseconds, "" when unknown.
+// startTime is pid's start token (procstart.Token), "" when unknown.
 func startTime(pid int) string {
-	t, err := procstart.StartTime(pid)
+	t, err := procstart.Token(pid)
 	if err != nil {
 		return ""
 	}
-	return strconv.FormatInt(t.UnixNano(), 10)
+	return t
 }
 
 func groupAlive(pgid int) bool {
@@ -152,7 +152,10 @@ func groupAlive(pgid int) bool {
 
 // reapOrphan runs under upgrade.lock. A record left by a supervisor that was
 // killed names a command group that may still run with no deadline: wait for
-// it until the recorded deadline, then SIGKILL the group; a cancelled ctx leaves the record and the group. The group is signalled
+// it until the recorded deadline, at most the recorded limit from now so a
+// backward wall-clock step cannot lengthen the wait, then SIGKILL the group; a
+// cancelled ctx leaves the record and the group. A record of the earlier
+// three-field format is dropped without signalling its group. The group is signalled
 // only while its leader still has the recorded start time, or is gone with
 // members left (the kernel keeps a pid unused while a group has it); a leader
 // with another start time means the id was reused, and a record with no start
@@ -163,14 +166,15 @@ func reapOrphan(ctx context.Context, path string, waiting func()) {
 		return
 	}
 	f := strings.Fields(string(b))
-	if len(f) != 3 {
+	if len(f) != 4 {
 		os.Remove(path)
 		return
 	}
 	pg, err1 := strconv.ParseInt(f[0], 10, 32)
 	ns, err2 := strconv.ParseInt(f[1], 10, 64)
+	lim, err3 := strconv.ParseInt(f[3], 10, 64)
 	pgid := int(pg)
-	if err1 != nil || err2 != nil || pgid <= 1 {
+	if err1 != nil || err2 != nil || err3 != nil || lim < 0 || pgid <= 1 {
 		os.Remove(path)
 		return
 	}
@@ -178,7 +182,9 @@ func reapOrphan(ctx context.Context, path string, waiting func()) {
 		cur := startTime(pgid)
 		return cur == "" || cur == f[2]
 	}
-	for deadline, told := time.Unix(0, ns), false; groupAlive(pgid) && ours() && time.Now().Before(deadline); {
+	remaining := min(time.Until(time.Unix(0, ns)), time.Duration(lim))
+	deadline := time.Now().Add(remaining)
+	for told := false; groupAlive(pgid) && ours() && time.Now().Before(deadline); {
 		if !told && waiting != nil {
 			waiting()
 			told = true

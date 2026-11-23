@@ -3,14 +3,18 @@ package main
 import (
 	"cmp"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 
 	"github.com/GoodOlClint/crosstalk/internal/harness"
+	"github.com/GoodOlClint/crosstalk/internal/harness/codex/appserver"
 	"github.com/GoodOlClint/crosstalk/internal/mcpserver"
 	"github.com/GoodOlClint/crosstalk/internal/quiesce"
 	"github.com/GoodOlClint/crosstalk/internal/refresh"
@@ -26,6 +30,21 @@ const (
 	followUpInterval    = 15 * time.Minute
 	followUpBound       = 6 * time.Hour
 )
+
+// markerKey is the upgrade marker name of a target. Codex acts on one Codex
+// home, so a home other than ~/.codex gets its own marker; two profiles under
+// one state directory do not skip each other's update.
+func markerKey(name, home string) string {
+	if name != "codex" {
+		return name
+	}
+	h := appserver.CodexHome(home)
+	if h == filepath.Join(home, ".codex") {
+		return name
+	}
+	sum := sha256.Sum256([]byte(h))
+	return name + "-" + hex.EncodeToString(sum[:4])
+}
 
 func installMarketplace() string {
 	return cmp.Or(os.Getenv("CROSSTALK_MARKETPLACE"), "GoodOlClint/CrossTalk")
@@ -134,6 +153,7 @@ func followUpTargets(env harness.InstallEnv, hs []harness.Harness, cfgDir string
 		step := pu.PluginStep(env)
 		ts = append(ts, upgrade.Target{
 			Name:     string(h.Name()),
+			Marker:   markerKey(string(h.Name()), env.Home),
 			Eligible: eligible,
 			Run: func(ctx context.Context, _ io.Writer) error {
 				err := step.Apply(ctx)
