@@ -63,7 +63,9 @@ type Client struct {
 	ServicePath string
 	Timeout     time.Duration
 	PinOrigin   string
-	http        *http.Client
+	// PinPID nonzero refuses a service.json naming another service pid.
+	PinPID int
+	http   *http.Client
 }
 
 func NewClient(servicePath string) *Client {
@@ -115,6 +117,9 @@ func (c *Client) do(ctx context.Context, method, path string, body []byte) (*Res
 	}
 	if c.PinOrigin != "" && svc.Origin != c.PinOrigin {
 		return nil, &Error{Kind: KindUnreachable, Msg: "service origin differs from the pinned origin; nothing sent"}
+	}
+	if c.PinPID != 0 && svc.PID != c.PinPID {
+		return nil, &Error{Kind: KindUnreachable, Msg: "service pid differs from the pinned pid; nothing sent"}
 	}
 	timeout := c.Timeout
 	if timeout <= 0 {

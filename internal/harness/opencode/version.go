@@ -3,9 +3,9 @@ package opencode
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"slices"
 	"strconv"
-	"strings"
 )
 
 var ErrUntestedVersion = errors.New("opencode: service version outside the tested set")
@@ -17,22 +17,21 @@ var (
 	TestedMinors = []string{"2.4"}
 )
 
-// CheckVersion refuses an unparseable version or a major outside
-// TestedMajors, and returns a warning for an untested minor.
+var versionSyntax = regexp.MustCompile(`^(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})$`)
+
+// CheckVersion refuses anything but a plain X.Y.Z version of a major in
+// TestedMajors, and returns a warning for an untested minor. A refused value
+// is never echoed.
 func CheckVersion(v string) (warning string, err error) {
-	parts := strings.SplitN(v, ".", 3)
-	if len(parts) < 2 {
-		return "", fmt.Errorf("%w: unparseable %q", ErrUntestedVersion, v)
+	m := versionSyntax.FindStringSubmatch(v)
+	if m == nil {
+		return "", fmt.Errorf("%w: not a plain major.minor.patch version", ErrUntestedVersion)
 	}
-	major, err1 := strconv.Atoi(parts[0])
-	minor, err2 := strconv.Atoi(parts[1])
-	if err1 != nil || err2 != nil {
-		return "", fmt.Errorf("%w: unparseable %q", ErrUntestedVersion, v)
-	}
+	major, _ := strconv.Atoi(m[1])
 	if !slices.Contains(TestedMajors, major) {
-		return "", fmt.Errorf("%w: %s (tested majors %v)", ErrUntestedVersion, v, TestedMajors)
+		return "", fmt.Errorf("%w: major %d (tested majors %v)", ErrUntestedVersion, major, TestedMajors)
 	}
-	if mm := fmt.Sprintf("%d.%d", major, minor); !slices.Contains(TestedMinors, mm) {
+	if !slices.Contains(TestedMinors, m[1]+"."+m[2]) {
 		return fmt.Sprintf("OpenCode %s is an untested minor (tested %v)", v, TestedMinors), nil
 	}
 	return "", nil

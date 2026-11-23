@@ -1,6 +1,7 @@
 package opencode
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -51,14 +52,14 @@ type Harness struct {
 	now    func() time.Time
 	logger *slog.Logger
 
-	mu    sync.Mutex
-	lists map[int]sessionList
+	mu   sync.Mutex
+	list sessionList
 }
 
 var _ harness.Supersession = (*Harness)(nil)
 
 func NewHarness(opt Options) *Harness {
-	h := &Harness{client: NewClient(opt.ServicePath), dir: opt.Directory, now: opt.Now, logger: opt.Logger, lists: map[int]sessionList{}}
+	h := &Harness{client: NewClient(opt.ServicePath), dir: opt.Directory, now: opt.Now, logger: opt.Logger}
 	if h.now == nil {
 		h.now = time.Now
 	}
@@ -83,9 +84,23 @@ type sessionDoc struct {
 	} `json:"time"`
 }
 
-func (d sessionDoc) archived() bool {
+// archived is known=false when time.archived is neither absent, null nor a
+// positive number; only a known true is evidence a session ended.
+func (d sessionDoc) archived() (archived, known bool) {
 	a := strings.TrimSpace(string(d.Time.Archived))
-	return a != "" && a != "null" && a != "0" && a != "false"
+	if a == "" || a == "null" {
+		return false, true
+	}
+	var ms float64
+	if json.Unmarshal(d.Time.Archived, &ms) != nil || ms <= 0 {
+		return false, false
+	}
+	return true, true
+}
+
+func (d sessionDoc) isArchived() bool {
+	a, known := d.archived()
+	return a && known
 }
 
 func (d sessionDoc) updated() time.Time { return time.UnixMilli(int64(d.Time.Updated)) }
@@ -95,28 +110,35 @@ func sessionRef(req harness.RequestContext) (string, bool) {
 	return id, ok && sessionID.MatchString(id)
 }
 
-func (h *Harness) service() (Service, *Client, error) {
+// service reads service.json, refuses an untested major, and returns a client
+// pinned to that service's origin and pid.
+func (h *Harness) service() (Service, *Client, string, error) {
 	svc, err := ReadService(h.client.ServicePath)
 	if err != nil {
-		return Service{}, nil, err
+		return Service{}, nil, "", err
+	}
+	warn, err := CheckVersion(svc.Version)
+	if err != nil {
+		return Service{}, nil, "", err
 	}
 	c := *h.client
-	c.PinOrigin = svc.Origin
-	return svc, &c, nil
+	c.PinOrigin, c.PinPID = svc.Origin, svc.PID
+	return svc, &c, warn, nil
 }
 
 // Identify claims a call whose _meta carries an OpenCode session id. It reads
-// service.json for the service pid and contacts nothing.
+// service.json for the service pid and contacts nothing; a claimed call with
+// no readable service.json is an error.
 func (h *Harness) Identify(_ context.Context, req harness.RequestContext) (harness.Session, bool, error) {
 	id, ok := sessionRef(req)
 	if !ok {
 		return harness.Session{}, false, nil
 	}
-	s := harness.Session{Harness: adapter.OpenCode, SessionRef: id}
-	if svc, err := ReadService(h.client.ServicePath); err == nil {
-		s.HarnessPID = svc.PID
+	svc, err := ReadService(h.client.ServicePath)
+	if err != nil {
+		return harness.Session{}, true, fmt.Errorf("opencode: identify %s: %w", id, err)
 	}
-	return s, true, nil
+	return harness.Session{Harness: adapter.OpenCode, SessionRef: id, HarnessPID: svc.PID}, true, nil
 }
 
 func (h *Harness) Bind(ctx context.Context, req harness.RequestContext) (adapter.Binding, bool, error) {
@@ -131,11 +153,7 @@ func (h *Harness) Bind(ctx context.Context, req harness.RequestContext) (adapter
 // Register binds a session the service has and has not archived, on a
 // service whose major is tested.
 func (h *Harness) Register(ctx context.Context, id string) (adapter.Binding, error) {
-	svc, c, err := h.service()
-	if err != nil {
-		return adapter.Binding{}, fmt.Errorf("opencode: bind %s: %w", id, err)
-	}
-	warn, err := CheckVersion(svc.Version)
+	svc, c, warn, err := h.service()
 	if err != nil {
 		return adapter.Binding{}, fmt.Errorf("opencode: bind %s: %w", id, err)
 	}
@@ -146,7 +164,7 @@ func (h *Harness) Register(ctx context.Context, id string) (adapter.Binding, err
 	if err != nil {
 		return adapter.Binding{}, fmt.Errorf("opencode: bind %s: %w", id, err)
 	}
-	if d.archived() {
+	if d.isArchived() {
 		return adapter.Binding{}, fmt.Errorf("opencode: bind %s: session is archived", id)
 	}
 	return adapter.Binding{Harness: adapter.OpenCode, SessionRef: id, HarnessEndpoint: svc.Origin, HarnessVersion: svc.Version, HarnessPID: svc.PID}, nil
@@ -155,7 +173,7 @@ func (h *Harness) Register(ctx context.Context, id string) (adapter.Binding, err
 // Discover lists the D4 sessions plus every session a descriptor binds. A
 // service that cannot be read or reached yields no rows.
 func (h *Harness) Discover(ctx context.Context) ([]harness.Session, error) {
-	svc, c, err := h.service()
+	svc, c, _, err := h.service()
 	if err != nil {
 		return nil, nil
 	}
@@ -169,7 +187,7 @@ func (h *Harness) Discover(ctx context.Context) ([]harness.Session, error) {
 	byID := map[string]sessionDoc{}
 	for _, d := range docs {
 		byID[d.ID] = d
-		if !d.archived() && d.ParentID == "" && !d.updated().Before(cutoff) {
+		if !d.isArchived() && d.ParentID == "" && !d.updated().Before(cutoff) {
 			pick = append(pick, d)
 		}
 	}
@@ -191,7 +209,7 @@ func (h *Harness) Discover(ctx context.Context) ([]harness.Session, error) {
 				continue
 			}
 		}
-		if !d.archived() {
+		if !d.isArchived() {
 			pick = append(pick, d)
 			seen[ref] = true
 		}
@@ -229,7 +247,7 @@ func (h *Harness) boundRefs() []string {
 }
 
 func (h *Harness) Status(ctx context.Context, id string) (adapter.SessionStatus, error) {
-	_, c, err := h.service()
+	_, c, _, err := h.service()
 	if err != nil {
 		return adapter.SessionStatus{}, nil
 	}
@@ -242,7 +260,7 @@ func (h *Harness) Status(ctx context.Context, id string) (adapter.SessionStatus,
 		return adapter.SessionStatus{}, nil
 	case err != nil:
 		return adapter.SessionStatus{}, err
-	case d.archived():
+	case d.isArchived():
 		return adapter.SessionStatus{Reachable: true}, nil
 	}
 	st := adapter.SessionStatus{Loaded: true, Reachable: true}
@@ -252,60 +270,68 @@ func (h *Harness) Status(ctx context.Context, id string) (adapter.SessionStatus,
 	return st, nil
 }
 
-// Superseded is true only when the descriptor's own service (same pid)
-// reports the session archived, or omits it from a complete list and answers
-// 404 for it (D7). Anything else, including any error, is false.
+// Superseded is true only when the descriptor's own service (same pid, tested
+// major) returns a complete list that marks the session archived or omits it,
+// and a fresh GET of the session then answers archived or 404 (D7). Anything
+// else, including any error or a spent budget, is false.
 func (h *Harness) Superseded(s harness.Session) bool {
 	if s.HarnessPID <= 0 {
 		return false
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), supersedeDeadline)
-	defer cancel()
-	svc, c, err := h.service()
+	svc, c, _, err := h.service()
 	if err != nil || svc.PID != s.HarnessPID {
 		return false
 	}
-	l := h.cachedList(ctx, svc.PID, c)
-	if !l.ok {
-		return false
-	}
-	if d, ok := l.sessions[s.SessionRef]; ok {
-		return d.archived()
-	}
-	if !l.complete {
-		return false
-	}
-	d, err := getSession(ctx, c, s.SessionRef)
-	if err == nil {
-		return d.archived()
-	}
-	var e *Error
-	return errors.As(err, &e) && e.Kind == KindNotFound
-}
-
-type sessionList struct {
-	at       time.Time
-	ok       bool
-	complete bool
-	sessions map[string]sessionDoc
-}
-
-// ponytail: one lock across every pid's fetch; callers queue behind a slow
-// list for at most supersedeDeadline. Per-pid locks if several services matter.
-func (h *Harness) cachedList(ctx context.Context, pid int, c *Client) sessionList {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if l, ok := h.lists[pid]; ok && h.now().Sub(l.at) < supersedeTTL {
-		return l
+	l := &h.list
+	if l.pid != svc.PID || h.now().Sub(l.at) >= supersedeTTL {
+		*l = h.fetchList(c, svc.PID)
 	}
-	l := sessionList{at: h.now()}
+	if !l.ok || !l.complete {
+		return false
+	}
+	if d, listed := l.sessions[s.SessionRef]; listed && !d.isArchived() {
+		return false
+	}
+	if v, done := l.confirmed[s.SessionRef]; done {
+		return v
+	}
+	ctx, cancel := context.WithDeadline(context.Background(), l.budget)
+	defer cancel()
+	d, err := getSession(ctx, c, s.SessionRef)
+	var e *Error
+	v := err == nil && d.isArchived() || errors.As(err, &e) && e.Kind == KindNotFound
+	if err == nil || v {
+		l.confirmed[s.SessionRef] = v
+	}
+	return v
+}
+
+// sessionList is one service's list, kept for supersedeTTL. Every request a
+// window makes, the list and each confirming GET, shares one deadline.
+type sessionList struct {
+	pid       int
+	at        time.Time
+	budget    time.Time
+	ok        bool
+	complete  bool
+	sessions  map[string]sessionDoc
+	confirmed map[string]bool
+}
+
+// ponytail: Superseded holds one lock across its requests; callers queue for
+// at most supersedeDeadline per TTL window. Per-pid locks if several services matter.
+func (h *Harness) fetchList(c *Client, pid int) sessionList {
+	l := sessionList{pid: pid, at: h.now(), budget: time.Now().Add(supersedeDeadline), confirmed: map[string]bool{}}
+	ctx, cancel := context.WithDeadline(context.Background(), l.budget)
+	defer cancel()
 	if docs, complete, err := listSessions(ctx, c); err == nil {
 		l.ok, l.complete, l.sessions = true, complete, make(map[string]sessionDoc, len(docs))
 		for _, d := range docs {
 			l.sessions[d.ID] = d
 		}
 	}
-	h.lists[pid] = l
 	return l
 }
 
@@ -320,7 +346,8 @@ func listSessions(ctx context.Context, c *Client) (docs []sessionDoc, complete b
 	if err := json.Unmarshal(r.Body, &top); err != nil {
 		return nil, false, &Error{Kind: KindUnknown, Status: r.Status, Msg: "session list is not an object"}
 	}
-	if err := json.Unmarshal(top["data"], &docs); err != nil {
+	data := bytes.TrimSpace(top["data"])
+	if len(data) == 0 || data[0] != '[' || json.Unmarshal(data, &docs) != nil {
 		return nil, false, &Error{Kind: KindUnknown, Status: r.Status, Msg: "session list has no data array"}
 	}
 	return docs, len(top) == 1, nil
@@ -334,7 +361,7 @@ func activeSessions(ctx context.Context, c *Client) (map[string]bool, error) {
 	var doc struct {
 		Data map[string]json.RawMessage `json:"data"`
 	}
-	if err := json.Unmarshal(r.Body, &doc); err != nil {
+	if err := json.Unmarshal(r.Body, &doc); err != nil || doc.Data == nil {
 		return nil, &Error{Kind: KindUnknown, Status: r.Status, Msg: "active list is not of the expected shape"}
 	}
 	out := make(map[string]bool, len(doc.Data))

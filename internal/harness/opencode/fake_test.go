@@ -22,12 +22,19 @@ type fakeSession struct {
 	Updated  time.Time
 	Archived bool
 	Hidden   bool
+	// ListArchived marks the session archived in the list only, not in GET.
+	ListArchived bool
+	// RawArchived, when set, is the literal JSON of time.archived.
+	RawArchived string
 }
 
-func (s fakeSession) doc() map[string]any {
+func (s fakeSession) doc(list bool) map[string]any {
 	tm := map[string]any{"created": s.Updated.UnixMilli(), "updated": s.Updated.UnixMilli()}
-	if s.Archived {
+	if s.Archived || list && s.ListArchived {
 		tm["archived"] = s.Updated.UnixMilli()
+	}
+	if s.RawArchived != "" {
+		tm["archived"] = json.RawMessage(s.RawArchived)
 	}
 	d := map[string]any{"id": s.ID, "title": s.Title, "location": map[string]any{"directory": s.Dir}, "time": tm}
 	if s.ParentID != "" {
@@ -43,6 +50,10 @@ type service struct {
 	listExtra map[string]any
 	status    int
 	delay     time.Duration
+	getDelay  time.Duration
+	listRaw   string
+	activeRaw string
+	onList    func()
 }
 
 func (s *service) set(f func(*service)) {
@@ -59,7 +70,7 @@ func (s *service) handle(w http.ResponseWriter, r *http.Request) {
 	for k, v := range s.active {
 		active[k] = v
 	}
-	extra := s.listExtra
+	extra, getDelay, listRaw, activeRaw, onList := s.listExtra, s.getDelay, s.listRaw, s.activeRaw, s.onList
 	s.mu.Unlock()
 	if delay > 0 {
 		select {
@@ -75,11 +86,16 @@ func (s *service) handle(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	write := func(v any) { _ = json.NewEncoder(w).Encode(v) }
 	switch p := r.URL.Path; {
+	case p == "/api/session" && listRaw != "":
+		_, _ = w.Write([]byte(listRaw))
 	case p == "/api/session":
-		var data []any
+		if onList != nil {
+			onList()
+		}
+		data := []any{}
 		for _, x := range sessions {
 			if !x.Hidden {
-				data = append(data, x.doc())
+				data = append(data, x.doc(true))
 			}
 		}
 		out := map[string]any{"data": data}
@@ -87,6 +103,8 @@ func (s *service) handle(w http.ResponseWriter, r *http.Request) {
 			out[k] = v
 		}
 		write(out)
+	case p == "/api/session/active" && activeRaw != "":
+		_, _ = w.Write([]byte(activeRaw))
 	case p == "/api/session/active":
 		data := map[string]any{}
 		for id := range active {
@@ -94,10 +112,15 @@ func (s *service) handle(w http.ResponseWriter, r *http.Request) {
 		}
 		write(map[string]any{"data": data})
 	case strings.HasPrefix(p, "/api/session/"):
+		select {
+		case <-time.After(getDelay):
+		case <-r.Context().Done():
+			return
+		}
 		id := strings.TrimPrefix(p, "/api/session/")
 		for _, x := range sessions {
 			if x.ID == id {
-				write(map[string]any{"data": x.doc()})
+				write(map[string]any{"data": x.doc(false)})
 				return
 			}
 		}

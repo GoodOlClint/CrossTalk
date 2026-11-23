@@ -408,6 +408,8 @@ func TestSupersededFalseOnEveryError(t *testing.T) {
 		{"500", func(s *service) { s.status = 500 }},
 		{"503", func(s *service) { s.status = 503 }},
 		{"truncated list", func(s *service) { s.listExtra = map[string]any{"next": "cursor_2"} }},
+		{"null data", func(s *service) { s.listRaw = `{"data":null}` }},
+		{"no data", func(s *service) { s.listRaw = `{"sessions":[]}` }},
 	}
 	for _, tc := range cases {
 		r := newRig(t, "2.4.0", nil, fakeSession{ID: "ses_arch", Updated: t0, Archived: true})
@@ -415,7 +417,7 @@ func TestSupersededFalseOnEveryError(t *testing.T) {
 		if r.h.Superseded(sess("ses_deleted", 4242)) {
 			t.Errorf("%s: superseded", tc.name)
 		}
-		if tc.name != "truncated list" && r.h.Superseded(sess("ses_arch", 4242)) {
+		if r.h.Superseded(sess("ses_arch", 4242)) {
 			t.Errorf("%s: archived superseded on an error", tc.name)
 		}
 	}
@@ -467,7 +469,7 @@ func TestSupersededCache(t *testing.T) {
 		fakeSession{ID: "ses_a", Updated: t0},
 		fakeSession{ID: "ses_b", Updated: t0},
 		fakeSession{ID: "ses_c", Updated: t0, Archived: true})
-	for _, id := range []string{"ses_a", "ses_b", "ses_c", "ses_a"} {
+	for _, id := range []string{"ses_a", "ses_b", "ses_c", "ses_a", "ses_c"} {
 		r.h.Superseded(sess(id, 4242))
 	}
 	if n := r.count("/api/session"); n != 1 {
@@ -478,7 +480,92 @@ func TestSupersededCache(t *testing.T) {
 	if n := r.count("/api/session"); n != 2 {
 		t.Fatalf("%d list requests after the TTL, want 2", n)
 	}
-	if n := len(r.f.requests()); n != 2 {
-		t.Errorf("%d requests in all, want 2 (no per-agent request for listed sessions)", n)
+	if n := len(r.f.requests()); n != 3 {
+		t.Errorf("%d requests in all, want 3: two lists and one GET confirming the archived session", n)
+	}
+}
+
+func TestIdentifyNeedsServiceFile(t *testing.T) {
+	missing := NewHarness(Options{ServicePath: filepath.Join(t.TempDir(), "service.json")})
+	s, ok, err := missing.Identify(context.Background(), call(sid))
+	if !ok || err == nil || s != (harness.Session{}) {
+		t.Fatalf("Identify with no service.json: %+v %v %v", s, ok, err)
+	}
+}
+
+func TestSupersededMalformedArchived(t *testing.T) {
+	for _, raw := range []string{`""`, `{}`, `"2026-11-23"`, `true`, `-5`, `0`, `[]`} {
+		r := newRig(t, "2.4.0", nil, fakeSession{ID: sid, Updated: t0, RawArchived: raw})
+		if r.h.Superseded(sess(sid, 4242)) {
+			t.Errorf("archived=%s: superseded", raw)
+		}
+	}
+}
+
+func TestSupersededReconfirms(t *testing.T) {
+	r := newRig(t, "2.4.0", nil, fakeSession{ID: sid, Updated: t0, ListArchived: true})
+	if r.h.Superseded(sess(sid, 4242)) {
+		t.Error("archived in a cached list but live on GET: superseded")
+	}
+}
+
+func TestSupersededServiceReplacedMidCall(t *testing.T) {
+	r := newRig(t, "2.4.0", nil)
+	r.svc.set(func(s *service) {
+		s.onList = func() { writeSvc(t, filepath.Dir(r.path), r.f.srv.URL, "2.4.0", 5151) }
+	})
+	if r.h.Superseded(sess("ses_deleted", 4242)) {
+		t.Error("404 from a service that replaced the descriptor's one mid-call: superseded")
+	}
+	for _, q := range r.f.requests() {
+		if q.Path == "/api/session/ses_deleted" {
+			t.Error("GET sent to the replacement service")
+		}
+	}
+}
+
+func TestSupersededSharedBudget(t *testing.T) {
+	r := newRig(t, "2.4.0", nil)
+	r.svc.set(func(s *service) { s.getDelay = time.Second })
+	start := time.Now()
+	for i := 0; i < 6; i++ {
+		if r.h.Superseded(sess(fmt.Sprintf("ses_gone%d", i), 4242)) && i > 0 {
+			t.Errorf("ses_gone%d superseded after the window's budget was spent", i)
+		}
+	}
+	if el := time.Since(start); el > supersedeDeadline+time.Second {
+		t.Errorf("six absent sessions took %v; one window's budget is %v", el, supersedeDeadline)
+	}
+}
+
+func TestUntestedMajorIsNoEvidence(t *testing.T) {
+	r := newRig(t, "3.0.0", bound(sid), fakeSession{ID: sid, Updated: t0, Archived: true}, fakeSession{ID: "ses_live", Updated: t0})
+	if r.h.Superseded(sess(sid, 4242)) || r.h.Superseded(sess("ses_deleted", 4242)) {
+		t.Error("major 3 service retired a session")
+	}
+	if got, err := r.h.Discover(context.Background()); err != nil || len(got) != 0 {
+		t.Errorf("major 3 Discover: %v %v", got, err)
+	}
+	if n := len(r.f.requests()); n != 0 {
+		t.Errorf("major 3 service contacted %d times", n)
+	}
+}
+
+func TestActiveUnknownShape(t *testing.T) {
+	r := newRig(t, "2.4.0", nil, fakeSession{ID: sid, Updated: t0})
+	r.svc.set(func(s *service) { s.activeRaw = `{}` })
+	got, err := r.h.Discover(context.Background())
+	if err != nil || len(got) != 1 || got[0].Status != "" {
+		t.Errorf("unknown activity shape reported a status: %+v %v", got, err)
+	}
+}
+
+func TestSupersededKeepsOneSnapshot(t *testing.T) {
+	r := newRig(t, "2.4.0", nil, fakeSession{ID: sid, Updated: t0})
+	r.h.Superseded(sess(sid, 4242))
+	writeSvc(t, filepath.Dir(r.path), r.f.srv.URL, "2.4.0", 5151)
+	r.h.Superseded(sess(sid, 5151))
+	if r.h.list.pid != 5151 {
+		t.Errorf("snapshot pid %d, want the current service's", r.h.list.pid)
 	}
 }
