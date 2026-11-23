@@ -440,3 +440,61 @@ func TestResumeUnreadableStateDropsListens(t *testing.T) {
 		t.Fatalf("carried listens = %d after unreadable state, want 0", n)
 	}
 }
+
+func TestResumeCarriesNoticeHeldBeforeAnyBind(t *testing.T) {
+	stateDir, sessions := t.TempDir(), t.TempDir()
+	srv1 := newRigServer(t, stateDir, sessions, 999999, NewFakeBackend())
+	r1 := startRig(t, srv1)
+	r1.handshake()
+	srv1.HoldNotice("held before any bind")
+	r1.quiet()
+	ho := roundTrip(t, srv1.Handoff(r1.tr.Conn().State(), BinaryIdentity{}))
+	r1.stop()
+
+	writeClaudeSession(t, sessions, 4242, "claude-sess", "alpha", "/work/alpha")
+	r2 := startRig(t, newRigServer(t, stateDir, sessions, 4242, NewFakeBackend()), WithHandoff(ho))
+	r2.frame()
+	first := r2.rpc(3, "tools/call", `{"name":"send_message","arguments":{"to":"bob","text":"hi"}}`)
+	var out struct {
+		StructuredContent struct{ Notice string } `json:"structuredContent"`
+	}
+	if err := json.Unmarshal(first["result"], &out); err != nil {
+		t.Fatal(err)
+	}
+	if first["error"] != nil || strings.Count(out.StructuredContent.Notice, "held before any bind") != 1 {
+		t.Fatalf("first tool result after resume = %s, want the held notice once", first["result"])
+	}
+	second := r2.rpc(4, "tools/call", `{"name":"send_message","arguments":{"to":"bob","text":"again"}}`)
+	if second["error"] != nil || strings.Contains(string(second["result"]), "held before any bind") {
+		t.Fatalf("second tool result after resume = %s, want no held notice", second["result"])
+	}
+}
+
+func TestResumeOfHandoffWithoutHeldNoticeHoldsNothing(t *testing.T) {
+	stateDir, sessions := t.TempDir(), t.TempDir()
+	srv1 := newRigServer(t, stateDir, sessions, 999999, NewFakeBackend())
+	r1 := startRig(t, srv1)
+	r1.handshake()
+	r1.quiet()
+	b, err := json.Marshal(srv1.Handoff(r1.tr.Conn().State(), BinaryIdentity{}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r1.stop()
+	if strings.Contains(string(b), "held_notice") {
+		t.Fatalf("handoff with nothing held carries the field: %s", b)
+	}
+	ho, err := ReadHandoff(strings.NewReader(string(b)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv2 := newRigServer(t, stateDir, sessions, 999999, NewFakeBackend())
+	r2 := startRig(t, srv2, WithHandoff(ho))
+	r2.frame()
+	srv2.mu.Lock()
+	held := slices.Clone(srv2.held)
+	srv2.mu.Unlock()
+	if len(held) != 0 {
+		t.Fatalf("held after resuming a handoff without the field = %q, want none", held)
+	}
+}
