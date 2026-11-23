@@ -3,7 +3,7 @@
 - **Status:** Provisional (every ADR in this repo is provisional by operator ruling, 2026-11-04)
 - **Date:** 2026-11-23
 - **Deciders:** operator + Claude (Sonnet 5.5), Codex critique
-- **Context source:** [spike 21](../spikes/21-opencode.md) Q1, Q4, Q5; [change plan](../plans/opencode-harness.md) sections 3 and 5; ADR 0004, ADR 0007
+- **Context source:** [spike 21](https://github.com/GoodOlClint/CrossTalk/blob/main/docs/spikes/21-opencode.md) Q1, Q4, Q5; [change plan](https://github.com/GoodOlClint/CrossTalk/blob/main/docs/plans/opencode-harness.md) sections 3 and 5; ADR 0004, ADR 0007
 
 ## Context
 
