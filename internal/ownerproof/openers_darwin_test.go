@@ -148,9 +148,9 @@ func TestOpeners_UnreadableFDBesideOnlyOpener_ExpectUnreadableProcessCounted(t *
 	parent := startHelper(t, "read", path)
 	hidden := startHelper(t, "read", lockFile(t))
 	failFDInfo(t, hidden.pid, unix.EPERM)
-	got, err := OpenersAmong(path, []int{parent.pid, hidden.pid})
-	if err != nil || !slices.Equal(got, []int{parent.pid, hidden.pid}) {
-		t.Fatalf("openers %v err %v, want %d and %d: a process with an fd the kernel will not describe may hold the lock", got, err, parent.pid, hidden.pid)
+	confirmed, unreadable, err := scanAmong(path, []int{parent.pid, hidden.pid})
+	if err != nil || !slices.Equal(confirmed, []int{parent.pid}) || !slices.Equal(unreadable, []int{hidden.pid}) {
+		t.Fatalf("confirmed %v unreadable %v err %v, want %d and %d: a process with an fd the kernel will not describe may hold the lock", confirmed, unreadable, err, parent.pid, hidden.pid)
 	}
 }
 
@@ -169,5 +169,25 @@ func TestOpeners_UnreadableFDOnSystemBinary_ExpectNotCounted(t *testing.T) {
 		if got := systemBinary(c.exe); got != c.want {
 			t.Errorf("systemBinary(%q) = %v, want %v", c.exe, got, c.want)
 		}
+	}
+}
+
+func TestOpeners_UnreadableFDOnSystemProcess_ExpectSkippedButConfirmedKept(t *testing.T) {
+	path := lockFile(t)
+	sysProc := startHelper(t, "read", lockFile(t))
+	holder := startHelper(t, "read", path)
+	failFDInfo(t, sysProc.pid, unix.EPERM)
+	failFDNumber(t, holder.pid, 3, unix.EPERM)
+	prev := processExe
+	processExe = func(int) string { return "/usr/libexec/routined" }
+	t.Cleanup(func() { processExe = prev })
+	confirmed, unreadable, err := scanAmong(path, []int{sysProc.pid, holder.pid})
+	if err != nil || len(unreadable) != 0 || len(confirmed) > 1 {
+		t.Fatalf("confirmed %v unreadable %v err %v: a system binary's unreadable fd is skipped", confirmed, unreadable, err)
+	}
+	processExe = func(int) string { return "/Users/u/evil" }
+	_, unreadable, err = scanAmong(path, []int{sysProc.pid})
+	if err != nil || !slices.Equal(unreadable, []int{sysProc.pid}) {
+		t.Fatalf("unreadable %v err %v, want %d", unreadable, err, sysProc.pid)
 	}
 }

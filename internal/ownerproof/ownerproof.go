@@ -87,7 +87,7 @@ func Openers(path string) ([]int, error) {
 	if err != nil {
 		return nil, err
 	}
-	return openersAmong(path, pids)
+	return OpenersAmong(path, pids)
 }
 
 // ExecutableIs reports whether pid's mapped executable is the file now at
@@ -100,5 +100,24 @@ func ExecutableIs(pid int, path string) (bool, error) {
 	return executableIs(pid, path)
 }
 
-// OpenersAmong is Openers over the given pids only, by the same rules.
-func OpenersAmong(path string, pids []int) ([]int, error) { return openersAmong(path, pids) }
+// OpenersAmong is Openers over the given pids only, by the same rules. Its
+// result is the confirmed openers followed by the unreadable ones.
+func OpenersAmong(path string, pids []int) ([]int, error) {
+	confirmed, unreadable, err := scanAmong(path, pids)
+	if err != nil {
+		return nil, err
+	}
+	return append(confirmed, unreadable...), nil
+}
+
+// OpenersSplit is Openers with the two kinds kept apart: confirmed processes
+// matched by device and inode, and unreadable ones that could not be ruled out
+// (macOS only: an EPERM fd, unless the process is an Apple system binary). An
+// unreadable process is never proof that a file is open.
+func OpenersSplit(path string) (confirmed, unreadable []int, err error) {
+	pids, err := userPIDs()
+	if err != nil {
+		return nil, nil, err
+	}
+	return scanAmong(path, pids)
+}

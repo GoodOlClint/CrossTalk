@@ -50,6 +50,14 @@ func (Kernel) Args(pid int) (string, []string, error) { return ownerproof.Args(p
 func (Kernel) LockHeld(path string) (bool, error)     { return ownerproof.LockHeld(path) }
 func (Kernel) Openers(path string) ([]int, error)     { return ownerproof.Openers(path) }
 
+// OpenersSplit keeps processes whose open files matched apart from those that
+// could not be ruled out; a System without it has only confirmed openers.
+func (Kernel) OpenersSplit(path string) ([]int, []int, error) { return ownerproof.OpenersSplit(path) }
+
+type splitOpeners interface {
+	OpenersSplit(path string) (confirmed, unreadable []int, err error)
+}
+
 // Claim is what the SessionStart hook hands over. OwnerPID, OwnerStartMicros
 // and ThreadEnv are the hook's own view, kept for diagnosis and never used
 // to bind: the owner is the shim's parent and the origin is the transport.
@@ -156,14 +164,20 @@ func (c *Claims) ownsLock(thread string) error {
 	if err := c.held(path); err != nil {
 		return err
 	}
-	openers, err := c.opt.Sys.Openers(path)
+	var openers, unreadable []int
+	var err error
+	if sp, ok := c.opt.Sys.(splitOpeners); ok {
+		openers, unreadable, err = sp.OpenersSplit(path)
+	} else {
+		openers, err = c.opt.Sys.Openers(path)
+	}
 	if err != nil {
 		return err
 	}
 	if !slices.Contains(openers, c.opt.Parent.PID) {
 		return ErrParentNotOpener
 	}
-	if len(openers) > 1 {
+	if len(openers) > 1 || len(unreadable) > 0 {
 		return ErrSecondOpener
 	}
 	return c.held(path)

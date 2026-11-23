@@ -140,35 +140,33 @@ func systemBinary(exe string) bool {
 	return false
 }
 
-func openersAmong(path string, pids []int) ([]int, error) {
+var processExe = func(pid int) string { exe, _, _ := args(pid); return exe }
+
+func scanAmong(path string, pids []int) (confirmed, unreadable []int, err error) {
 	var st unix.Stat_t
 	if err := unix.Stat(path, &st); err != nil {
-		return nil, &os.PathError{Op: "stat", Path: path, Err: err}
+		return nil, nil, &os.PathError{Op: "stat", Path: path, Err: err}
 	}
 	self := os.Getpid()
-	var out []int
 	vbuf := make([]byte, vnodeFDInfoSize)
 	for _, pid := range pids {
 		if pid == self || pid <= 0 {
 			continue
 		}
-		found, unreadable, err := opensFile(pid, &st, vbuf)
+		found, hidden, err := opensFile(pid, &st, vbuf)
 		if errors.Is(err, unix.ESRCH) {
 			continue
 		}
 		if err != nil {
-			return nil, fmt.Errorf("ownerproof: open files of %d: %w", pid, err)
+			return nil, nil, fmt.Errorf("ownerproof: open files of %d: %w", pid, err)
 		}
-		if found || unreadable && !systemProcess(pid) {
-			out = append(out, pid)
+		if found {
+			confirmed = append(confirmed, pid)
+		} else if hidden && !systemBinary(processExe(pid)) {
+			unreadable = append(unreadable, pid)
 		}
 	}
-	return out, nil
-}
-
-func systemProcess(pid int) bool {
-	exe, _, err := args(pid)
-	return err == nil && systemBinary(exe)
+	return confirmed, unreadable, nil
 }
 
 // opensFile fails with ESRCH when pid is gone; any other failure means pid
