@@ -4,7 +4,7 @@ This is the plain-English version of the [design](design.md), which is the speci
 
 ## The pieces
 
-- A *harness* is the agent program: Claude Code or Codex. A *session* is one running conversation in a harness.
+- A *harness* is the agent program: Claude Code, Codex or (on the main branch, not yet released) OpenCode. A *session* is one running conversation in a harness.
 - *MCP* (Model Context Protocol) is the standard a harness uses to load extra tools from a helper program. The helper talks to the harness over standard input and output.
 - *A2A* (Agent-to-Agent) is a standard way for agent programs to message each other over HTTP.
 - The *shim* is `crosstalk mcp`, the helper program a harness starts. One shim serves each harness connection, and it ends when the harness closes it.

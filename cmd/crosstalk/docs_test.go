@@ -207,3 +207,57 @@ func TestDocsSetupNamesOpenCodeInstallChecks(t *testing.T) {
 		}
 	}
 }
+
+func TestDocsDesignAndAgentsNameOpenCode(t *testing.T) {
+	design := repoFile(t, "docs/design.md")
+	if strings.Contains(design, "Next harnesses (spike 11): OpenCode") {
+		t.Error("design.md still lists OpenCode under next harnesses")
+	}
+	for _, want := range []string{
+		"@opencode/cli", "2.4", "1.x", "ADR 0032", "ADR 0033",
+		"not yet verified (slice 9)", "M3", "`next_turn`", "TestPooledSessionsNeverCrossBind",
+		"TestInjectFailureStates", "TestInstallOpenCodeEndToEnd",
+	} {
+		if !strings.Contains(design, want) {
+			t.Errorf("design.md lacks %q", want)
+		}
+	}
+	rows := map[string]string{}
+	for _, line := range strings.Split(design, "\n") {
+		for _, n := range []string{"46", "47", "48", "49"} {
+			if strings.HasPrefix(line, n+". ") {
+				rows[n] = line
+			}
+		}
+	}
+	for n, wants := range map[string][]string{
+		"46": {"not yet verified (slice 9)"},
+		"47": {"not yet verified (slice 9)", "TestInjectFailureStates"},
+		"49": {"not yet verified (slice 9)", "M3"},
+	} {
+		for _, want := range wants {
+			if !strings.Contains(rows[n], want) {
+				t.Errorf("design.md row %s lacks %q", n, want)
+			}
+		}
+	}
+	for _, want := range []string{"MailSignal", "fixed steer prompt", `"harness": "claude|codex|opencode"`} {
+		if !strings.Contains(design, want) {
+			t.Errorf("design.md lacks %q", want)
+		}
+	}
+	agents := repoFile(t, "AGENTS.md")
+	if strings.Contains(agents, "OpenCode harness, planned") {
+		t.Error("AGENTS.md still says OpenCode is planned and not built")
+	}
+	for _, want := range []string{"OpenCode harness, built on main", "v0.3.0", "ADR 0032", "ADR 0033", "ADR 0034", "third harness"} {
+		if !strings.Contains(agents, want) {
+			t.Errorf("AGENTS.md lacks %q", want)
+		}
+	}
+	for _, p := range []string{"docs/faq.md", "docs/how-it-works.md", "docs/examples.md", "docs/contributing.md"} {
+		if !strings.Contains(repoFile(t, p), "OpenCode") {
+			t.Errorf("%s does not name OpenCode", p)
+		}
+	}
+}
