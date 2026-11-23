@@ -623,6 +623,11 @@ func TestInstructionsSayReadHintEverywhereAndSilenceIsAllowed(t *testing.T) {
 	if strings.Contains(strings.ToLower(Instructions), "teammate") {
 		t.Errorf("instructions tell the model to act on every peer message: %q", Instructions)
 	}
+	for _, name := range []string{"Claude", "Codex", "OpenCode"} {
+		if strings.Contains(Instructions, name) {
+			t.Errorf("instructions name a harness: %q", name)
+		}
+	}
 	if strings.Contains(Instructions, "On failure") {
 		t.Error("instructions still limit hint to failures")
 	}

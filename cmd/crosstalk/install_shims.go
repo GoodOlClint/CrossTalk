@@ -34,6 +34,7 @@ const (
 	parentDaemon shimParentKind = iota
 	parentAppServer
 	parentClaude
+	parentOpenCode
 	parentOther
 )
 
@@ -50,6 +51,8 @@ func classifyShimParent(cmd string, parentPPID int) shimParentKind {
 		return parentAppServer
 	case len(f) > 0 && strings.Contains(strings.ToLower(filepath.Base(f[0])), "claude"):
 		return parentClaude
+	case len(f) > 0 && filepath.Base(f[0]) == "opencode" && len(f) > 2 && f[1] == "serve" && slices.Contains(f[2:], "--service"):
+		return parentOpenCode
 	}
 	return parentOther
 }
@@ -185,6 +188,7 @@ var shimGroupText = map[shimParentKind]struct{ who, fix string }{
 	parentDaemon:    {"the managed Codex daemon", "run: codex app-server daemon restart (it interrupts running Codex turns); an app-server you started yourself whose launcher has exited looks the same, so for that one end it and start it again instead" + newThreadsNote},
 	parentAppServer: {"standalone Codex app-servers", "end each of those Codex sessions and start it again; its app-server then starts a new shim" + newThreadsNote},
 	parentClaude:    {"Claude Code sessions", "restart each session (in Claude, /mcp and reconnect also works)"},
+	parentOpenCode:  {"the OpenCode service", "restart the OpenCode service (opencode TUIs reconnect); it ends running turns"},
 	parentOther:     {"other parents", "restart the process that started each one"},
 }
 

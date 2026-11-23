@@ -155,12 +155,37 @@ func TestClassifyShimParent(t *testing.T) {
 		{"/opt/homebrew/bin/codex app-server --listen unix://", 1, parentDaemon},
 		{"codex app-server", 4461, parentAppServer},
 		{"/usr/local/bin/claude --resume", 77, parentClaude},
+		{"/opt/homebrew/bin/opencode serve --service", 1, parentOpenCode},
+		{"opencode serve --service --port 0", 88, parentOpenCode},
+		{"/opt/homebrew/bin/opencode", 88, parentOther},
+		{"/opt/homebrew/bin/opencode serve", 88, parentOther},
+		{"opencode run serve --service", 88, parentOther},
+		{"opencode run --service serve", 88, parentOther},
 		{"/bin/zsh -l", 1, parentOther},
 		{"", 0, parentOther},
 	} {
 		if got := classifyShimParent(tc.cmd, tc.ppid); got != tc.want {
 			t.Errorf("classifyShimParent(%q, %d) = %d, want %d", tc.cmd, tc.ppid, got, tc.want)
 		}
+	}
+}
+
+func TestK11GroupsOpenCodeServiceParent(t *testing.T) {
+	fakeShims(t,
+		shimProc{PID: 21, PPID: 5, ParentCmd: "/opt/homebrew/bin/opencode serve --service", ParentPPID: 1},
+		shimProc{PID: 22, PPID: 5, ParentCmd: "/opt/homebrew/bin/opencode serve --service", ParentPPID: 1})
+	rs := installShimChecks("/bin/crosstalk")
+	if len(rs) != 1 || rs[0].OK || !rs[0].WarnOnly {
+		t.Fatalf("got %v", k11Lines(rs))
+	}
+	d := rs[0].Detail
+	for _, want := range []string{"2 crosstalk mcp process(es) under the OpenCode service", "pids 21, 22", "restart the OpenCode service", "TUIs reconnect", "ends running turns"} {
+		if !strings.Contains(d, want) {
+			t.Errorf("detail %q lacks %q", d, want)
+		}
+	}
+	if strings.Contains(d, "other parents") {
+		t.Errorf("OpenCode shims fell into other parents: %q", d)
 	}
 }
 

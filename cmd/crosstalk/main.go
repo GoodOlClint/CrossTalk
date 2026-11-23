@@ -19,6 +19,7 @@ import (
 	"github.com/GoodOlClint/crosstalk/internal/harness/claude"
 	"github.com/GoodOlClint/crosstalk/internal/harness/codex"
 	"github.com/GoodOlClint/crosstalk/internal/harness/codex/appserver"
+	"github.com/GoodOlClint/crosstalk/internal/harness/opencode"
 	"github.com/GoodOlClint/crosstalk/internal/mcpserver"
 	"github.com/GoodOlClint/crosstalk/internal/registry"
 	"github.com/GoodOlClint/crosstalk/internal/shim"
@@ -117,7 +118,8 @@ func harnesses(stateDir string) ([]harness.Harness, error) {
 		Directory:  registry.New(stateDir),
 		Claims:     codex.ClaimsConfig{StateDir: stateDir},
 	})
-	return []harness.Harness{cx, cl}, nil
+	oc := opencode.NewHarness(opencode.Options{Directory: registry.New(stateDir), Logger: slog.Default()})
+	return []harness.Harness{cx, oc, cl}, nil
 }
 
 // endpointList splits a comma-separated list; ws:// endpoints contain colons.

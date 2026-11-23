@@ -544,7 +544,7 @@ func installRemoveSteps(o installOpts, all, targets []installTarget, env harness
 				return err
 			}
 			if len(held) > 0 {
-				return fmt.Errorf("running shims hold agents %s in %s; end those Claude and Codex sessions, then run uninstall --purge again", strings.Join(held, ", "), stateDir)
+				return fmt.Errorf("running shims hold agents %s in %s; end those agent sessions, then run uninstall --purge again", strings.Join(held, ", "), stateDir)
 			}
 			if running, err := remote.GatewayLockHeld(stateDir); err != nil {
 				return err

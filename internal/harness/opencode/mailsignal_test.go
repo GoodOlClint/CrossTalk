@@ -56,11 +56,11 @@ func TestMailSignalFailure(t *testing.T) {
 		setup func(t *testing.T, r *rig, d *adapter.Delivery)
 		posts int
 	}{
-		{"500", func(_ *testing.T, r *rig, _ *adapter.Delivery) { r.svc.set(func(s *service) { s.prompt.Status = 500 }) }, 1},
-		{"401", func(_ *testing.T, r *rig, _ *adapter.Delivery) { r.svc.set(func(s *service) { s.prompt.Status = 401 }) }, 1},
-		{"dropped", func(_ *testing.T, r *rig, _ *adapter.Delivery) { r.svc.set(func(s *service) { s.prompt.Drop = true }) }, 1},
+		{"500", func(_ *testing.T, r *rig, _ *adapter.Delivery) { r.svc.Set(func(s *service) { s.Prompt.Status = 500 }) }, 1},
+		{"401", func(_ *testing.T, r *rig, _ *adapter.Delivery) { r.svc.Set(func(s *service) { s.Prompt.Status = 401 }) }, 1},
+		{"dropped", func(_ *testing.T, r *rig, _ *adapter.Delivery) { r.svc.Set(func(s *service) { s.Prompt.Drop = true }) }, 1},
 		{"other session", func(_ *testing.T, r *rig, _ *adapter.Delivery) {
-			r.svc.set(func(s *service) { s.prompt.Session = "ses_other9" })
+			r.svc.Set(func(s *service) { s.Prompt.Session = "ses_other9" })
 		}, 1},
 		{"missing service.json", func(t *testing.T, r *rig, _ *adapter.Delivery) {
 			r.h = NewHarness(Options{ServicePath: filepath.Join(t.TempDir(), "service.json")})
@@ -93,7 +93,7 @@ func TestMailSignalDeadline(t *testing.T) {
 	wakeTimeout = 200 * time.Millisecond
 	t.Cleanup(func() { wakeTimeout = old })
 	r := newRig(t, "2.4.0", nil)
-	r.svc.set(func(s *service) { s.prompt.Delay = 10 * time.Second })
+	r.svc.Set(func(s *service) { s.Prompt.Delay = 10 * time.Second })
 	start := time.Now()
 	err := r.h.MailSignal(context.Background(), peerMsg(msg.Immediate), scriptSender(r))
 	if err == nil {

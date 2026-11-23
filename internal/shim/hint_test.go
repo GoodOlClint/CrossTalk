@@ -35,7 +35,7 @@ func TestNativeInformOnlyCarriesHonestHint(t *testing.T) {
 	if res["state"] != "rejected" || res["reason"] != ReasonNativeInformOnly {
 		t.Fatalf("ask %v", res)
 	}
-	if h, _ := res["hint"].(string); !strings.Contains(h, "send_message") || !strings.Contains(h, "binds on its first CrossTalk call") {
+	if h, _ := res["hint"].(string); !strings.Contains(h, "send_message") || !strings.Contains(h, "binds shortly after it starts or on its first CrossTalk call") || strings.Contains(h, "Claude") || strings.Contains(h, "Codex") {
 		t.Fatalf("hint %q", h)
 	}
 	cmd := na.ok(nil, "send_message", map[string]any{"to": "bob", "text": "x", "kind": "command"})
