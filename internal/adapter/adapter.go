@@ -37,8 +37,9 @@ func (s State) Injectable() bool {
 type Harness string
 
 const (
-	Claude Harness = "claude"
-	Codex  Harness = "codex"
+	Claude   Harness = "claude"
+	Codex    Harness = "codex"
+	OpenCode Harness = "opencode"
 )
 
 type Binding struct {
