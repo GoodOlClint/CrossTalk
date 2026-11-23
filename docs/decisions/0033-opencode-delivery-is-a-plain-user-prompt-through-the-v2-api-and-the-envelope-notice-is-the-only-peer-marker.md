@@ -30,7 +30,7 @@ No OpenCode API delivers a message as a tool result or a role weaker than user. 
 
 ## Consequences
 
-- A peer message is a user-role message for OpenCode, as it is for Claude and stronger than for Codex; the notice text is the model-facing marker. Whether a real model honors it is measured before the render slice (plan M1); if it does not, raw delivery stays off for every sender class and OpenCode gets only the fixed wake prompt and `receive_message` (decision 7's path for everyone), whatever the kind, until the notice is fixed.
+- A peer message is a user-role message for OpenCode, as it is for Claude and stronger than for Codex; the notice text is the model-facing marker. Whether a real model honors it: M1 ran on 2026-11-23 and was inconclusive on protection (run 4, no notice, refused too), so the follow-up is L11 and the compat live leg; if a model does not honor it, raw delivery stays off for every sender class and OpenCode gets only the fixed wake prompt and `receive_message` (decision 7's path for everyone), whatever the kind, until the notice is fixed.
 - An `inform` to an idle session starts a paid model turn unless M6 shows `resume: false` stores without one; the operator accepted this on 2026-11-23 (plan Q6) and setup docs say so.
 - Any same-user process can inject with or without CrossTalk (ADR 0004 Consequences); CrossTalk adds no hole and cannot attribute a message it did not send.
 - A second local user is excluded by the 0600 password files (the state and the config copy); the second-account probe (plan M2) has not been run and is deferred (no second account, operator, 2026-11-23, plan Q4), so the release cannot claim that coverage.
