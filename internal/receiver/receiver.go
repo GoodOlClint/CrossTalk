@@ -555,6 +555,14 @@ func (r *Receiver) appendClose(rt route, at time.Time) error {
 func (r *Receiver) sweep() []route {
 	now := r.now()
 	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.sweepLocked(now)
+	return slices.Clone(r.routes)
+}
+
+// sweepLocked removes the inform routes expired at now and journals them
+// closed; the caller holds r.mu.
+func (r *Receiver) sweepLocked(now time.Time) {
 	var gone []route
 	r.routes = slices.DeleteFunc(r.routes, func(o route) bool {
 		if o.expired(now) {
@@ -563,12 +571,9 @@ func (r *Receiver) sweep() []route {
 		}
 		return false
 	})
-	open := slices.Clone(r.routes)
 	for _, rt := range gone {
 		r.appendClose(rt, now)
 	}
-	r.mu.Unlock()
-	return open
 }
 
 // RouteOpen reports whether messageID has an open route; an expired inform
@@ -579,19 +584,24 @@ func (r *Receiver) RouteOpen(messageID string) bool {
 
 // CloseRoute removes the open route for a delivered message id and journals
 // it closed; it reports whether one existed. An expired inform route was
-// already closed and reports false.
-func (r *Receiver) CloseRoute(messageID string) bool {
-	r.sweep()
+// already closed and reports false. When the close record cannot be written
+// the route stays open and the error is returned. One clock reading serves
+// the expiry check and the close record, so restartRoute never takes this
+// close for an expiry.
+func (r *Receiver) CloseRoute(messageID string) (bool, error) {
+	now := r.now()
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	r.sweepLocked(now)
 	idx := slices.IndexFunc(r.routes, func(o route) bool { return o.MessageID == messageID })
 	if idx < 0 {
-		return false
+		return false, nil
 	}
-	rt := r.routes[idx]
+	if err := r.appendClose(r.routes[idx], now); err != nil {
+		return true, err
+	}
 	r.routes = slices.Delete(r.routes, idx, idx+1)
-	r.appendClose(rt, r.now())
-	return true
+	return true, nil
 }
 
 // nativeReply handles a native frame from this agent's own session. The frame

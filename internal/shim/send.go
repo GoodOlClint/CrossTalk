@@ -823,7 +823,10 @@ func (st *AgentState) completeReply(ctx context.Context, orig, r msg.Message, ke
 		}
 	}
 	if stage == stageCompleted {
-		st.rcv.CloseRoute(orig.MessageID)
+		if _, err := st.rcv.CloseRoute(orig.MessageID); err != nil {
+			res.State, res.Reason = adapter.Unknown, receiver.ReasonJournal
+			return res, nil
+		}
 		if !advance(stageReleased) {
 			return res, nil
 		}

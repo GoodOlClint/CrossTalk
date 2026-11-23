@@ -123,7 +123,7 @@ func TestPull_WatcherCopyAfterWindow_ExpectNoRoute(t *testing.T) {
 	}
 	c.advance(InformRouteTTL + time.Hour)
 	e.pull("", 0)
-	if e.r.RouteOpen(m.MessageID) || e.r.CloseRoute(m.MessageID) {
+	if e.r.RouteOpen(m.MessageID) || e.closeRoute(m.MessageID) {
 		t.Fatal("watcher copy has a reply route after its pull")
 	}
 }
