@@ -109,7 +109,7 @@ func TestUninstallPurge(t *testing.T) {
 	if code, out := installRunCmd(t, "uninstall", "--yes", "--bin-dir", bin); code != 0 {
 		t.Fatalf("uninstall: %d\n%s", code, out)
 	}
-	if fmt.Sprint(installSnapshot(t, state)) != fmt.Sprint(pre) {
+	if installWithoutMarkers(installSnapshot(t, state)) != installWithoutMarkers(pre) {
 		t.Error("state changed without --purge")
 	}
 
@@ -134,8 +134,8 @@ func TestUninstallPurge(t *testing.T) {
 	if code, out := installRunCmd(t, "uninstall", "--yes", "--purge", "--bin-dir", bin); code != 0 {
 		t.Fatalf("purge: %d\n%s", code, out)
 	}
-	if _, err := os.Stat(state); !os.IsNotExist(err) {
-		t.Errorf("state dir still there: %v", err)
+	if !installStatePurged(state) {
+		t.Errorf("state dir still holds more than the upgrade lock")
 	}
 }
 
@@ -240,8 +240,8 @@ func TestUninstallPurgeCodexOnly(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("uninstall: %d\n%s", code, out)
 	}
-	if _, err := os.Stat(state); !os.IsNotExist(err) {
-		t.Errorf("state dir kept with no claude on PATH and nothing else set up: %v\n%s", err, out)
+	if !installStatePurged(state) {
+		t.Errorf("state dir kept with no claude on PATH and nothing else set up\n%s", out)
 	}
 }
 

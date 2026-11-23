@@ -1,10 +1,14 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/GoodOlClint/crosstalk/internal/mcpserver"
+	"github.com/GoodOlClint/crosstalk/internal/upgrade"
 )
 
 func TestUninstallPurgeKeepsStateForOtherBinary(t *testing.T) {
@@ -181,7 +185,109 @@ func TestUninstallPurgeSkipsEmptyProjectKey(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("uninstall: %d\n%s", code, out)
 	}
-	if _, err := os.Stat(state); err == nil {
+	if !installStatePurged(state) {
 		t.Errorf("state kept for a .mcp.json read through an empty or relative project key:\n%s", out)
+	}
+}
+
+func TestUninstallRemovesOnlyItsHarnessMarkers(t *testing.T) {
+	home := installSandbox(t, "claude", "codex")
+	state := filepath.Join(home, ".local", "state", "crosstalk")
+	bin := filepath.Join(home, "bin")
+	if code, out := installRunCmd(t, "install", "--yes", "--bin-dir", bin); code != 0 {
+		t.Fatalf("install: %d\n%s", code, out)
+	}
+	if !upgrade.Done(state, mcpserver.Version, "claude") || !upgrade.Done(state, mcpserver.Version, "codex") {
+		t.Fatal("install did not write both markers")
+	}
+	if err := upgrade.MarkDone(state, "0.0.1", "claude"); err != nil {
+		t.Fatal(err)
+	}
+	if err := upgrade.MarkDone(state, mcpserver.Version, "gateway"); err != nil {
+		t.Fatal(err)
+	}
+	installWrite(t, upgrade.LogPath(state, mcpserver.Version), "log\n")
+	if code, out := installRunCmd(t, "uninstall", "claude", "--yes", "--bin-dir", bin); code != 0 {
+		t.Fatalf("uninstall: %d\n%s", code, out)
+	}
+	for _, v := range []string{mcpserver.Version, "0.0.1"} {
+		if upgrade.Done(state, v, "claude") {
+			t.Errorf("claude marker for %s survived uninstall claude", v)
+		}
+	}
+	if !upgrade.Done(state, mcpserver.Version, "codex") {
+		t.Error("uninstall claude removed the codex marker")
+	}
+	if !upgrade.Done(state, mcpserver.Version, "gateway") {
+		t.Error("uninstall claude removed the gateway marker")
+	}
+	if installRead(t, upgrade.LogPath(state, mcpserver.Version)) != "log\n" {
+		t.Error("uninstall claude touched the follow-up log")
+	}
+}
+
+func TestPurgeKeepsHeldUpgradeLock(t *testing.T) {
+	state := t.TempDir()
+	rel, ok, err := upgrade.TryLock(state)
+	if err != nil || !ok {
+		t.Fatalf("TryLock: %v %v", ok, err)
+	}
+	defer rel()
+	installWrite(t, filepath.Join(state, "journal", "a.jsonl"), "x")
+	installWrite(t, filepath.Join(state, "upgrade", "1", "claude.done"), "x")
+	installWrite(t, upgrade.ChildPath(state), "x")
+	if err := purgeState(state); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok, _ := upgrade.TryLock(state); ok {
+		t.Error("a second process took upgrade.lock while a holder kept it open across purge")
+	}
+	es, _ := os.ReadDir(state)
+	var names []string
+	for _, e := range es {
+		names = append(names, e.Name())
+	}
+	if got := strings.Join(names, ","); got != "upgrade.lock,upgrade.lock.child" {
+		t.Errorf("purge left %s", got)
+	}
+}
+
+func installStatePurged(state string) bool {
+	es, err := os.ReadDir(state)
+	if err != nil {
+		return os.IsNotExist(err)
+	}
+	for _, e := range es {
+		if e.Name() != "upgrade.lock" && e.Name() != "upgrade.lock.child" {
+			return false
+		}
+	}
+	return true
+}
+
+func installWithoutMarkers(m map[string]string) string {
+	for k := range m {
+		if b := filepath.Base(k); b == "claude.done" || b == "codex.done" {
+			delete(m, k)
+		}
+	}
+	return fmt.Sprint(m)
+}
+
+func TestPurgeStateSymlinkRemovesOnlyTheLink(t *testing.T) {
+	target := t.TempDir()
+	installWrite(t, filepath.Join(target, "shared", "f"), "keep")
+	link := filepath.Join(t.TempDir(), "state")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := purgeState(link); err != nil {
+		t.Fatal(err)
+	}
+	if installRead(t, filepath.Join(target, "shared", "f")) != "keep" {
+		t.Error("purge followed the state symlink")
+	}
+	if _, err := os.Lstat(link); !os.IsNotExist(err) {
+		t.Errorf("link kept: %v", err)
 	}
 }

@@ -282,7 +282,11 @@ func runInstall(mode string, args []string, in io.Reader, tty bool, stdout, stde
 	for _, t := range targets {
 		var steps []harness.Step
 		if mode == "uninstall" {
-			steps = t.in.UninstallSteps(env)
+			steps = append(t.in.UninstallSteps(env), harness.Step{
+				Title:  "upgrade markers",
+				Change: "delete the " + t.name + " upgrade marker in every version directory under " + filepath.Join(stateDir, "upgrade"),
+				Apply:  func(context.Context) error { return upgrade.ClearMarkers(stateDir, t.name) },
+			})
 		} else {
 			steps = t.in.InstallSteps(env)
 		}
@@ -501,7 +505,7 @@ func installRemoveSteps(o installOpts, all, targets []installTarget, env harness
 					peers = append(peers, p.Alias)
 				}
 			}
-			if err := os.RemoveAll(stateDir); err != nil {
+			if err := purgeState(stateDir); err != nil {
 				return err
 			}
 			if err := os.RemoveAll(cfgDir); err != nil {
@@ -513,6 +517,39 @@ func installRemoveSteps(o installOpts, all, targets []installTarget, env harness
 			return nil
 		},
 	})
+}
+
+// purgeState empties stateDir except the upgrade lock and its orphan marker:
+// deleting the lock file lets a shim holding the old inode and a new process
+// both hold the lock.
+func purgeState(stateDir string) error {
+	fi, err := os.Lstat(stateDir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if fi.Mode()&os.ModeSymlink != 0 {
+		return os.Remove(stateDir)
+	}
+	es, err := os.ReadDir(stateDir)
+	if err != nil {
+		return err
+	}
+	keep := map[string]bool{
+		filepath.Base(upgrade.LockPath(stateDir)):  true,
+		filepath.Base(upgrade.ChildPath(stateDir)): true,
+	}
+	for _, e := range es {
+		if keep[e.Name()] {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(stateDir, e.Name())); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func installConfirm(r *bufio.Reader, w io.Writer) bool {

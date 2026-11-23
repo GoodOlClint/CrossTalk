@@ -70,7 +70,7 @@ Every message has an id, and the receiver ignores a repeat of an id it has alrea
 
 ## Where does CrossTalk keep its data?
 
-Under `~/.local/state/crosstalk/`: journals, tokens, descriptor files and sockets. A session's journal is trimmed when it is opened again (when the session registers): resolved records older than 24 hours are dropped, and unresolved ones are kept. A long-running session is not trimmed while it runs. `crosstalk uninstall` leaves this directory unless you pass `--purge`.
+Under `~/.local/state/crosstalk/`: journals, tokens, descriptor files and sockets. A session's journal is trimmed when it is opened again (when the session registers): resolved records older than 24 hours are dropped, and unresolved ones are kept. A long-running session is not trimmed while it runs. `crosstalk uninstall` leaves this directory unless you pass `--purge`, which keeps only `upgrade.lock` and `upgrade.lock.child`.
 
 ## What does it cost?
 

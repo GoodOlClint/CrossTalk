@@ -39,6 +39,31 @@ func MarkDone(stateDir, version, target string) error {
 	return os.WriteFile(MarkerPath(stateDir, version, target), []byte(time.Now().UTC().Format(time.RFC3339)+"\n"), 0o600)
 }
 
+// ClearMarkers removes target's marker in every version directory. It does
+// not follow a symlink at upgrade/ or at a version directory.
+func ClearMarkers(stateDir, target string) error {
+	root := filepath.Join(stateDir, "upgrade")
+	if fi, err := os.Lstat(root); err != nil || !fi.IsDir() {
+		if err == nil || errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	es, err := os.ReadDir(root)
+	if err != nil {
+		return err
+	}
+	for _, e := range es {
+		if !e.IsDir() {
+			continue
+		}
+		if err := os.Remove(filepath.Join(root, e.Name(), target+".done")); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	return nil
+}
+
 func openLock(stateDir string) (*os.File, error) {
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		return nil, err

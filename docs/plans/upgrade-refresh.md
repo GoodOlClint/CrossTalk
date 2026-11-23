@@ -90,6 +90,7 @@ The self-re-exec candidate holds. Exit-and-respawn fails on Codex.
 4a. A harness command runs under the hidden `crosstalk upgrade-exec` supervisor, which records the command's process group, deadline and start time in `upgrade.lock.child`. If the supervisor is SIGKILLed, the next process to take the lock reads the marker, waits for the group until its deadline, then kills it (a group id whose leader has another start time is left alone). The orphan-command gap (#262) is closed.
 5. `crosstalk install` takes the lock (blocking, with a message while waiting) and writes the marker only for the targets it installed and verified.
 6. Formula caveats (`scripts/release-build.sh` heredoc): the plugin update runs when a session next starts; `crosstalk install` stays the manual path; `crosstalk uninstall` before `brew uninstall` is unchanged.
+Known gaps closed: #250, `crosstalk uninstall` removes the markers of each harness it uninstalls, in every version directory under `upgrade/` (the other harness's marker and `gateway.done` stay); #248, `uninstall --purge` empties the state directory except `upgrade.lock` and `upgrade.lock.child`, so a shim holding the lock keeps excluding a new process and an orphaned command stays recorded.
 
 ### 4.3 Shim state across a refresh
 
