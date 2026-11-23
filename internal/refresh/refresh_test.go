@@ -344,3 +344,29 @@ func TestRefreshBusyDoesNotCountAsFailedTry(t *testing.T) {
 		t.Fatalf("gave up %d times, execs %d: want a busy tick uncounted and an exec once quiet", gaveUp, r.execs)
 	}
 }
+
+// A busy watcher neither probes nor quiesces, and probes once it is quiet.
+func TestRefreshBusySkipsProbe(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "crosstalk")
+	os.WriteFile(bin, []byte("v1"), 0o755)
+	id, _ := mcpserver.IdentityOf(bin)
+	os.Link(bin, bin+".was-v1")
+	os.WriteFile(bin+".n", []byte("v2"), 0o755)
+	os.Rename(bin+".n", bin)
+	var r rec
+	w := r.watcher(bin, id, mcpserver.IdentityOf)
+	busy := true
+	w.Busy = func() bool { return busy }
+	for range 5 {
+		w.Tick(context.Background())
+	}
+	if r.probes != 0 || r.quiesces != 0 {
+		t.Fatalf("%+v: probed or quiesced while busy", r)
+	}
+	busy = false
+	w.Tick(context.Background())
+	if r.probes != 1 || r.execs != 1 {
+		t.Fatalf("%+v: want one probe and one exec once quiet", r)
+	}
+}

@@ -69,6 +69,9 @@ type Watcher struct {
 	// ones only a file that replays listens may take, and settling ones not
 	// acknowledged yet, which defer the decision to a later tick.
 	Listening func() (open, settling int)
+	// Busy, when set and true, ends a tick before the probe: long background
+	// work runs, and a later tick looks again without a failed try.
+	Busy func() bool
 	// Quiesce stops new work and waits for running work until ctx ends; undo
 	// restarts it.
 	Quiesce func(ctx context.Context) (undo func(), err error)
@@ -114,6 +117,9 @@ func (w *Watcher) Tick(ctx context.Context) {
 	}
 	cur, err := stat(w.Path)
 	if err != nil || same(cur, w.ID) || same(cur, w.bad) {
+		return
+	}
+	if w.Busy != nil && w.Busy() {
 		return
 	}
 	probe := w.Probe

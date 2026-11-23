@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"io"
 	"strings"
 	"sync/atomic"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/GoodOlClint/crosstalk/internal/mcpserver"
+	"github.com/GoodOlClint/crosstalk/internal/refresh"
 )
 
 // While a follow-up attempt runs, a refresh tick leaves stdin and ingress
@@ -26,7 +28,7 @@ func TestRefreshSkipsQuiesceWhileFollowUpAttempt(t *testing.T) {
 	if err == nil {
 		undo()
 	}
-	if err == nil || ing.paused != 0 || time.Since(start) > time.Second {
+	if !errors.Is(err, refresh.ErrBusy) || ing.paused != 0 || time.Since(start) > time.Second {
 		t.Fatalf("err %v, ingress paused %d, took %v: want an immediate refusal with nothing paused", err, ing.paused, time.Since(start))
 	}
 	w.WriteString(`{"jsonrpc":"2.0","method":"notifications/initialized"}` + "\n")
