@@ -71,6 +71,7 @@ type Handoff struct {
 	Agents         []AgentHandoff             `json:"agents"`
 	Harness        map[string]json.RawMessage `json:"harness,omitempty"`
 	Binary         BinaryIdentity             `json:"binary"`
+	HeldNotice     []string                   `json:"held_notice,omitempty"`
 }
 
 // Refresher is implemented by a Backend that holds per-agent state to carry.
@@ -122,6 +123,7 @@ func (s *Server) Handoff(st SessionState, bin BinaryIdentity) *Handoff {
 			}
 		}
 	}
+	h.HeldNotice = slices.Clone(s.held)
 	s.mu.Unlock()
 	slices.SortFunc(h.Agents, func(a, b AgentHandoff) int { return strings.Compare(a.ID, b.ID) })
 	for _, hh := range s.harnesses {

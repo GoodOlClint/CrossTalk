@@ -261,6 +261,9 @@ func (s *Server) Resume(ctx context.Context, h *Handoff) {
 	s.mu.Lock()
 	again := s.resumed
 	s.resumed = true
+	if !again {
+		s.held = append(s.held, h.HeldNotice...)
+	}
 	s.mu.Unlock()
 	if again {
 		return

@@ -103,6 +103,7 @@ Carried in the handoff:
 | `mcpserver.Agent` | `id`, `harness`, `sessionRef`, `req` (parent pid or thread id), `harnessName` | Re-registration must happen before any call (review finding 2) |
 | `mcpserver.Agent` | `viaCall` | `RetireSession` leaves a call-bound agent alone; losing it would let the Claude poll retire a session bound by a call |
 | `mcpserver.Agent` | `pendingNotice` | A notice not yet attached to a tool result would be lost |
+| `mcpserver.Server` | `held` (`held_notice`, notices for the first agent to bind when none had) | A notice held while no agent is bound (a refused refresh's notice, `cmd/crosstalk/refresh.go`) is not produced again (#247); an optional field, so the format stays 1 |
 | `shim.AgentState` | `binding`, `boundAt` | `boundAt` picks the pre-bind hint for `no_such_message` (`internal/shim/send.go:735`) |
 | `codex.Claims` (ADR 0028) | each proven `Binding` (its `Claim`, `Live`) | See ADR 0028 below |
 
