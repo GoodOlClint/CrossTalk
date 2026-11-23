@@ -52,8 +52,16 @@ func (h *Harness) prompt(ctx context.Context, target adapter.Binding, text, deli
 	if ctx.Err() != nil {
 		return adapter.Unreachable, fmt.Errorf("opencode: deliver %s: canceled before send; nothing sent", id)
 	}
-	if d, err := getSession(ctx, c, id); err != nil || d.isArchived() {
-		return adapter.Unreachable, fmt.Errorf("opencode: deliver %s: session state unreadable or archived; nothing sent", id)
+	timeout := c.Timeout
+	if timeout <= 0 {
+		timeout = defaultTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	if d, err := getSession(ctx, c, id); err != nil {
+		return adapter.Unreachable, fmt.Errorf("opencode: deliver %s: session state unreadable; nothing sent", id)
+	} else if archived, known := d.archived(); archived || !known {
+		return adapter.Unreachable, fmt.Errorf("opencode: deliver %s: session archived or archive state unreadable; nothing sent", id)
 	}
 	req := struct {
 		Text     string `json:"text"`

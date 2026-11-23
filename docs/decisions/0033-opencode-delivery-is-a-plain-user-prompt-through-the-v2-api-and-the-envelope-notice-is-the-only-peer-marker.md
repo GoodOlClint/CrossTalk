@@ -31,7 +31,7 @@ No OpenCode API delivers a message as a tool result or a role weaker than user. 
 ## Consequences
 
 - A peer message is a user-role message for OpenCode, as it is for Claude and stronger than for Codex; the notice text is the model-facing marker. Whether a real model honors it: M1 ran on 2026-11-23 and was inconclusive on protection (run 4, no notice, refused too), so the follow-up is L11 and the compat live leg; if a model does not honor it, raw delivery stays off for every sender class and OpenCode gets only the fixed wake prompt and `receive_message` (decision 7's path for everyone), whatever the kind, until the notice is fixed.
-- Only an `immediate` message wakes an idle session and starts a paid model turn; a `next_turn` message is stored without a turn (spike 22 Q3, plan Q6) and is seen when the session next runs. Setup docs say so.
+- Of the direct teammate prompts, only an `immediate` one wakes an idle session and starts a paid model turn; a `next_turn` one is stored without a turn (spike 22 Q3, plan Q6) and is seen when the session next runs. A mailbox-only class (remote sender, script sender, inbox copy) is journaled, and its fixed wake (`MailSignal`) is sent as `steer` whatever the mode, so it can start a turn on an idle session. Setup docs say so.
 - Any same-user process can inject with or without CrossTalk (ADR 0004 Consequences); CrossTalk adds no hole and cannot attribute a message it did not send.
 - A second local user is excluded by the 0600 password files (the state and the config copy); the second-account probe (plan M2) has not been run and is deferred (no second account, operator, 2026-11-23, plan Q4), so the release cannot claim that coverage.
 

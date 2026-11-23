@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/GoodOlClint/crosstalk/internal/adapter"
 	"github.com/GoodOlClint/crosstalk/internal/msg"
@@ -343,5 +344,53 @@ func TestInjectArchivedSession(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestInjectArchiveStateUnreadable(t *testing.T) {
+	for _, raw := range []string{`"yes"`, `-5`, `0`, `{}`, `true`} {
+		for _, mode := range []msg.Delivery{msg.Immediate, msg.NextTurn} {
+			t.Run(raw+"/"+string(mode), func(t *testing.T) {
+				r := newRig(t, "2.4.0", nil, fakeSession{ID: sid, Title: "S", Updated: t0, RawArchived: raw})
+				d := teammate(r)
+				d.Mode = mode
+				if st, err := r.h.Inject(context.Background(), peerMsg(""), d); st != adapter.Unreachable || err == nil {
+					t.Fatalf("Inject %v %v, want unreachable", st, err)
+				}
+				if st, _ := r.h.Inject(context.Background(), peerMsg(""), d); st != adapter.Unreachable {
+					t.Fatalf("second Inject %v", st)
+				}
+				if err := r.h.MailSignal(context.Background(), peerMsg(""), scriptSender(r)); err == nil {
+					t.Fatal("MailSignal sent to a session with unreadable archive state")
+				}
+				if n := len(r.prompts()); n != 0 {
+					t.Fatalf("%d POSTs, want 0", n)
+				}
+			})
+		}
+	}
+}
+
+func TestMailSignalArchivedSendsNothing(t *testing.T) {
+	r := newRig(t, "2.4.0", nil, fakeSession{ID: sid, Title: "S", Updated: t0, Archived: true})
+	if err := r.h.MailSignal(context.Background(), peerMsg(""), scriptSender(r)); err == nil {
+		t.Fatal("no error for an archived session")
+	}
+	if n := len(r.prompts()); n != 0 {
+		t.Fatalf("%d POSTs, want 0", n)
+	}
+}
+
+func TestInjectOneDeadlineForBothRequests(t *testing.T) {
+	r := newRig(t, "2.4.0", nil, liveSession())
+	r.h.client.Timeout = 400 * time.Millisecond
+	r.svc.Set(func(s *service) { s.GetDelay = 300 * time.Millisecond; s.Prompt.Delay = 10 * time.Second })
+	start := time.Now()
+	st, _ := r.h.Inject(context.Background(), peerMsg(""), teammate(r))
+	if st != adapter.Unknown {
+		t.Fatalf("state %v, want unknown (request left, no admission)", st)
+	}
+	if el := time.Since(start); el > 600*time.Millisecond {
+		t.Fatalf("Inject took %v, want one 400ms deadline over both requests", el)
 	}
 }
