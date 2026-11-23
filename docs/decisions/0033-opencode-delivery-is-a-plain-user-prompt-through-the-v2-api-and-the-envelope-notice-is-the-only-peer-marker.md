@@ -25,12 +25,12 @@ No OpenCode API delivers a message as a tool result or a role weaker than user. 
 - **`synthetic` parts.** Hides peer text from the operator while the model reads it as user input.
 - **`/tui/append-prompt` plus `/tui/submit-prompt`.** Edits the operator's draft, a collision hazard like typing into a terminal.
 - **v2 instructions endpoint or v1 `system`.** Puts peer text in system instructions, forbidden by ADR 0004.
-- **A shim mailbox with a pointer (the Antigravity design).** Unneeded: the service accepts a prompt at any time, and a second store would duplicate the journal.
+- **A new shim mailbox with hook-driven pointers and a collect transaction (the Antigravity design).** Unneeded: the service accepts a prompt at any time. Decision 7 reuses only the existing journal mailbox and `MailSignaler` for the non-local classes; it adds no store.
 - **Envelope in angle-bracket text (Claude's form).** Needs escaping rules that a JSON string gives for free.
 
 ## Consequences
 
-- A peer message is a user-role message for OpenCode, as it is for Claude and stronger than for Codex; the notice text is the model-facing marker. Whether a real model honors it is measured before the render slice (plan M1); if it does not, the notice is strengthened or `command`/`ask` delivery to OpenCode waits.
+- A peer message is a user-role message for OpenCode, as it is for Claude and stronger than for Codex; the notice text is the model-facing marker. Whether a real model honors it is measured before the render slice (plan M1); if it does not, raw delivery stays off for every sender class and OpenCode gets only the fixed wake prompt and `receive_message` (decision 7's path for everyone), whatever the kind, until the notice is fixed.
 - An `inform` to an idle session starts a paid model turn unless M6 shows `resume: false` stores without one; setup docs say so.
 - Any same-user process can inject with or without CrossTalk (ADR 0004 Consequences); CrossTalk adds no hole and cannot attribute a message it did not send.
 - A second local user is excluded by the 0600 password files (the state and the config copy); the second-account probe (plan M2) has not been run.

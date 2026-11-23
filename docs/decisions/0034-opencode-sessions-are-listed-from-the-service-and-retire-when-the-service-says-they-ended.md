@@ -25,7 +25,7 @@ The v2 service lists every stored session (`GET /api/session`) and the running o
 ## Consequences
 
 - A session older than 24 hours or past the 30th that never called CrossTalk is not listed and cannot be reached by name or by id (`resolveLocal` matches ids only against descriptors and listed rows) until it is active again or calls CrossTalk. A bound session is always listed with real status. The operator may change the window (plan section 10, Q2).
-- A deleted or archived session drops from `list_agents` within a sweep; a send to it is `unreachable`.
+- A deleted or archived session drops from `list_agents` within a sweep; a send to it is `unreachable` before the sweep drops it and the no-such-agent result after (plan L9).
 - The 24-hour and 30-session values are not measured against real use; the live run records what `list_agents` shows.
 - If `GET /api/session/<id>` 404 or the archived field behave differently from the source reading, slice 3 changes; measurement M6 checks both.
 
