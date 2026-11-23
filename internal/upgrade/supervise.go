@@ -52,6 +52,7 @@ func Command(ctx context.Context, name string, args ...string) *exec.Cmd {
 	}
 	c := exec.CommandContext(ctx, exe, append([]string{SuperviseCmd, limit.String(), "--", name}, args...)...)
 	c.ExtraFiles = []*os.File{f}
+	reapOrphan(f.Name() + ".child")
 	c.Env = append(os.Environ(), childEnv+"="+f.Name()+".child")
 	c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	c.Cancel = func() error { return c.Process.Signal(syscall.SIGTERM) }
@@ -121,9 +122,18 @@ func (b bestEffort) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// writeChild records "pgid deadline-unix-nano start-time" for reapOrphan.
+// writeChild records "pgid deadline-unix-nano start-time-unix-nano" for
+// reapOrphan, through a rename so a kill never leaves a partial record. It
+// writes nothing when the leader's start time is unknown.
 func writeChild(path string, pgid int, deadline time.Time) {
-	os.WriteFile(path, []byte(fmt.Sprintf("%d %d %s\n", pgid, deadline.UnixNano(), startTime(pgid))), 0o600)
+	st := startTime(pgid)
+	if st == "" {
+		return
+	}
+	tmp := path + ".tmp"
+	if os.WriteFile(tmp, []byte(fmt.Sprintf("%d %d %s\n", pgid, deadline.UnixNano(), st)), 0o600) == nil {
+		os.Rename(tmp, path)
+	}
 }
 
 // startTime is pid's start time in unix nanoseconds, "" when unknown.
@@ -140,34 +150,41 @@ func groupAlive(pgid int) bool {
 	return err == nil || errors.Is(err, syscall.EPERM)
 }
 
-// reapOrphan runs under upgrade.lock. A marker left by a supervisor that was
+// reapOrphan runs under upgrade.lock. A record left by a supervisor that was
 // killed names a command group that may still run with no deadline: wait for
-// it until the recorded deadline, then SIGKILL the group. A pgid whose leader
-// now has another start time was reused, and is left alone.
-func reapOrphan(stateDir string) {
-	path := ChildPath(stateDir)
+// it until the recorded deadline, then SIGKILL the group. The group is signalled
+// only while its leader still has the recorded start time, or is gone with
+// members left (the kernel keeps a pid unused while a group has it); a leader
+// with another start time means the id was reused, and a record with no start
+// time is never acted on. The record stays when the signal fails.
+func reapOrphan(path string) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return
 	}
-	defer os.Remove(path)
-	f := strings.SplitN(strings.TrimSpace(string(b)), " ", 3)
-	if len(f) < 2 {
+	f := strings.Fields(string(b))
+	if len(f) != 3 {
+		os.Remove(path)
 		return
 	}
-	pgid, err1 := strconv.Atoi(f[0])
+	pg, err1 := strconv.ParseInt(f[0], 10, 32)
 	ns, err2 := strconv.ParseInt(f[1], 10, 64)
+	pgid := int(pg)
 	if err1 != nil || err2 != nil || pgid <= 1 {
+		os.Remove(path)
 		return
 	}
-	for deadline := time.Unix(0, ns); groupAlive(pgid) && time.Now().Before(deadline); {
+	ours := func() bool {
+		cur := startTime(pgid)
+		return cur == "" || cur == f[2]
+	}
+	for deadline := time.Unix(0, ns); groupAlive(pgid) && ours() && time.Now().Before(deadline); {
 		time.Sleep(50 * time.Millisecond)
 	}
-	if !groupAlive(pgid) {
-		return
+	if groupAlive(pgid) && ours() {
+		if err := syscall.Kill(-pgid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+			return
+		}
 	}
-	if cur := startTime(pgid); cur != "" && len(f) == 3 && cur != f[2] {
-		return
-	}
-	syscall.Kill(-pgid, syscall.SIGKILL)
+	os.Remove(path)
 }

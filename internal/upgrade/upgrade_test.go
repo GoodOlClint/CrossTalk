@@ -3,12 +3,15 @@ package upgrade
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -570,5 +573,25 @@ func TestFollowUpWritesLog(t *testing.T) {
 		if !strings.Contains(string(b), want) {
 			t.Errorf("log lacks %q:\n%s", want, b)
 		}
+	}
+}
+
+func TestReapOrphanLeavesReusedGroup(t *testing.T) {
+	c := exec.Command("sleep", "30")
+	c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := c.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { c.Process.Kill(); c.Wait() }()
+	st := t.TempDir()
+	rec := fmt.Sprintf("%d %d 1\n", c.Process.Pid, time.Now().Add(-time.Second).UnixNano())
+	os.WriteFile(ChildPath(st), []byte(rec), 0o600)
+	rel, ok, _ := TryLock(st)
+	if !ok {
+		t.Fatal("lock busy")
+	}
+	rel()
+	if syscall.Kill(c.Process.Pid, 0) != nil {
+		t.Fatal("a group whose leader has another start time was killed")
 	}
 }
