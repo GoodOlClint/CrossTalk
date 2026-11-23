@@ -16,6 +16,12 @@ var peerPIDs = osPeerPIDs
 // connection yet.
 var peerWait = time.Second
 
+// nudgeAfter is how long an unaccepted connection waits before peerRefusal
+// sends one empty line. A service that sets TCP_DEFER_ACCEPT (OpenCode on
+// Linux) accepts an idle connection only after about a second; HTTP ignores a
+// leading empty line and it carries no credential.
+const nudgeAfter = 100 * time.Millisecond
+
 type servicePID struct{}
 
 type ownerError struct{ msg string }
@@ -46,7 +52,9 @@ func peerRefusal(ctx context.Context, conn net.Conn, pid int) string {
 	}
 	self = netip.AddrPortFrom(self.Addr().Unmap(), self.Port())
 	svc = netip.AddrPortFrom(svc.Addr().Unmap(), svc.Port())
-	deadline := time.Now().Add(peerWait)
+	start := time.Now()
+	deadline := start.Add(peerWait)
+	nudged := false
 	for {
 		pids, err := peerPIDs(ctx, self, svc)
 		if err == nil && len(pids) > 0 {
@@ -59,6 +67,12 @@ func peerRefusal(ctx context.Context, conn net.Conn, pid int) string {
 		}
 		if !time.Now().Before(deadline) {
 			return "holder of the service connection could not be determined; nothing sent"
+		}
+		if !nudged && time.Since(start) >= nudgeAfter {
+			nudged = true
+			if _, err := conn.Write([]byte("\r\n")); err != nil {
+				return "holder of the service connection could not be determined; nothing sent"
+			}
 		}
 		select {
 		case <-ctx.Done():
