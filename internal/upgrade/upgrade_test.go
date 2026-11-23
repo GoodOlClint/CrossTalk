@@ -576,13 +576,21 @@ func TestFollowUpWritesLog(t *testing.T) {
 	}
 }
 
-func TestReapOrphanLeavesReusedGroup(t *testing.T) {
-	c := exec.Command("sleep", "30")
+func orphanGroup(t *testing.T) (c *exec.Cmd, exited <-chan struct{}) {
+	t.Helper()
+	c = exec.Command("sleep", "30")
 	c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	if err := c.Start(); err != nil {
 		t.Fatal(err)
 	}
-	defer func() { c.Process.Kill(); c.Wait() }()
+	done := make(chan struct{})
+	go func() { c.Wait(); close(done) }()
+	t.Cleanup(func() { c.Process.Kill(); <-done })
+	return c, done
+}
+
+func TestReapOrphanLeavesReusedGroup(t *testing.T) {
+	c, exited := orphanGroup(t)
 	st := t.TempDir()
 	rec := fmt.Sprintf("%d %d 1\n", c.Process.Pid, time.Now().Add(-time.Second).UnixNano())
 	os.WriteFile(ChildPath(st), []byte(rec), 0o600)
@@ -591,7 +599,51 @@ func TestReapOrphanLeavesReusedGroup(t *testing.T) {
 		t.Fatal("lock busy")
 	}
 	rel()
-	if syscall.Kill(c.Process.Pid, 0) != nil {
+	select {
+	case <-exited:
 		t.Fatal("a group whose leader has another start time was killed")
+	case <-time.After(500 * time.Millisecond):
+	}
+}
+
+func TestReapOrphanKillsPastDeadline(t *testing.T) {
+	c, exited := orphanGroup(t)
+	st := t.TempDir()
+	rec := fmt.Sprintf("%d %d %s\n", c.Process.Pid, time.Now().Add(-time.Second).UnixNano(), startTime(c.Process.Pid))
+	os.WriteFile(ChildPath(st), []byte(rec), 0o600)
+	rel, ok, _ := TryLock(st)
+	if !ok {
+		t.Fatal("lock busy")
+	}
+	rel()
+	select {
+	case <-exited:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the orphan group outlived its deadline")
+	}
+}
+
+func TestReapOrphanWaitStopsOnCancel(t *testing.T) {
+	c, exited := orphanGroup(t)
+	st := t.TempDir()
+	rec := fmt.Sprintf("%d %d %s\n", c.Process.Pid, time.Now().Add(time.Minute).UnixNano(), startTime(c.Process.Pid))
+	os.WriteFile(ChildPath(st), []byte(rec), 0o600)
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	told := false
+	if _, err := Lock(ctx, st, func() { told = true }); err == nil {
+		t.Fatal("Lock returned while the orphan was alive and the deadline far off")
+	}
+	if time.Since(start) > 3*time.Second || !told {
+		t.Fatalf("Lock waited %s (told %v) after cancel", time.Since(start), told)
+	}
+	select {
+	case <-exited:
+		t.Fatal("a cancelled wait killed the group")
+	default:
+	}
+	if _, err := os.Stat(ChildPath(st)); err != nil {
+		t.Fatal("a cancelled wait dropped the record")
 	}
 }

@@ -46,13 +46,13 @@ func Command(ctx context.Context, name string, args ...string) *exec.Cmd {
 	if f == nil || err != nil {
 		return exec.CommandContext(ctx, name, args...)
 	}
+	reapOrphan(ctx, f.Name()+".child", nil)
 	limit := superviseLimit
 	if d, ok := ctx.Deadline(); ok {
 		limit = time.Until(d)
 	}
 	c := exec.CommandContext(ctx, exe, append([]string{SuperviseCmd, limit.String(), "--", name}, args...)...)
 	c.ExtraFiles = []*os.File{f}
-	reapOrphan(f.Name() + ".child")
 	c.Env = append(os.Environ(), childEnv+"="+f.Name()+".child")
 	c.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	c.Cancel = func() error { return c.Process.Signal(syscall.SIGTERM) }
@@ -152,12 +152,12 @@ func groupAlive(pgid int) bool {
 
 // reapOrphan runs under upgrade.lock. A record left by a supervisor that was
 // killed names a command group that may still run with no deadline: wait for
-// it until the recorded deadline, then SIGKILL the group. The group is signalled
+// it until the recorded deadline, then SIGKILL the group; a cancelled ctx leaves the record and the group. The group is signalled
 // only while its leader still has the recorded start time, or is gone with
 // members left (the kernel keeps a pid unused while a group has it); a leader
 // with another start time means the id was reused, and a record with no start
 // time is never acted on. The record stays when the signal fails.
-func reapOrphan(path string) {
+func reapOrphan(ctx context.Context, path string, waiting func()) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return
@@ -178,8 +178,16 @@ func reapOrphan(path string) {
 		cur := startTime(pgid)
 		return cur == "" || cur == f[2]
 	}
-	for deadline := time.Unix(0, ns); groupAlive(pgid) && ours() && time.Now().Before(deadline); {
-		time.Sleep(50 * time.Millisecond)
+	for deadline, told := time.Unix(0, ns), false; groupAlive(pgid) && ours() && time.Now().Before(deadline); {
+		if !told && waiting != nil {
+			waiting()
+			told = true
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(50 * time.Millisecond):
+		}
 	}
 	if groupAlive(pgid) && ours() {
 		if err := syscall.Kill(-pgid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
