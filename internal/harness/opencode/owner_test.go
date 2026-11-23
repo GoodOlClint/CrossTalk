@@ -157,7 +157,7 @@ func TestOwnerRefusesUndeterminable(t *testing.T) {
 
 func TestOwnerMatchSends(t *testing.T) {
 	seam := setOwner(t, owners(4242))
-	r := newRig(t, "2.4.0", nil)
+	r := newRig(t, "2.4.0", nil, liveSession())
 	st, err := r.h.Inject(context.Background(), peerMsg(msg.Immediate), teammate(r))
 	if st != adapter.Accepted || err != nil {
 		t.Fatalf("Inject = %v, %v", st, err)
@@ -168,7 +168,7 @@ func TestOwnerMatchSends(t *testing.T) {
 	if n := len(r.prompts()); n != 2 {
 		t.Fatalf("%d prompts, want 2", n)
 	}
-	if n := len(seam.calls()); n != 2 {
+	if n := len(seam.calls()); n != 4 {
 		t.Fatalf("%d owner lookups, want one per request", n)
 	}
 }
@@ -176,7 +176,7 @@ func TestOwnerMatchSends(t *testing.T) {
 func TestOwnerFollowsRestartedService(t *testing.T) {
 	pid := 4242
 	setOwner(t, func(int) ([]int, error) { return []int{pid}, nil })
-	r := newRig(t, "2.4.0", nil)
+	r := newRig(t, "2.4.0", nil, liveSession())
 	d := teammate(r)
 	if st, err := r.h.Inject(context.Background(), peerMsg(msg.Immediate), d); st != adapter.Accepted {
 		t.Fatalf("before restart: %v %v", st, err)
@@ -187,7 +187,7 @@ func TestOwnerFollowsRestartedService(t *testing.T) {
 	if err != nil {
 		t.Skipf("port %s not rebindable: %v", addr, err)
 	}
-	next := opencodetest.NewService()
+	next := opencodetest.NewService(liveSession())
 	var hits int
 	var mu sync.Mutex
 	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, q *http.Request) {
@@ -205,8 +205,8 @@ func TestOwnerFollowsRestartedService(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if hits != 1 {
-		t.Fatalf("restarted service saw %d requests, want 1", hits)
+	if hits != 2 {
+		t.Fatalf("restarted service saw %d requests, want 2", hits)
 	}
 	if n := len(r.prompts()); n != 1 {
 		t.Fatalf("old service saw %d prompts, want 1", n)
@@ -215,12 +215,12 @@ func TestOwnerFollowsRestartedService(t *testing.T) {
 
 func TestOwnerCheckedEveryRequest(t *testing.T) {
 	seam := setOwner(t, func(call int) ([]int, error) {
-		if call == 1 {
+		if call <= 2 {
 			return []int{4242}, nil
 		}
 		return []int{9999}, nil
 	})
-	r := newRig(t, "2.4.0", nil)
+	r := newRig(t, "2.4.0", nil, liveSession())
 	d := teammate(r)
 	if st, err := r.h.Inject(context.Background(), peerMsg(msg.Immediate), d); st != adapter.Accepted {
 		t.Fatalf("first send: %v %v", st, err)
@@ -231,8 +231,8 @@ func TestOwnerCheckedEveryRequest(t *testing.T) {
 	if n := len(r.prompts()); n != 1 {
 		t.Fatalf("%d prompts, want 1", n)
 	}
-	if n := len(seam.calls()); n != 2 {
-		t.Fatalf("%d owner lookups, want 2", n)
+	if n := len(seam.calls()); n != 3 {
+		t.Fatalf("%d owner lookups, want 3", n)
 	}
 }
 

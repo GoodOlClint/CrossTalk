@@ -49,10 +49,30 @@ func (h *Harness) prompt(ctx context.Context, target adapter.Binding, text, deli
 	if target.HarnessEndpoint == "" || c.PinOrigin != target.HarnessEndpoint {
 		return adapter.Unreachable, fmt.Errorf("opencode: deliver %s: service origin differs from the bound endpoint; nothing sent", id)
 	}
-	body, _ := json.Marshal(struct {
+	if ctx.Err() != nil {
+		return adapter.Unreachable, fmt.Errorf("opencode: deliver %s: canceled before send; nothing sent", id)
+	}
+	timeout := c.Timeout
+	if timeout <= 0 {
+		timeout = defaultTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	if d, err := getSession(ctx, c, id); err != nil {
+		return adapter.Unreachable, fmt.Errorf("opencode: deliver %s: session state unreadable; nothing sent", id)
+	} else if archived, known := d.archived(); archived || !known {
+		return adapter.Unreachable, fmt.Errorf("opencode: deliver %s: session archived or archive state unreadable; nothing sent", id)
+	}
+	req := struct {
 		Text     string `json:"text"`
 		Delivery string `json:"delivery"`
-	}{text, delivery})
+		Resume   *bool  `json:"resume,omitempty"`
+	}{Text: text, Delivery: delivery}
+	if delivery == "queue" {
+		resume := false
+		req.Resume = &resume
+	}
+	body, _ := json.Marshal(req)
 	if ctx.Err() != nil {
 		return adapter.Unreachable, fmt.Errorf("opencode: deliver %s: canceled before send; nothing sent", id)
 	}
