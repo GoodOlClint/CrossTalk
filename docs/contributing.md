@@ -48,7 +48,7 @@ The last line printed is `REMOTE_E2E inform_seconds=N reply_seconds=N`. Logs lan
 ## Rules that matter
 
 - One receiver chain. Every inbound message goes through authenticate, dedupe, hop check, policy, inject. Do not inject from an ingress handler.
-- Harness code stays in the harness package. The shim, the MCP server and the A2A code import only the shared `internal/harness` interface, never `claude`, `codex` or `opencode`. A new harness is one package plus one line in `cmd/crosstalk`; OpenCode is the newest example.
+- Harness code stays in the harness package. The shim, the MCP server and the A2A code import only the shared `internal/harness` interface, never `claude`, `codex` or `opencode`. A new harness is one package plus one line in `cmd/crosstalk`, plus the few shared lists that name a harness: the A2A attestation allowlist (`internal/a2a/server.go`), the sender notice names (`internal/msg/notice.go`) and the shim parent classification (`cmd/crosstalk/install_shims.go`). OpenCode is the newest example.
 - Write the failing test first. Show that it fails, then make it pass.
 - Record decisions. An architectural choice goes in `docs/decisions/` as a short record (context, decision, rejected alternatives, consequences). Every record is provisional and is edited in place when the code moves.
 
