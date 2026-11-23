@@ -175,3 +175,24 @@ func TestFollowUpChildErrorKeepsStderr(t *testing.T) {
 		t.Fatalf("log lacks the command's stderr and exit status:\n%s", b)
 	}
 }
+
+func TestFollowUpChildOrphanReapedByNextHolder(t *testing.T) {
+	st, child, _ := killedShim(t, 2*time.Second)
+	out, err := exec.Command("ps", "-o", "ppid=", "-p", strconv.Itoa(child)).Output()
+	sup, _ := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil || sup <= 1 {
+		t.Fatalf("no supervisor for child %d: %q %v", child, out, err)
+	}
+	syscall.Kill(sup, syscall.SIGKILL)
+	if !within(5*time.Second, func() bool { return gone(sup) }) || gone(child) {
+		t.Fatal("setup: the supervisor must die and leave the child running")
+	}
+	rel, ok, err := upgrade.TryLock(st)
+	if !ok {
+		t.Fatalf("lock not free after the supervisor died: %v", err)
+	}
+	defer rel()
+	if !within(3*time.Second, func() bool { return gone(child) }) {
+		t.Fatal("the orphaned command still runs after the next holder took the lock")
+	}
+}

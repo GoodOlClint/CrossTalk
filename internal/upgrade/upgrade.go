@@ -69,6 +69,7 @@ func tryLock(stateDir string) (*os.File, error) {
 		}
 		return nil, err
 	}
+	reapOrphan(stateDir)
 	return f, nil
 }
 
