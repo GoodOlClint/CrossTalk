@@ -5,8 +5,9 @@ package opencode
 import (
 	"context"
 	"errors"
+	"net/netip"
 )
 
-func osListenerPIDs(context.Context, int) ([]int, error) {
-	return nil, errors.New("listener owner lookup is not supported on this platform")
+func osPeerPIDs(context.Context, netip.AddrPort, netip.AddrPort) ([]int, error) {
+	return nil, errors.New("connection holder lookup is not supported on this platform")
 }

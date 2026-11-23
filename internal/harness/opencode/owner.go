@@ -2,33 +2,68 @@ package opencode
 
 import (
 	"context"
-	"net/url"
-	"strconv"
+	"net"
+	"net/netip"
+	"time"
 )
 
-// listenerPIDs returns the pid of every process holding a TCP LISTEN socket on
-// port; none means no listener this user can see.
-var listenerPIDs = osListenerPIDs
+// peerPIDs returns the pid of every process this user can see holding the TCP
+// socket whose local end is svc and remote end is self. A connection the
+// service has not accepted yet has no holder.
+var peerPIDs = osPeerPIDs
 
-// ownerRefusal is empty when every listener on the origin's port belongs to
-// pid, and otherwise says why the request may not leave.
-func ownerRefusal(ctx context.Context, origin string, pid int) string {
-	u, err := url.Parse(origin)
+// peerWait bounds the retries while the service has not accepted the
+// connection yet.
+var peerWait = time.Second
+
+type servicePID struct{}
+
+type ownerError struct{ msg string }
+
+func (e *ownerError) Error() string { return e.msg }
+
+func dialService(ctx context.Context, network, addr string) (net.Conn, error) {
+	pid, _ := ctx.Value(servicePID{}).(int)
+	if pid <= 0 {
+		return nil, &ownerError{"no service pid for this request; nothing sent"}
+	}
+	conn, err := (&net.Dialer{}).DialContext(ctx, network, addr)
 	if err != nil {
-		return "service port unreadable; nothing sent"
+		return nil, err
 	}
-	port, err := strconv.Atoi(u.Port())
-	if err != nil {
-		return "service port unreadable; nothing sent"
+	if msg := peerRefusal(ctx, conn, pid); msg != "" {
+		conn.Close()
+		return nil, &ownerError{msg}
 	}
-	pids, err := listenerPIDs(ctx, port)
-	if err != nil || len(pids) == 0 {
-		return "owner of the service port could not be determined; nothing sent"
+	return conn, nil
+}
+
+func peerRefusal(ctx context.Context, conn net.Conn, pid int) string {
+	self, err1 := netip.ParseAddrPort(conn.LocalAddr().String())
+	svc, err2 := netip.ParseAddrPort(conn.RemoteAddr().String())
+	if err1 != nil || err2 != nil {
+		return "service connection addresses unreadable; nothing sent"
 	}
-	for _, p := range pids {
-		if p != pid {
-			return "service port is held by a process other than the service pid; nothing sent"
+	self = netip.AddrPortFrom(self.Addr().Unmap(), self.Port())
+	svc = netip.AddrPortFrom(svc.Addr().Unmap(), svc.Port())
+	deadline := time.Now().Add(peerWait)
+	for {
+		pids, err := peerPIDs(ctx, self, svc)
+		if err == nil && len(pids) > 0 {
+			for _, p := range pids {
+				if p != pid {
+					return "service connection is held by a process other than the service pid; nothing sent"
+				}
+			}
+			return ""
+		}
+		if !time.Now().Before(deadline) {
+			return "holder of the service connection could not be determined; nothing sent"
+		}
+		select {
+		case <-ctx.Done():
+			return "holder of the service connection could not be determined; nothing sent"
+		case <-time.After(20 * time.Millisecond):
 		}
 	}
-	return ""
 }

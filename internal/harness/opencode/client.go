@@ -76,7 +76,7 @@ func NewClient(servicePath string) *Client {
 		ServicePath: servicePath,
 		Timeout:     defaultTimeout,
 		http: &http.Client{
-			Transport:     &http.Transport{Proxy: nil},
+			Transport:     &http.Transport{Proxy: nil, DialContext: dialService, DisableKeepAlives: true},
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		},
 	}
@@ -127,9 +127,7 @@ func (c *Client) do(ctx context.Context, method, path string, body []byte) (*Res
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	if why := ownerRefusal(ctx, svc.Origin, svc.PID); why != "" {
-		return nil, &Error{Kind: KindUnreachable, Msg: why}
-	}
+	ctx = context.WithValue(ctx, servicePID{}, svc.PID)
 	var rd io.Reader
 	if body != nil {
 		rd = bytes.NewReader(body)
@@ -144,6 +142,10 @@ func (c *Client) do(ctx context.Context, method, path string, body []byte) (*Res
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
+		var refused *ownerError
+		if errors.As(err, &refused) {
+			return nil, &Error{Kind: KindUnreachable, Msg: refused.msg}
+		}
 		if errors.Is(err, syscall.ECONNREFUSED) {
 			return nil, &Error{Kind: KindUnreachable, Msg: "connection refused"}
 		}

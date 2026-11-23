@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -17,6 +19,7 @@ import (
 	"time"
 
 	"github.com/GoodOlClint/crosstalk/internal/adapter"
+	"github.com/GoodOlClint/crosstalk/internal/harness/opencode/opencodetest"
 	"github.com/GoodOlClint/crosstalk/internal/msg"
 )
 
@@ -25,28 +28,31 @@ func TestMain(m *testing.M) {
 		squatter()
 		return
 	}
-	listenerPIDs = func(context.Context, int) ([]int, error) { return []int{4242}, nil }
+	peerPIDs = func(context.Context, netip.AddrPort, netip.AddrPort) ([]int, error) { return []int{4242}, nil }
+	peerWait = 0
 	os.Exit(m.Run())
 }
 
 type ownerSeam struct {
 	mu    sync.Mutex
 	ports []int
+	selfs []netip.AddrPort
 	next  func(call int) ([]int, error)
 }
 
 func setOwner(t *testing.T, next func(call int) ([]int, error)) *ownerSeam {
 	t.Helper()
 	s := &ownerSeam{next: next}
-	old := listenerPIDs
-	listenerPIDs = func(_ context.Context, port int) ([]int, error) {
+	old := peerPIDs
+	peerPIDs = func(_ context.Context, self, svc netip.AddrPort) ([]int, error) {
 		s.mu.Lock()
-		s.ports = append(s.ports, port)
+		s.ports = append(s.ports, int(svc.Port()))
+		s.selfs = append(s.selfs, self)
 		n := len(s.ports)
 		s.mu.Unlock()
 		return s.next(n)
 	}
-	t.Cleanup(func() { listenerPIDs = old })
+	t.Cleanup(func() { peerPIDs = old })
 	return s
 }
 
@@ -109,7 +115,14 @@ func refusedOwner(t *testing.T, r *rig, seam *ownerSeam) {
 	}
 	for _, p := range got {
 		if p != want {
-			t.Fatalf("owner looked up on port %d, request goes to %d", p, want)
+			t.Fatalf("holder looked up for port %d, request goes to %d", p, want)
+		}
+	}
+	seam.mu.Lock()
+	defer seam.mu.Unlock()
+	for _, self := range seam.selfs {
+		if !self.Addr().IsLoopback() || self.Port() == 0 {
+			t.Fatalf("holder looked up for client end %v", self)
 		}
 	}
 }
@@ -168,13 +181,35 @@ func TestOwnerFollowsRestartedService(t *testing.T) {
 	if st, err := r.h.Inject(context.Background(), peerMsg(msg.Immediate), d); st != adapter.Accepted {
 		t.Fatalf("before restart: %v %v", st, err)
 	}
+	addr := r.f.srv.Listener.Addr().String()
+	r.f.srv.Close()
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		t.Skipf("port %s not rebindable: %v", addr, err)
+	}
+	next := opencodetest.NewService()
+	var hits int
+	var mu sync.Mutex
+	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, q *http.Request) {
+		mu.Lock()
+		hits++
+		mu.Unlock()
+		next.Handle(w, q)
+	})}
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(func() { _ = srv.Close() })
 	pid = 5151
-	writeSvc(t, strings.TrimSuffix(r.path, "/service.json"), r.f.srv.URL, "2.4.0", 5151)
+	writeSvc(t, filepath.Dir(r.path), r.f.srv.URL, "2.4.0", 5151)
 	if st, err := r.h.Inject(context.Background(), peerMsg(msg.Immediate), d); st != adapter.Accepted {
 		t.Fatalf("after restart with a rewritten service.json: %v %v", st, err)
 	}
-	if n := len(r.prompts()); n != 2 {
-		t.Fatalf("%d prompts, want 2", n)
+	mu.Lock()
+	defer mu.Unlock()
+	if hits != 1 {
+		t.Fatalf("restarted service saw %d requests, want 1", hits)
+	}
+	if n := len(r.prompts()); n != 1 {
+		t.Fatalf("old service saw %d prompts, want 1", n)
 	}
 }
 
@@ -201,26 +236,49 @@ func TestOwnerCheckedEveryRequest(t *testing.T) {
 	}
 }
 
-func TestOSListenerPIDs(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	port := ln.Addr().(*net.TCPAddr).Port
-	pids, err := osListenerPIDs(context.Background(), port)
-	if err != nil || len(pids) != 1 || pids[0] != os.Getpid() {
-		t.Fatalf("own listener: %v %v, want [%d]", pids, err, os.Getpid())
-	}
-	ln.Close()
-	if pids, _ := osListenerPIDs(context.Background(), port); len(pids) != 0 {
-		t.Fatalf("closed port: %v, want none", pids)
+func TestOSPeerPIDs(t *testing.T) {
+	for _, network := range []string{"tcp4", "tcp6"} {
+		t.Run(network, func(t *testing.T) {
+			host := "127.0.0.1:0"
+			if network == "tcp6" {
+				host = "[::1]:0"
+			}
+			ln, err := net.Listen(network, host)
+			if err != nil {
+				t.Skipf("no %s loopback: %v", network, err)
+			}
+			defer ln.Close()
+			conn, err := net.Dial(network, ln.Addr().String())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer conn.Close()
+			self := netip.MustParseAddrPort(conn.LocalAddr().String())
+			svc := netip.MustParseAddrPort(ln.Addr().String())
+			if pids, err := osPeerPIDs(context.Background(), self, svc); err != nil || len(pids) != 0 {
+				t.Fatalf("unaccepted connection: %v %v, want no holder", pids, err)
+			}
+			acc, err := ln.Accept()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer acc.Close()
+			pids, err := osPeerPIDs(context.Background(), self, svc)
+			if err != nil || len(pids) != 1 || pids[0] != os.Getpid() {
+				t.Fatalf("accepted connection: %v %v, want [%d]", pids, err, os.Getpid())
+			}
+			other := netip.AddrPortFrom(self.Addr(), self.Port()+1)
+			if pids, _ := osPeerPIDs(context.Background(), other, svc); len(pids) != 0 {
+				t.Fatalf("another client end: %v, want none", pids)
+			}
+		})
 	}
 }
 
 func TestOwnerRealSquatter(t *testing.T) {
-	old := listenerPIDs
-	listenerPIDs = osListenerPIDs
-	t.Cleanup(func() { listenerPIDs = old })
+	oldPIDs, oldWait := peerPIDs, peerWait
+	peerPIDs, peerWait = osPeerPIDs, time.Second
+	t.Cleanup(func() { peerPIDs, peerWait = oldPIDs, oldWait })
 
 	cmd := exec.Command(os.Args[0], "-test.run=^$")
 	cmd.Env = append(os.Environ(), "CROSSTALK_TEST_SQUATTER=1")
