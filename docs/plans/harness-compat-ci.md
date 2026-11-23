@@ -8,7 +8,7 @@ Goal: when Codex or Claude Code (later other harnesses) publishes a new version,
 
 Operator rulings (2026-11-20), taken as given:
 
-1. A scheduled GitHub Actions job detects new versions of the npm packages `@openai/codex` and `@anthropic-ai/claude-code` and runs checks only when a version changed.
+1. A scheduled GitHub Actions job detects new versions of the npm packages `@openai/codex`, `@anthropic-ai/claude-code` and `@opencode/cli` and runs checks only when a version changed.
 2. On pass the tested version is bumped automatically, with no human PR review. On fail an issue is opened and nothing is bumped.
 3. Linux runners by default. Amended 2026-11-20 (relayed by the coordinator): Linux was a cost choice; standard macOS runners are free for public repositories (section 3, b), so a macOS job is used wherever coverage needs it, such as the queue wake.
 4. Models are reached through OpenRouter with API keys held as secrets of this repo, used only on `main`, `schedule` and `workflow_dispatch`, never by a fork pull request, with spend capped.

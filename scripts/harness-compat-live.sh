@@ -325,12 +325,37 @@ assert-discovery)
 		exit 1
 	fi
 	;;
+opencode-service)
+	f="${2:?usage: harness-compat-live.sh opencode-service SERVICE_JSON}"
+	command -v lsof >/dev/null 2>&1 || {
+		echo "lsof not found: cannot check which process owns the service port" >&2
+		exit 1
+	}
+	[ -f "$f" ] || {
+		echo "no $f yet" >&2
+		exit 1
+	}
+	url="$(jq -r '.url // ""' "$f")" || exit 1
+	printf '%s\n' "$url" | grep -Eq '^http://(127\.0\.0\.1|\[::1\]):[0-9]+/?$' || {
+		echo "service.json url is not a loopback http origin" >&2
+		exit 1
+	}
+	port="$(printf '%s\n' "$url" | sed -E 's|^.*:([0-9]+)/?$|\1|')"
+	spid="$(jq -r '.pid | if type == "number" then tostring else "" end' "$f")"
+	listener="$(lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null || true)"
+	[ -n "$spid" ] && [ "$spid" = "$listener" ] || {
+		echo "service.json pid '$spid' is not the listener of port $port ('$listener')" >&2
+		exit 1
+	}
+	printf '%s\n' "$url"
+	;;
 leg)
-	leg="${2:?usage: harness-compat-live.sh leg claude-linux|claude-macos|codex-linux|codex-macos HOME}"
+	leg="${2:?usage: harness-compat-live.sh leg claude-linux|claude-macos|codex-linux|codex-macos|opencode-linux|opencode-macos HOME}"
 	home="${3:?usage: harness-compat-live.sh leg LEG HOME}"
 	: "${OPENROUTER_API_KEY:?}"
 	case "$leg" in
 	claude-*) : "${CLAUDE_MODEL:?}" ;;
+	opencode-*) : "${OPENCODE_MODEL:?}" ;;
 	*) : "${CODEX_MODEL:?}" ;;
 	esac
 	if [ "$leg" = codex-macos ]; then
@@ -357,6 +382,12 @@ leg)
 	PTYRUN="${PTYRUN:-$(ptyrun_path)}"
 	CODEX_HOME="$home/.codex"
 	export CODEX_HOME
+	case "$leg" in
+	opencode-*)
+		export XDG_CONFIG_HOME="$home/.config" XDG_STATE_HOME="$home/.local/state" XDG_DATA_HOME="$home/.local/share" XDG_CACHE_HOME="$home/.cache"
+		export OPENCODE_DISABLE_AUTOUPDATE=1 OPENCODE_DISABLE_MODELS_FETCH=1 OPENCODE_DISABLE_CLAUDE_CODE=1
+		;;
+	esac
 	pids=
 	ok=false
 	tab_ref=
@@ -365,6 +396,8 @@ leg)
 		mkdir -p "$logs/state"
 		cp -R "$state/agents" "$state/journal" "$state/codex-wakes" "$state/codex-claims" "$logs/state/" 2>/dev/null || true
 		cp "$home/.codex/config.toml" "$logs/codex-config.toml" 2>/dev/null || true
+		if [ -f "$home/.local/state/opencode/service.json" ]; then jq '.password = "***"' "$home/.local/state/opencode/service.json" >"$logs/opencode-service.json" 2>/dev/null || true; fi
+		cp "$home/.config/opencode/opencode.json" "$logs/opencode-config.json" 2>/dev/null || true
 		[ -d "$home/.codex/sessions" ] && cp -R "$home/.codex/sessions" "$logs/codex-sessions" 2>/dev/null || true
 		staged=0
 		"$0" stage-logs "$logs" "$out" || staged=1
@@ -580,6 +613,77 @@ PY
 		}
 	}
 
+	oc_api() { # method path [body]: the Basic header goes through curl --config - so it is never on a command line
+		oc_url="$(cat "$logs/opencode-service.url")"
+		if [ $# -ge 3 ]; then
+			printf 'user = "opencode:%s"\n' "$(jq -r .password "$XDG_STATE_HOME/opencode/service.json")" | curl -fsS --max-time 30 --config - -X "$1" -H 'content-type: application/json' --data "$3" "$oc_url$2"
+		else
+			printf 'user = "opencode:%s"\n' "$(jq -r .password "$XDG_STATE_HOME/opencode/service.json")" | curl -fsS --max-time 30 --config - -X "$1" "$oc_url$2"
+		fi
+	}
+	oc_new_session() { # title
+		oc_api POST /api/session "$(jq -nc --arg t "$1" '{title: $t}')" | jq -r '.id // .data.id // empty'
+	}
+	oc_prompt() { # session_id text: a steer prompt, which wakes an idle session
+		oc_api POST "/api/session/$1/prompt" "$(jq -nc --arg t "$2" '{text: $t, delivery: "steer"}')" >"$logs/oc-prompt.json"
+	}
+	install_opencode() {
+		mkdir -p "$XDG_CONFIG_HOME/opencode"
+		jq -n --arg m "$OPENCODE_MODEL" '{model: $m}' >"$XDG_CONFIG_HOME/opencode/opencode.json"
+		"$xt" install opencode --yes </dev/null >"$logs/install-opencode.log" 2>&1
+		jq -e --arg m "$OPENCODE_MODEL" '.model == $m and (.mcp.servers.crosstalk | type == "object")' "$XDG_CONFIG_HOME/opencode/opencode.json" >/dev/null || {
+			echo "opencode.json lacks the model or the crosstalk entry after install" >&2
+			return 1
+		}
+	}
+	start_opencode_service() {
+		command -v lsof >/dev/null 2>&1 || {
+			echo "lsof not found: cannot check which process owns the service port" >&2
+			return 1
+		}
+		held="$(lsof -nP -iTCP:"${COMPAT_OPENCODE_PORT:-49374}" -sTCP:LISTEN -t 2>/dev/null || true)"
+		[ -z "$held" ] || {
+			echo "port ${COMPAT_OPENCODE_PORT:-49374} is already held by pid $held, not by this leg" >&2
+			return 1
+		}
+		(
+			cd "$home/work"
+			exec opencode serve --service ${COMPAT_OPENCODE_PORT:+--port "$COMPAT_OPENCODE_PORT"}
+		) >"$logs/opencode-service.log" 2>&1 &
+		pids="$pids $!"
+		w=0
+		until "$0" opencode-service "$XDG_STATE_HOME/opencode/service.json" >"$logs/opencode-service.url" 2>"$logs/opencode-service.err"; do
+			w=$((w + 1))
+			[ "$w" -lt 60 ] || {
+				cat "$logs/opencode-service.err" >&2
+				return 1
+			}
+			sleep 1
+		done
+	}
+	opencode_roundtrip() {
+		install_opencode
+		start_opencode_service
+		recv_session="$(oc_new_session recv)"
+		[ -n "$recv_session" ] || {
+			echo "POST /api/session returned no session id" >&2
+			return 1
+		}
+		oc_prompt "$recv_session" "$auth Call the crosstalk list_agents tool once, then reply READY."
+		wait_n opencode 1
+		assert_home_resolved opencode
+		recv="$(only_id opencode)"
+		ask_session="$(oc_new_session ask)"
+		[ -n "$ask_session" ] || {
+			echo "POST /api/session returned no session id" >&2
+			return 1
+		}
+		oc_prompt "$ask_session" "$auth Call the crosstalk list_agents tool first and confirm that agent_id $recv appears. Then use the crosstalk ask tool to ask the agent whose agent_id is $recv: compat-E, reply with the single word PONG. Then wait for its reply."
+		wait_n opencode 2
+		asker="$(other_id opencode "$recv")"
+		await_pair "$asker" "$recv"
+	}
+
 	codex_roundtrip() {
 		install_codex
 		start_codex recv 7 "$auth Call the crosstalk list_agents tool once, then reply READY and wait."
@@ -610,6 +714,9 @@ PY
 		;;
 	codex-linux)
 		codex_roundtrip
+		;;
+	opencode-linux | opencode-macos)
+		opencode_roundtrip
 		;;
 	codex-macos)
 		codex_roundtrip
@@ -669,7 +776,7 @@ PY
 	ok=true
 	;;
 *)
-	echo "usage: harness-compat-live.sh assert-pair|assert-discovery|assert-home-descriptor|leg ..." >&2
+	echo "usage: harness-compat-live.sh assert-pair|assert-discovery|assert-home-descriptor|opencode-service|leg ..." >&2
 	exit 2
 	;;
 esac

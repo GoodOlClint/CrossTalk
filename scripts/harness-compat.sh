@@ -5,6 +5,7 @@ pkg() {
 	case "$1" in
 	codex) echo @openai/codex ;;
 	claude-code) echo @anthropic-ai/claude-code ;;
+	opencode) echo @opencode/cli ;;
 	*)
 		echo "unknown harness: $1" >&2
 		return 1
@@ -24,7 +25,7 @@ check-updates)
 	forced="${4-}"
 	force="${5-}"
 	recorded="${6-}"
-	case "$which" in all) set -- codex claude-code ;; *) set -- "$which" ;; esac
+	case "$which" in all) set -- codex claude-code opencode ;; *) set -- "$which" ;; esac
 	if [ -n "$forced" ]; then
 		semver "$forced" || {
 			echo "version must be x.y.z: $forced" >&2
@@ -52,7 +53,7 @@ check-updates)
 	;;
 legs)
 	usage="usage: harness-compat.sh legs CHANGED_JSON [QUEUE_CODEX_VERSION]"
-	printf '%s' "${2:?$usage}" | jq -c --arg q "${3-}" '[.[] | (if .harness == "claude-code" then ({leg: "claude-linux", harness: .harness, version: .version, runner: "ubuntu-latest"}, {leg: "claude-macos", harness: .harness, version: .version, runner: "macos-latest"}) elif .harness == "codex" then ({leg: "codex-linux", harness: .harness, version: .version, runner: "ubuntu-latest"}, {leg: "codex-macos", harness: .harness, version: (if $q != "" then $q else .version end), runner: "macos-latest"}) else empty end)]'
+	printf '%s' "${2:?$usage}" | jq -c --arg q "${3-}" '[.[] | (if .harness == "claude-code" then ({leg: "claude-linux", harness: .harness, version: .version, runner: "ubuntu-latest"}, {leg: "claude-macos", harness: .harness, version: .version, runner: "macos-latest"}) elif .harness == "codex" then ({leg: "codex-linux", harness: .harness, version: .version, runner: "ubuntu-latest"}, {leg: "codex-macos", harness: .harness, version: (if $q != "" then $q else .version end), runner: "macos-latest"}) elif .harness == "opencode" then ({leg: "opencode-linux", harness: .harness, version: .version, runner: "ubuntu-latest"}, {leg: "opencode-macos", harness: .harness, version: .version, runner: "macos-latest"}) else empty end)]'
 	;;
 step-status)
 	usage="usage: harness-compat.sh step-status JOBS_FILE JOB STEP"
@@ -133,6 +134,87 @@ compare-codex)
 	}
 	echo "$q"
 	;;
+compare-opencode)
+	usage="usage: harness-compat.sh compare-opencode HOME"
+	home="${2:?$usage}"
+	port="${COMPAT_OPENCODE_PORT:-49374}"
+	xt="${CROSSTALK_BIN:-$home/.local/bin/crosstalk}"
+	mkdir -p "$home/.config" "$home/.local/state" "$home/.local/share" "$home/.cache"
+	export HOME="$home" XDG_CONFIG_HOME="$home/.config" XDG_STATE_HOME="$home/.local/state" XDG_DATA_HOME="$home/.local/share" XDG_CACHE_HOME="$home/.cache"
+	export OPENCODE_DISABLE_AUTOUPDATE=1 OPENCODE_DISABLE_MODELS_FETCH=1 OPENCODE_DISABLE_CLAUDE_CODE=1
+	out="$(opencode --version)"
+	[ "$(printf '%s\n' "$out" | wc -l)" -eq 1 ] && printf '%s\n' "$out" | grep -Eq '^opencode v[0-9]+\.[0-9]+\.[0-9]+[[:space:]]*$' || {
+		echo "opencode --version no longer parses: $out" >&2
+		exit 1
+	}
+	command -v lsof >/dev/null 2>&1 || {
+		echo "lsof not found: cannot check which process owns port $port" >&2
+		exit 1
+	}
+	held="$(lsof -nP -iTCP:"$port" -sTCP:LISTEN -t 2>/dev/null || true)"
+	[ -z "$held" ] || {
+		echo "port $port is already held by pid $held, not by this check: refusing to use it" >&2
+		exit 1
+	}
+	opencode serve --service ${COMPAT_OPENCODE_PORT:+--port "$COMPAT_OPENCODE_PORT"} >"$home/opencode-serve.log" 2>&1 &
+	pid=$!
+	trap 'kill "$pid" 2>/dev/null || true' EXIT
+	f="$XDG_STATE_HOME/opencode/service.json"
+	n=0
+	while [ ! -f "$f" ]; do
+		n=$((n + 1))
+		[ "$n" -lt "${COMPAT_WAIT_TRIES:-40}" ] || {
+			echo "service did not write $f" >&2
+			exit 1
+		}
+		sleep 0.5
+	done
+	[ -n "$(find "$f" -maxdepth 0 -type f -perm 600 -user "$(id -u)" 2>/dev/null)" ] || {
+		echo "service.json mode is not 0600 or not owned by this user, or it is a symlink: $f" >&2
+		exit 1
+	}
+	url="$(jq -r 'if (.password | type == "string" and length > 0) then .url // "" else "NO-PASSWORD" end' "$f")" || {
+		echo "service.json is not JSON: $f" >&2
+		exit 1
+	}
+	[ "$url" != NO-PASSWORD ] || {
+		echo "service.json password is missing or empty" >&2
+		exit 1
+	}
+	printf '%s\n' "$url" | grep -Eq '^http://(127\.0\.0\.1|\[::1\]):[0-9]+/?$' || {
+		echo "service.json url is not a loopback http origin: $url" >&2
+		exit 1
+	}
+	uport="$(printf '%s\n' "$url" | sed -E 's|^.*:([0-9]+)/?$|\1|')"
+	spid="$(jq -r '.pid | if type == "number" then tostring else "" end' "$f")"
+	listener="$(lsof -nP -iTCP:"$uport" -sTCP:LISTEN -t 2>/dev/null || true)"
+	[ -n "$spid" ] && [ "$spid" = "$listener" ] || {
+		echo "service.json pid '$spid' is not the listener of port $uport ('$listener')" >&2
+		exit 1
+	}
+	auth() { printf 'user = "opencode:%s"\n' "$(jq -r .password "$f")"; }
+	ses="$(auth | curl -fsS --max-time 20 --config - -H 'content-type: application/json' --data '{"title":"compat"}' "$url/api/session" 2>/dev/null | jq -r '.id // .data.id // empty' 2>/dev/null || true)"
+	printf '%s\n' "$ses" | grep -Eq '^ses_[A-Za-z0-9]+$' || {
+		echo "POST /api/session did not return a session id of the shape the harness reads: '$ses'" >&2
+		exit 1
+	}
+	auth | curl -fsS --max-time 20 --config - "$url/api/session" 2>/dev/null | jq -e --arg id "$ses" '[.. | objects | select(.id? == $id)] | length > 0' >/dev/null || {
+		echo "GET /api/session does not list the new session $ses" >&2
+		exit 1
+	}
+	[ -x "$xt" ] || {
+		echo "no crosstalk binary at $xt" >&2
+		exit 1
+	}
+	req="$(jq -nc --arg id "$ses" '{jsonrpc: "2.0", id: 2, method: "tools/call", params: {name: "list_agents", arguments: {}, _meta: {"ai.opencode/sessionID": $id}}}')"
+	init='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"compat","version":"0"}}}'
+	resp="$( (printf '%s\n' "$init"; sleep 1; printf '%s\n' '{"jsonrpc":"2.0","method":"notifications/initialized"}'; printf '%s\n' "$req"; sleep 3) | "$xt" mcp 2>/dev/null | jq -c 'select(.id == 2)' )" || true
+	printf '%s' "$resp" | jq -e '[.. | objects | select(.harness? == "opencode" and .you? == true)] | length == 1' >/dev/null 2>&1 || {
+		echo "a tools/call carrying _meta ai.opencode/sessionID $ses did not bind to an opencode row" >&2
+		exit 1
+	}
+	echo "opencode service.json, session and _meta binding ok"
+	;;
 passing | failing)
 	usage="usage: harness-compat.sh $1 RESULTS_JSON"
 	want=true
@@ -160,14 +242,18 @@ bump-record)
 	printf '%s\n' "$out" >"$record"
 	;;
 failed-steps)
-	usage="usage: harness-compat.sh failed-steps JOBS_FILE HARNESS"
-	case "${3:?$usage}" in claude-code) other=codex ;; codex) other=claude ;; *)
+	usage="usage: harness-compat.sh failed-steps JOBS_FILE codex|claude-code|opencode"
+	case "${3:?$usage}" in
+	claude-code) own=claude ;;
+	codex) own=codex ;;
+	opencode) own=opencode ;;
+	*)
 		echo "unknown harness: $3" >&2
 		exit 1
 		;;
 	esac
-	jq -rs --arg o "$other" '
-		map(select(.conclusion == "failure" and ((.name | contains($o)) | not)))
+	jq -rs --arg o "$own" '
+		map(select(.conclusion == "failure" and ((.name | capture("^(compare|harness)-(?<h>claude|codex|opencode)-").h // $o) == $o)))
 		| map(.name as $j | ([.steps[]? | select(.conclusion == "failure") | .name] | if length == 0 then ["(no step recorded)"] else . end) | map($j + ": " + .)) | add // [] | .[]' "${2:?$usage}"
 	;;
 tested-code)
@@ -234,7 +320,7 @@ file-issue)
 		}
 	;;
 *)
-	echo "usage: harness-compat.sh check-updates|legs|step-status|report|compare-claude|compare-codex|passing|failing|bump-record|tested-code|failed-steps|issue-title|issue-body|file-issue ..." >&2
+	echo "usage: harness-compat.sh check-updates|legs|step-status|report|compare-claude|compare-codex|compare-opencode|passing|failing|bump-record|tested-code|failed-steps|issue-title|issue-body|file-issue ..." >&2
 	exit 2
 	;;
 esac

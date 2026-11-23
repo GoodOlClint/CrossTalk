@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       harness:
-        description: harness to check (all, codex or claude-code)
+        description: harness to check (all, codex, claude-code or opencode)
         default: all
       version:
         description: force this x.y.z instead of the npm latest (one harness only)
@@ -81,7 +81,7 @@ jobs:
           VERSION: ${{ matrix.version }}
         run: |
           set -eu
-          case "$HARNESS" in codex) pkg=@openai/codex ;; claude-code) pkg=@anthropic-ai/claude-code ;; *) exit 1 ;; esac
+          case "$HARNESS" in codex) pkg=@openai/codex ;; claude-code) pkg=@anthropic-ai/claude-code ;; opencode) pkg=@opencode/cli ;; *) exit 1 ;; esac
           npm install -g "$pkg@$VERSION"
       - name: Build crosstalk
         run: go build -o "$RUNNER_TEMP/bin/crosstalk" ./cmd/crosstalk
@@ -92,7 +92,7 @@ jobs:
           set -eu
           home="$(mktemp -d /tmp/ct.XXXXXX)"
           echo "SCRATCH_HOME=$home" >> "$GITHUB_ENV"
-          name=claude; [ "$HARNESS" = codex ] && name=codex
+          case "$HARNESS" in codex) name=codex ;; opencode) name=opencode ;; *) name=claude ;; esac
           HOME="$home" "$RUNNER_TEMP/bin/crosstalk" install "$name" --yes </dev/null
           HOME="$home" "$home/.local/bin/crosstalk" install "$name" --check </dev/null
       - name: Harness probes
@@ -100,13 +100,19 @@ jobs:
           HARNESS: ${{ matrix.harness }}
         run: |
           set -eu
-          if [ "$HARNESS" = codex ]; then
-            q="$(scripts/harness-compat.sh compare-codex "$SCRATCH_HOME")"
-            test -f "$q"
-            CROSSTALK_COMPAT_QUEUE_DB="$q" go test ./internal/harness/codex -run TestInstalledCodexQueueSchema -count=1 -v
-          else
-            scripts/harness-compat.sh compare-claude "$SCRATCH_HOME"
-          fi
+          case "$HARNESS" in
+            codex)
+              q="$(scripts/harness-compat.sh compare-codex "$SCRATCH_HOME")"
+              test -f "$q"
+              CROSSTALK_COMPAT_QUEUE_DB="$q" go test ./internal/harness/codex -run TestInstalledCodexQueueSchema -count=1 -v
+              ;;
+            opencode)
+              CROSSTALK_BIN="$SCRATCH_HOME/.local/bin/crosstalk" scripts/harness-compat.sh compare-opencode "$SCRATCH_HOME"
+              ;;
+            *)
+              scripts/harness-compat.sh compare-claude "$SCRATCH_HOME"
+              ;;
+          esac
 
   build:
     needs: check-updates
@@ -156,6 +162,7 @@ jobs:
       OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
       CLAUDE_MODEL: ${{ vars.HARNESS_COMPAT_CLAUDE_MODEL }}
       CODEX_MODEL: ${{ vars.HARNESS_COMPAT_CODEX_MODEL }}
+      OPENCODE_MODEL: ${{ vars.HARNESS_COMPAT_OPENCODE_MODEL }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -176,6 +183,7 @@ jobs:
           [ -n "$OPENROUTER_API_KEY" ] || { echo "::error::OPENROUTER_API_KEY is not set"; exit 1; }
           case "$HARNESS" in
             claude-code) model="$CLAUDE_MODEL"; var=HARNESS_COMPAT_CLAUDE_MODEL ;;
+            opencode) model="$OPENCODE_MODEL"; var=HARNESS_COMPAT_OPENCODE_MODEL ;;
             *) model="$CODEX_MODEL"; var=HARNESS_COMPAT_CODEX_MODEL ;;
           esac
           [ -n "$model" ] || { echo "::error::$var is not set"; exit 1; }
@@ -192,6 +200,7 @@ jobs:
           case "$HARNESS" in
             claude-code) npm install -g "@anthropic-ai/claude-code@$VERSION"; claude --version ;;
             codex) npm install -g "@openai/codex@$VERSION"; codex --version ;;
+            opencode) npm install -g "@opencode/cli@$VERSION"; opencode --version ;;
             *) echo "unknown harness: $HARNESS" >&2; exit 1 ;;
           esac
       - name: Run the leg
