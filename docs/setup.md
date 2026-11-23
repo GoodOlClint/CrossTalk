@@ -85,6 +85,26 @@ Before 0.1.3 the CrossTalk plugin started the server itself. Since 0.1.3 the plu
 
 A prerelease binary (`0.1.4-rc.1`) installs the last release's plugin, because the marketplace stays on the last final tag. K1 passes with a note in that case. To test the rc plugin too, point `CROSSTALK_MARKETPLACE` at a scratch marketplace, not at the tag: copy `.claude-plugin/marketplace.json` and `.agents/plugins/marketplace.json` from the rc tag into a scratch directory at the same paths, set each crosstalk entry's `ref` to the rc tag (for example `v0.1.4-rc.1`), and run `CROSSTALK_MARKETPLACE=<scratch dir> crosstalk install`. Setting the variable to the tag itself does not work: it is passed to `plugin marketplace add` as a marketplace source, and the marketplace's own `ref` still names the last release.
 
+Both CLIs remember where the `crosstalk` marketplace came from, and each refuses a different source. Switch with the commands below, and switch back the same way when the rehearsal ends. CrossTalk does not remove a marketplace for you: when it meets this refusal, `crosstalk install` fails with an error that names these commands, and the upgrade follow-up shows one notice and does not retry.
+
+Before the rehearsal (the marketplace came from GitHub), then run the install from the scratch directory:
+
+```
+codex plugin marketplace remove crosstalk
+claude plugin marketplace remove crosstalk
+CROSSTALK_MARKETPLACE=<scratch dir> crosstalk install
+```
+
+After the rehearsal, to return to the released plugin:
+
+```
+codex plugin marketplace remove crosstalk
+claude plugin marketplace remove crosstalk
+crosstalk install
+```
+
+Leave out the line for a harness you do not use. Keep `CROSSTALK_MARKETPLACE` out of the environment of running sessions, because a session that starts the upgrade follow-up with it set tries the scratch source too.
+
 ## Homebrew
 
 Homebrew is a package manager for macOS and Linux; a *formula* is its recipe for one program, and a *tap* is a repository of formulae. From release v0.1.4 on, CrossTalk has a formula in the `goodolclint/tap` tap, and it installs the same signed release binary as the download in step 1. Until v0.1.4 is released the `brew` lines below do not work.

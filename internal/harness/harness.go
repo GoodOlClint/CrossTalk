@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"os"
@@ -274,6 +275,31 @@ type InstallEnv struct {
 	// owner/repo or a local directory holding a marketplace named crosstalk.
 	Marketplace string
 }
+
+// ErrMarketplaceMismatch is matched with errors.Is on an error from a plugin
+// step whose CLI refused a marketplace add or update because crosstalk was
+// added from another source. Only the user can fix it: CrossTalk never removes
+// a marketplace itself.
+var ErrMarketplaceMismatch = errors.New("plugin marketplace source mismatch")
+
+type marketplaceMismatch struct {
+	cli, want string
+	cause     error
+}
+
+// MarketplaceMismatch wraps cause, the CLI's refusal, in the one error that
+// names the cause and the commands that clear it.
+func MarketplaceMismatch(cli, want string, cause error) error {
+	return &marketplaceMismatch{cli, want, cause}
+}
+
+func (e *marketplaceMismatch) Error() string {
+	return fmt.Sprintf("the %s marketplace %q came from a different source than %s; CrossTalk does not replace it: run `%s plugin marketplace remove crosstalk`, then `CROSSTALK_MARKETPLACE=%s crosstalk install` (the override keeps this source): %v", e.cli, "crosstalk", e.want, e.cli, e.want, e.cause)
+}
+
+func (e *marketplaceMismatch) Unwrap() error { return e.cause }
+
+func (e *marketplaceMismatch) Is(target error) bool { return target == ErrMarketplaceMismatch }
 
 type Step struct {
 	Title, Change string

@@ -17,11 +17,15 @@ type recorder struct {
 	calls   []string
 	plugins string
 	fail    string
+	failErr error
 }
 
 func (r *recorder) run(_ context.Context, name string, args ...string) ([]byte, error) {
 	r.calls = append(r.calls, name+" "+strings.Join(args, " "))
 	if r.fail == r.calls[len(r.calls)-1] {
+		if r.failErr != nil {
+			return nil, r.failErr
+		}
 		return nil, errors.New("forced failure")
 	}
 	if strings.Join(args, " ") == "plugin list --json" {
@@ -255,4 +259,26 @@ func TestInstallNoAutoRefreshWritesEnv(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestClaudePluginMarketplaceMismatch(t *testing.T) {
+	cause := errors.New("claude plugin marketplace add /scratch/mkt: exit status 1: crosstalk's source doesn't match its extraKnownMarketplaces entry")
+	r := &recorder{fail: "claude plugin marketplace add /scratch/mkt", failErr: cause}
+	env := installEnv(t, r)
+	env.Marketplace = "/scratch/mkt"
+	err := pluginStep(env).Apply(context.Background())
+	if !errors.Is(err, harness.ErrMarketplaceMismatch) || !errors.Is(err, cause) {
+		t.Fatalf("err = %v, want ErrMarketplaceMismatch wrapping the CLI error", err)
+	}
+	for _, want := range []string{"claude plugin marketplace remove crosstalk", "CROSSTALK_MARKETPLACE=/scratch/mkt crosstalk install"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("err = %v, missing %q", err, want)
+		}
+	}
+	r2 := &recorder{fail: "claude plugin marketplace add /tmp/extraKnownMarketplaces", failErr: errors.New("claude plugin marketplace add /tmp/extraKnownMarketplaces: exit status 1: cannot read")}
+	env.Marketplace = "/tmp/extraKnownMarketplaces"
+	env.Run = r2.run
+	if err := pluginStep(env).Apply(context.Background()); errors.Is(err, harness.ErrMarketplaceMismatch) {
+		t.Errorf("an unrelated failure was reported as a mismatch: %v", err)
+	}
 }

@@ -32,6 +32,7 @@ type fuRec struct {
 	home      string
 	stale     bool
 	claudeVer string
+	failCall  map[string]error
 }
 
 func (f *fuRec) run(_ context.Context, name string, args ...string) ([]byte, error) {
@@ -39,6 +40,9 @@ func (f *fuRec) run(_ context.Context, name string, args ...string) ([]byte, err
 	defer f.mu.Unlock()
 	a := strings.Join(args, " ")
 	f.calls = append(f.calls, name+" "+a)
+	if err := f.failCall[name+" "+a]; err != nil {
+		return nil, err
+	}
 	v := fuVer
 	if f.stale {
 		v = "0.0.1"
@@ -670,5 +674,34 @@ func TestFollowUpStartsAtFirstBind(t *testing.T) {
 	}
 	if !fuDone(env, "claude") {
 		t.Fatal("did not run after the first bind")
+	}
+}
+
+const fuDifferentSource = "codex plugin marketplace add GoodOlClint/CrossTalk: exit status 1: Error: marketplace 'crosstalk' is already added from a different source; remove it before adding this source"
+
+func TestFollowUpMarketplaceMismatchNotRetried(t *testing.T) {
+	rec, env, hs := fuSandbox(t, "", "codex")
+	rec.failCall = map[string]error{"codex plugin marketplace add GoodOlClint/CrossTalk": errors.New(fuDifferentSource)}
+	var notices []string
+	r := followUpRunner(env, hs, fuCfgDir(env), func(n string) { notices = append(notices, n) })
+	var waits int
+	clock := time.Now()
+	r.Now = func() time.Time { return clock }
+	r.After = func(d time.Duration) <-chan time.Time {
+		waits++
+		clock = clock.Add(d)
+		c := make(chan time.Time, 1)
+		c <- time.Time{}
+		return c
+	}
+	r.Run(context.Background())
+	if n := strings.Count(strings.Join(rec.all(), "\n"), "codex plugin marketplace add"); n != 2 || waits != 0 {
+		t.Errorf("marketplace add ran %d times, retry waits %d; want one attempt (add, recovery upgrade, add) and no retry", n, waits)
+	}
+	if fuDone(env, "codex") {
+		t.Error("codex.done written for a target that failed")
+	}
+	if len(notices) != 1 || !strings.Contains(notices[0], "codex plugin marketplace remove crosstalk") {
+		t.Errorf("notices = %q, want one naming the remove command", notices)
 	}
 }

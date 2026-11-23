@@ -135,7 +135,13 @@ func followUpTargets(env harness.InstallEnv, hs []harness.Harness, cfgDir string
 		ts = append(ts, upgrade.Target{
 			Name:     string(h.Name()),
 			Eligible: eligible,
-			Run:      func(ctx context.Context, _ io.Writer) error { return step.Apply(ctx) },
+			Run: func(ctx context.Context, _ io.Writer) error {
+				err := step.Apply(ctx)
+				if errors.Is(err, harness.ErrMarketplaceMismatch) {
+					return fmt.Errorf("%w: %w", upgrade.ErrNotRetryable, err)
+				}
+				return err
+			},
 			Verify: func(ctx context.Context) error {
 				if r := pu.PluginCheck(ctx, env); !r.OK {
 					return errors.New(r.Detail)
