@@ -381,10 +381,13 @@ func TestHarnessOffEnvMatchesRefresh(t *testing.T) {
 	}
 }
 
-type fakeInstallHarness struct{ harness.Harness }
+type fakeInstallHarness struct {
+	harness.Harness
+	name adapter.Harness
+}
 
-func (fakeInstallHarness) Name() adapter.Harness { return "fake" }
-func (fakeInstallHarness) Found() bool           { return false }
+func (f fakeInstallHarness) Name() adapter.Harness { return f.name }
+func (fakeInstallHarness) Found() bool             { return false }
 func (fakeInstallHarness) InstallSteps(harness.InstallEnv) []harness.Step {
 	return nil
 }
@@ -395,27 +398,33 @@ func (fakeInstallHarness) Checks(context.Context, harness.InstallEnv) []harness.
 func (fakeInstallHarness) Registered(harness.InstallEnv) (bool, error) { return false, nil }
 func (fakeInstallHarness) SetUp(harness.InstallEnv) (bool, error)      { return false, nil }
 
+type plainHarness struct{ harness.Harness }
+
+func (plainHarness) Name() adapter.Harness { return "plain" }
+
 func TestInstallNamesComeFromRegisteredHarnesses(t *testing.T) {
 	installSandbox(t)
 	old := installHarnesses
-	installHarnesses = func(dir string) ([]harness.Harness, error) {
-		hs, err := old(dir)
-		return append(hs, fakeInstallHarness{}), err
+	installHarnesses = func(string) ([]harness.Harness, error) {
+		return []harness.Harness{fakeInstallHarness{name: "fake"}, fakeInstallHarness{name: "alpha"}, plainHarness{}}, nil
 	}
 	t.Cleanup(func() { installHarnesses = old })
 
 	code, out := installRunCmd(t, "install", "--no-such-flag")
-	if code != 2 || !strings.Contains(out, "[claude|codex|fake]") {
+	if code != 2 || !strings.Contains(out, "[alpha|fake]") {
 		t.Errorf("usage does not list fake: exit %d\n%s", code, out)
 	}
 	if code, out := installRunCmd(t, "install", "fake", "--yes"); code != 1 || !strings.Contains(out, "fake: not found on PATH") {
 		t.Errorf("install fake: exit %d, want 1 and a not-found line\n%s", code, out)
 	}
-	if code, out := installRunCmd(t, "install", "bogus", "--yes"); code != 2 || !strings.Contains(out, `unknown harness "bogus"`) || !strings.Contains(out, "[claude|codex|fake]") {
+	if code, out := installRunCmd(t, "install", "bogus", "--yes"); code != 2 || !strings.Contains(out, `unknown harness "bogus"`) || !strings.Contains(out, "[alpha|fake]") {
 		t.Errorf("install bogus: exit %d\n%s", code, out)
 	}
+	if code, out := installRunCmd(t, "install", "bogus", "--bind", "x"); code != 2 || !strings.Contains(out, `unknown harness "bogus"`) {
+		t.Errorf("unknown name must be reported before option errors: exit %d\n%s", code, out)
+	}
 	code, out = installRunCmd(t, "install", "--yes")
-	if code != 1 || !strings.Contains(out, "neither claude, codex nor fake is on PATH") {
+	if code != 1 || !strings.Contains(out, "neither alpha nor fake is on PATH") {
 		t.Errorf("no-PATH message does not name fake: exit %d\n%s", code, out)
 	}
 }

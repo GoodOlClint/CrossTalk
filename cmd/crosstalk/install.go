@@ -63,18 +63,18 @@ func installUsage(names []string) string {
 	return fmt.Sprintf(installUsageFmt, strings.Join(names, "|"))
 }
 
-// usageNames is the name list for a usage message printed before the
-// harnesses are built; it is empty when they cannot be.
-func usageNames() []string {
+// usageNames is the name list for argument errors, printed before the
+// harnesses are otherwise built; ok is false when they cannot be built.
+func usageNames() (names []string, ok bool) {
 	dir, err := registry.DefaultDir()
 	if err != nil {
-		return nil
+		return nil, false
 	}
 	hs, err := installHarnesses(dir)
 	if err != nil {
-		return nil
+		return nil, false
 	}
-	return installNames(hs)
+	return installNames(hs), true
 }
 
 type installOpts struct {
@@ -167,8 +167,17 @@ type installTarget struct {
 // terminal a person can answer prompts on.
 func runInstall(mode string, args []string, in io.Reader, tty bool, stdout, stderr io.Writer) int {
 	o, err := parseInstallArgs(mode, args)
+	known, ok := usageNames()
+	if ok {
+		for _, n := range o.names {
+			if !slices.Contains(known, n) {
+				fmt.Fprintf(stderr, "crosstalk %s: unknown harness %q\n%s", mode, n, installUsage(known))
+				return 2
+			}
+		}
+	}
 	if err != nil {
-		fmt.Fprintf(stderr, "crosstalk %s: %v\n%s", mode, err, installUsage(usageNames()))
+		fmt.Fprintf(stderr, "crosstalk %s: %v\n%s", mode, err, installUsage(known))
 		return 2
 	}
 	home, err := os.UserHomeDir()
@@ -207,13 +216,7 @@ func runInstall(mode string, args []string, in io.Reader, tty bool, stdout, stde
 		fmt.Fprintf(stderr, "crosstalk %s: %v\n", mode, err)
 		return 1
 	}
-	known := installNames(hs)
-	for _, n := range o.names {
-		if !slices.Contains(known, n) {
-			fmt.Fprintf(stderr, "crosstalk %s: unknown harness %q\n%s", mode, n, installUsage(known))
-			return 2
-		}
-	}
+	known = installNames(hs)
 	var all, targets []installTarget
 	for _, h := range hs {
 		if i, ok := h.(harness.Installer); ok {
