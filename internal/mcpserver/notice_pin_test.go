@@ -77,9 +77,18 @@ func TestServeClaims_PinnedNameHeldAgainstRealServer(t *testing.T) {
 	if d := e.descriptor(claudeID("c-1")); d.Name != "pinned" {
 		t.Fatalf("alias after rename %q", d.Name)
 	}
-	// Directory.List runs once per poll: wait for polls that began after the rename.
+	// Directory.List runs once per poll and polls are sequential: a List past
+	// l0+1 means the poll in flight at the rename, which may still register once,
+	// has finished. Only then is the registration count a baseline.
+	l0 := dir.n.Load()
+	for dir.n.Load() < l0+2 {
+		if time.Now().After(deadline) {
+			t.Fatal("ServeClaims stopped polling")
+		}
+		time.Sleep(time.Millisecond)
+	}
 	before := reg.n.Load()
-	for l0 := dir.n.Load(); dir.n.Load() < l0+30; {
+	for l1 := dir.n.Load(); dir.n.Load() < l1+31; {
 		if time.Now().After(deadline) {
 			t.Fatal("ServeClaims stopped polling")
 		}
