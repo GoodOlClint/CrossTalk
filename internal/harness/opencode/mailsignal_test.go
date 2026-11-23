@@ -17,7 +17,7 @@ func scriptSender(r *rig) adapter.Delivery {
 
 func TestMailSignalFixedText(t *testing.T) {
 	for _, mode := range []msg.Delivery{msg.Immediate, msg.NextTurn} {
-		r := newRig(t, "2.4.0", nil)
+		r := newRig(t, "2.4.0", nil, liveSession())
 		d := scriptSender(r)
 		d.Mode = mode
 		m := peerMsg(mode)
@@ -72,7 +72,7 @@ func TestMailSignalFailure(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			r := newRig(t, "2.4.0", nil)
+			r := newRig(t, "2.4.0", nil, liveSession())
 			d := scriptSender(r)
 			tc.setup(t, r, &d)
 			err := r.h.MailSignal(context.Background(), peerMsg(msg.Immediate), d)
@@ -92,7 +92,7 @@ func TestMailSignalDeadline(t *testing.T) {
 	old := wakeTimeout
 	wakeTimeout = 200 * time.Millisecond
 	t.Cleanup(func() { wakeTimeout = old })
-	r := newRig(t, "2.4.0", nil)
+	r := newRig(t, "2.4.0", nil, liveSession())
 	r.svc.Set(func(s *service) { s.Prompt.Delay = 10 * time.Second })
 	start := time.Now()
 	err := r.h.MailSignal(context.Background(), peerMsg(msg.Immediate), scriptSender(r))

@@ -20,6 +20,8 @@ func peerMsg(d msg.Delivery) msg.Message {
 		Parts: []msg.Part{{Type: "text", Text: peerWords}}}
 }
 
+func liveSession() fakeSession { return fakeSession{ID: sid, Title: "S", Updated: t0} }
+
 func teammate(r *rig) adapter.Delivery {
 	return adapter.Delivery{Target: r.binding(), VerifiedSender: true, SenderHarness: "claude", Notice: msg.NoticeTeammate}
 }
@@ -62,13 +64,17 @@ func hygiene(t *testing.T, r *rig) {
 			t.Errorf("POST to %s", q.Path)
 		}
 		b := promptBody(t, q)
-		for _, k := range []string{"system", "synthetic", "resume", "parts", "noReply"} {
+		for _, k := range []string{"system", "synthetic", "parts", "noReply"} {
 			if _, ok := b[k]; ok {
 				t.Errorf("prompt body has %q: %s", k, q.Body)
 			}
 		}
-		if len(b) != 2 {
-			t.Errorf("prompt body has fields beyond text and delivery: %s", q.Body)
+		want := 2
+		if b["delivery"] == "queue" {
+			want = 3
+		}
+		if len(b) != want {
+			t.Errorf("prompt body has fields beyond text, delivery and resume: %s", q.Body)
 		}
 	}
 }
@@ -88,7 +94,7 @@ func TestInjectSteerAndQueue(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			r := newRig(t, "2.4.0", nil)
+			r := newRig(t, "2.4.0", nil, liveSession())
 			d := teammate(r)
 			d.Mode = tc.mode
 			m := peerMsg(tc.msgMode)
@@ -193,7 +199,7 @@ func TestInjectFailureStates(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			r := newRig(t, "2.4.0", nil)
+			r := newRig(t, "2.4.0", nil, liveSession())
 			d := teammate(r)
 			tc.setup(t, r, &d)
 			st, err := r.h.Inject(context.Background(), peerMsg(msg.Immediate), d)
@@ -238,7 +244,7 @@ func TestInjectD15Matrix(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			r := newRig(t, "2.4.0", nil)
+			r := newRig(t, "2.4.0", nil, liveSession())
 			st, err := r.h.Inject(context.Background(), peerMsg(msg.Immediate), tc.d(teammate(r)))
 			if err != nil || st != tc.want {
 				t.Fatalf("%v %v, want %v", st, err, tc.want)
@@ -256,7 +262,7 @@ func TestInjectD15Matrix(t *testing.T) {
 }
 
 func TestInjectCanceledBeforeSend(t *testing.T) {
-	r := newRig(t, "2.4.0", nil)
+	r := newRig(t, "2.4.0", nil, liveSession())
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	st, err := r.h.Inject(ctx, peerMsg(msg.Immediate), teammate(r))
@@ -265,5 +271,77 @@ func TestInjectCanceledBeforeSend(t *testing.T) {
 	}
 	if n := len(r.f.requests()); n != 0 {
 		t.Fatalf("%d requests sent", n)
+	}
+}
+
+func TestInjectNextTurnStoresWithoutATurn(t *testing.T) {
+	r := newRig(t, "2.4.0", nil, liveSession())
+	d := teammate(r)
+	d.Mode = msg.NextTurn
+	st, err := r.h.Inject(context.Background(), peerMsg(""), d)
+	if err != nil || st != adapter.Queued {
+		t.Fatalf("%v %v, want queued", st, err)
+	}
+	ps := r.prompts()
+	if len(ps) != 1 {
+		t.Fatalf("%d POSTs, want 1", len(ps))
+	}
+	b := promptBody(t, ps[0])
+	if b["delivery"] != "queue" || b["resume"] != false {
+		t.Errorf("body %s, want delivery queue and resume false", ps[0].Body)
+	}
+	hygiene(t, r)
+}
+
+func TestInjectImmediateHasNoResume(t *testing.T) {
+	r := newRig(t, "2.4.0", nil, liveSession())
+	d := teammate(r)
+	d.Mode = msg.Immediate
+	st, err := r.h.Inject(context.Background(), peerMsg(""), d)
+	if err != nil || st != adapter.Accepted {
+		t.Fatalf("%v %v, want accepted", st, err)
+	}
+	b := promptBody(t, r.prompts()[0])
+	if _, ok := b["resume"]; ok || b["delivery"] != "steer" {
+		t.Errorf("body %v, want steer with no resume field", b)
+	}
+}
+
+func TestInjectArchivedSession(t *testing.T) {
+	cases := []struct {
+		name     string
+		sessions []fakeSession
+		status   int
+		want     adapter.State
+		posts    int
+	}{
+		{"archived", []fakeSession{{ID: sid, Title: "S", Updated: t0, Archived: true}}, 0, adapter.Unreachable, 0},
+		{"not archived", []fakeSession{liveSession()}, 0, adapter.Accepted, 1},
+		{"state read fails", []fakeSession{liveSession()}, 500, adapter.Unreachable, 0},
+		{"session gone", nil, 0, adapter.Unreachable, 0},
+	}
+	for _, tc := range cases {
+		for _, mode := range []msg.Delivery{msg.Immediate, msg.NextTurn} {
+			t.Run(tc.name+"/"+string(mode), func(t *testing.T) {
+				r := newRig(t, "2.4.0", nil, tc.sessions...)
+				r.svc.Set(func(s *service) { s.Status = tc.status })
+				d := teammate(r)
+				d.Mode = mode
+				st, err := r.h.Inject(context.Background(), peerMsg(""), d)
+				want := tc.want
+				if want == adapter.Accepted && mode == msg.NextTurn {
+					want = adapter.Queued
+				}
+				if st != want {
+					t.Fatalf("state %v (%v), want %v", st, err, want)
+				}
+				if (err == nil) != (want == adapter.Accepted || want == adapter.Queued) {
+					t.Fatalf("err %v for state %v", err, st)
+				}
+				if n := len(r.prompts()); n != tc.posts {
+					t.Fatalf("%d POSTs, want %d", n, tc.posts)
+				}
+			})
+		}
 	}
 }
