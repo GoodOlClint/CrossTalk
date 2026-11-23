@@ -203,6 +203,10 @@ func TestUninstallRemovesOnlyItsHarnessMarkers(t *testing.T) {
 	if err := upgrade.MarkDone(state, "0.0.1", "claude"); err != nil {
 		t.Fatal(err)
 	}
+	if err := upgrade.MarkDone(state, mcpserver.Version, "gateway"); err != nil {
+		t.Fatal(err)
+	}
+	installWrite(t, upgrade.LogPath(state, mcpserver.Version), "log\n")
 	if code, out := installRunCmd(t, "uninstall", "claude", "--yes", "--bin-dir", bin); code != 0 {
 		t.Fatalf("uninstall: %d\n%s", code, out)
 	}
@@ -213,6 +217,12 @@ func TestUninstallRemovesOnlyItsHarnessMarkers(t *testing.T) {
 	}
 	if !upgrade.Done(state, mcpserver.Version, "codex") {
 		t.Error("uninstall claude removed the codex marker")
+	}
+	if !upgrade.Done(state, mcpserver.Version, "gateway") {
+		t.Error("uninstall claude removed the gateway marker")
+	}
+	if installRead(t, upgrade.LogPath(state, mcpserver.Version)) != "log\n" {
+		t.Error("uninstall claude touched the follow-up log")
 	}
 }
 
@@ -255,11 +265,29 @@ func installStatePurged(state string) bool {
 	return true
 }
 
-func installWithoutMarkers(m map[string]string, state string) string {
+func installWithoutMarkers(m map[string]string) string {
 	for k := range m {
-		if strings.HasPrefix(k, filepath.Join(state, "upgrade")+string(filepath.Separator)) || k == filepath.Join(state, "upgrade") {
+		if b := filepath.Base(k); b == "claude.done" || b == "codex.done" {
 			delete(m, k)
 		}
 	}
 	return fmt.Sprint(m)
+}
+
+func TestPurgeStateSymlinkRemovesOnlyTheLink(t *testing.T) {
+	target := t.TempDir()
+	installWrite(t, filepath.Join(target, "shared", "f"), "keep")
+	link := filepath.Join(t.TempDir(), "state")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := purgeState(link); err != nil {
+		t.Fatal(err)
+	}
+	if installRead(t, filepath.Join(target, "shared", "f")) != "keep" {
+		t.Error("purge followed the state symlink")
+	}
+	if _, err := os.Lstat(link); !os.IsNotExist(err) {
+		t.Errorf("link kept: %v", err)
+	}
 }

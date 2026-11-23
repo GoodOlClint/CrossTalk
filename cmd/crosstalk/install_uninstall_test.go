@@ -109,7 +109,7 @@ func TestUninstallPurge(t *testing.T) {
 	if code, out := installRunCmd(t, "uninstall", "--yes", "--bin-dir", bin); code != 0 {
 		t.Fatalf("uninstall: %d\n%s", code, out)
 	}
-	if installWithoutMarkers(installSnapshot(t, state), state) != installWithoutMarkers(pre, state) {
+	if installWithoutMarkers(installSnapshot(t, state)) != installWithoutMarkers(pre) {
 		t.Error("state changed without --purge")
 	}
 

@@ -282,7 +282,11 @@ func runInstall(mode string, args []string, in io.Reader, tty bool, stdout, stde
 	for _, t := range targets {
 		var steps []harness.Step
 		if mode == "uninstall" {
-			steps = t.in.UninstallSteps(env)
+			steps = append(t.in.UninstallSteps(env), harness.Step{
+				Title:  "upgrade markers",
+				Change: "delete the " + t.name + " upgrade marker in every version directory under " + filepath.Join(stateDir, "upgrade"),
+				Apply:  func(context.Context) error { return upgrade.ClearMarkers(stateDir, t.name) },
+			})
 		} else {
 			steps = t.in.InstallSteps(env)
 		}
@@ -452,18 +456,6 @@ func installRemoveSteps(o installOpts, all, targets []installTarget, env harness
 		steps = append(steps, u)
 	}
 	steps = append(steps, harness.Step{
-		Title:  "upgrade markers",
-		Change: "delete the upgrade markers of the harnesses being uninstalled in every version directory under " + filepath.Join(stateDir, "upgrade"),
-		Apply: func(ctx context.Context) error {
-			for _, t := range targets {
-				if err := upgrade.ClearMarkers(stateDir, t.name); err != nil {
-					return err
-				}
-			}
-			return nil
-		},
-	})
-	steps = append(steps, harness.Step{
 		Title:  "binary",
 		Change: "delete " + env.Bin + " and the PATH lines install marked, unless another harness still runs it",
 		Apply: func(ctx context.Context) error {
@@ -531,10 +523,17 @@ func installRemoveSteps(o installOpts, all, targets []installTarget, env harness
 // deleting the lock file lets a shim holding the old inode and a new process
 // both hold the lock.
 func purgeState(stateDir string) error {
-	es, err := os.ReadDir(stateDir)
+	fi, err := os.Lstat(stateDir)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
+	if err != nil {
+		return err
+	}
+	if fi.Mode()&os.ModeSymlink != 0 {
+		return os.Remove(stateDir)
+	}
+	es, err := os.ReadDir(stateDir)
 	if err != nil {
 		return err
 	}
