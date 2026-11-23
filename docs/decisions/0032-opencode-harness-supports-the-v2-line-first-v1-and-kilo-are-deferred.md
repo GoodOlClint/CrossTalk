@@ -22,7 +22,7 @@ The first OpenCode harness package, `internal/harness/opencode`, supports v2 onl
 
 ## Consequences
 
-- The first release reaches only v2 users; most OpenCode users are on v1 today. The operator may reverse this before slice 1 (plan section 10, Q1).
+- The first release reaches only v2 users; most OpenCode users are on v1 today. The operator confirmed it on 2026-11-23 (plan section 10, Q1); OpenCode ships as v0.3.0 (Q7).
 - A v1 user gets a clear refusal, not a half-working install.
 - The compatibility check tracks `@opencode/cli`, not `opencode-ai`.
 - Reversing it later adds a package or a mode; nothing in the v2 package blocks that.
