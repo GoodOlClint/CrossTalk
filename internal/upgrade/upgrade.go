@@ -39,6 +39,20 @@ func MarkDone(stateDir, version, target string) error {
 	return os.WriteFile(MarkerPath(stateDir, version, target), []byte(time.Now().UTC().Format(time.RFC3339)+"\n"), 0o600)
 }
 
+// ClearMarkers removes target's marker in every version directory.
+func ClearMarkers(stateDir, target string) error {
+	ms, err := filepath.Glob(filepath.Join(stateDir, "upgrade", "*", target+".done"))
+	if err != nil {
+		return err
+	}
+	for _, m := range ms {
+		if err := os.Remove(m); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+	}
+	return nil
+}
+
 func openLock(stateDir string) (*os.File, error) {
 	if err := os.MkdirAll(stateDir, 0o700); err != nil {
 		return nil, err

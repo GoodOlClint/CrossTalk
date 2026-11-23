@@ -452,6 +452,18 @@ func installRemoveSteps(o installOpts, all, targets []installTarget, env harness
 		steps = append(steps, u)
 	}
 	steps = append(steps, harness.Step{
+		Title:  "upgrade markers",
+		Change: "delete the upgrade markers of the harnesses being uninstalled in every version directory under " + filepath.Join(stateDir, "upgrade"),
+		Apply: func(ctx context.Context) error {
+			for _, t := range targets {
+				if err := upgrade.ClearMarkers(stateDir, t.name); err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	})
+	steps = append(steps, harness.Step{
 		Title:  "binary",
 		Change: "delete " + env.Bin + " and the PATH lines install marked, unless another harness still runs it",
 		Apply: func(ctx context.Context) error {
@@ -501,7 +513,7 @@ func installRemoveSteps(o installOpts, all, targets []installTarget, env harness
 					peers = append(peers, p.Alias)
 				}
 			}
-			if err := os.RemoveAll(stateDir); err != nil {
+			if err := purgeState(stateDir); err != nil {
 				return err
 			}
 			if err := os.RemoveAll(cfgDir); err != nil {
@@ -513,6 +525,32 @@ func installRemoveSteps(o installOpts, all, targets []installTarget, env harness
 			return nil
 		},
 	})
+}
+
+// purgeState empties stateDir except the upgrade lock and its orphan marker:
+// deleting the lock file lets a shim holding the old inode and a new process
+// both hold the lock.
+func purgeState(stateDir string) error {
+	es, err := os.ReadDir(stateDir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	keep := map[string]bool{
+		filepath.Base(upgrade.LockPath(stateDir)):  true,
+		filepath.Base(upgrade.ChildPath(stateDir)): true,
+	}
+	for _, e := range es {
+		if keep[e.Name()] {
+			continue
+		}
+		if err := os.RemoveAll(filepath.Join(stateDir, e.Name())); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func installConfirm(r *bufio.Reader, w io.Writer) bool {

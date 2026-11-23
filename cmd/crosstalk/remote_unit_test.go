@@ -638,10 +638,13 @@ func TestPurgeRemovesConfigAndListsPeers(t *testing.T) {
 		if code != 0 {
 			t.Fatalf("uninstall --purge: exit %d\n%s", code, out)
 		}
-		for _, p := range []string{filepath.Join(home, ".config", "crosstalk"), filepath.Join(home, ".local", "state", "crosstalk")} {
+		if p := filepath.Join(home, ".config", "crosstalk"); true {
 			if _, err := os.Stat(p); !errors.Is(err, os.ErrNotExist) {
 				t.Errorf("%s kept: %v", p, err)
 			}
+		}
+		if p := filepath.Join(home, ".local", "state", "crosstalk"); !installStatePurged(p) {
+			t.Errorf("%s kept more than the upgrade lock", p)
 		}
 		if installRead(t, sibling) != "keep\n" {
 			t.Errorf("purge removed a file outside ~/.config/crosstalk")
