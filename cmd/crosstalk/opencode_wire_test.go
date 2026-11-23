@@ -38,7 +38,7 @@ type ocEnv struct {
 func newOCEnv(t *testing.T, wrap func(adapter.Adapter) adapter.Adapter) *ocEnv {
 	t.Helper()
 	srv := opencodetest.Start(t, opencodetest.Session{ID: ocSession, Title: "oc", Updated: time.Now()})
-	path := opencodetest.WriteService(t, t.TempDir(), srv.URL, "2.4.0", 4242)
+	path := opencodetest.WriteService(t, t.TempDir(), srv.URL, "2.4.0", os.Getpid())
 	h := opencode.NewHarness(opencode.Options{ServicePath: path})
 	b, err := h.Register(context.Background(), ocSession)
 	if err != nil {

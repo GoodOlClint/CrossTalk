@@ -127,6 +127,9 @@ func (c *Client) do(ctx context.Context, method, path string, body []byte) (*Res
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	if why := ownerRefusal(ctx, svc.Origin, svc.PID); why != "" {
+		return nil, &Error{Kind: KindUnreachable, Msg: why}
+	}
 	var rd io.Reader
 	if body != nil {
 		rd = bytes.NewReader(body)

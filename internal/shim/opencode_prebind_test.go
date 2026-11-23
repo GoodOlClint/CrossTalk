@@ -25,7 +25,7 @@ func TestOpenCodeNativeSendKeepsPreBindReceiptOnlyWhenAdmitted(t *testing.T) {
 		opencodetest.Session{ID: "ses_acc1", Title: "oc-acc", Updated: time.Now()},
 		opencodetest.Session{ID: "ses_que1", Title: "oc-que", Updated: time.Now()},
 		opencodetest.Session{ID: "ses_unk1", Title: "oc-unk", Updated: time.Now()})
-	svc := opencodetest.WriteService(t, t.TempDir(), srv.URL, "2.4.0", 4242)
+	svc := opencodetest.WriteService(t, t.TempDir(), srv.URL, "2.4.0", os.Getpid())
 	na := w.node(alice.pid, nil, func(o *Options) {
 		o.Harnesses = append(o.Harnesses, harness.Harness(opencode.NewHarness(opencode.Options{ServicePath: svc})))
 	})

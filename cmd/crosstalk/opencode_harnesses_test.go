@@ -17,7 +17,7 @@ func TestHarnessesListsOpenCodeSession(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(state, "opencode"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	opencodetest.WriteService(t, filepath.Join(state, "opencode"), srv.URL, "2.4.0", 4242)
+	opencodetest.WriteService(t, filepath.Join(state, "opencode"), srv.URL, "2.4.0", os.Getpid())
 	t.Setenv("XDG_STATE_HOME", state)
 
 	hs, err := harnesses(t.TempDir())
