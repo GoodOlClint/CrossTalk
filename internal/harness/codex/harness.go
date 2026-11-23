@@ -113,6 +113,25 @@ func (h *Harness) Discover(ctx context.Context) ([]harness.Session, error) {
 	return out, nil
 }
 
+// DeliveryModes names the claimed threads the queue wake reaches now; with the
+// setting off it does no discovery work.
+func (h *Harness) DeliveryModes(ctx context.Context) map[string]string {
+	rt := h.wakeRoute()
+	if rt == nil || !ClaimsEnabled(rt.stateDir) {
+		return nil
+	}
+	var out map[string]string
+	for _, th := range rt.claims.Threads() {
+		if h.queueWakeReaches(ctx, rt, th) {
+			if out == nil {
+				out = map[string]string{}
+			}
+			out[th] = DeliveryQueueWake
+		}
+	}
+	return out
+}
+
 // queueWakeReaches is true when the setting is on, the thread's claim is
 // owner-proven now, the gate passes and no app-server hosts the thread.
 func (h *Harness) queueWakeReaches(ctx context.Context, rt *wakeRoute, thread string) bool {

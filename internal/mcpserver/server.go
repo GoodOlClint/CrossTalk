@@ -16,7 +16,6 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/GoodOlClint/crosstalk/internal/adapter"
 	"github.com/GoodOlClint/crosstalk/internal/harness"
 	"github.com/GoodOlClint/crosstalk/internal/identity"
 	"github.com/GoodOlClint/crosstalk/internal/journal"
@@ -1098,37 +1097,35 @@ func (s *Server) retireLost(a *Agent) {
 	}
 }
 
-// syncDeliveryModes copies each ready agent's delivery mode from this shim's
-// own Discover into its descriptor, so other sessions' listings show it and
-// a mode that stopped being true is cleared.
+// syncDeliveryModes copies, for each ready agent, the delivery mode its
+// harness reports into the agent's descriptor, so other sessions' listings
+// show it and a mode that stopped being true is cleared. A harness without
+// harness.DeliveryModer costs nothing.
 func (s *Server) syncDeliveryModes(ctx context.Context) {
-	s.mu.Lock()
-	ready := make([]*Agent, 0, len(s.agents))
-	for _, a := range s.agents {
-		if a.isReady() && a.harness == adapter.Codex {
-			ready = append(ready, a)
+	for _, h := range s.harnesses {
+		dm, ok := h.(harness.DeliveryModer)
+		if !ok {
+			continue
 		}
-	}
-	s.mu.Unlock()
-	if len(ready) == 0 {
-		return
-	}
-	sessions, err := s.backend.Discover(ctx)
-	if err != nil {
-		return
-	}
-	done, ok := quiesce.Hold(ctx)
-	if !ok {
-		return
-	}
-	defer done()
-	for _, a := range ready {
-		mode := ""
-		for _, ss := range sessions {
-			if string(ss.Harness) == string(a.harness) && ss.SessionRef == a.sessionRef && ss.DeliveryMode != "" {
-				mode = ss.DeliveryMode
+		s.mu.Lock()
+		var ready []*Agent
+		for _, a := range s.agents {
+			if a.isReady() && a.harness == h.Name() {
+				ready = append(ready, a)
 			}
 		}
-		_ = a.reg.SetDeliveryMode(mode)
+		s.mu.Unlock()
+		if len(ready) == 0 {
+			continue
+		}
+		modes := dm.DeliveryModes(ctx)
+		done, ok := quiesce.Hold(ctx)
+		if !ok {
+			return
+		}
+		for _, a := range ready {
+			_ = a.reg.SetDeliveryMode(modes[a.sessionRef])
+		}
+		done()
 	}
 }
