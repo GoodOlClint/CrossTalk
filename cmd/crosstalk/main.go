@@ -166,9 +166,16 @@ func runMCP(stderr io.Writer) int {
 	arm(srv, srv, tr.Conn())
 	stopFollowUp, _ := startFollowUp(ctx, armed, srv.Bound(), followUpEnv(os.Args[0], home, stateDir), hs, filepath.Join(home, ".config", "crosstalk"), srv.HoldNotice)
 	stopClaims := serveClaims(ctx, hs, srv)
-	err = srv.Run(ctx, tr, runOpts...)
-	stopFollowUp()
+	err = serve(ctx, srv, tr, runOpts, stopFollowUp)
 	return finish(srv, err, stopClaims, sh.Close, stderr)
+}
+
+// serve runs the server and, once it returns, cancels and waits for a running
+// follow-up attempt so the shim does not exit with a plugin command half done.
+func serve(ctx context.Context, srv *mcpserver.Server, tr *mcpserver.Transport, opts []mcpserver.RunOption, stopFollowUp func()) error {
+	err := srv.Run(ctx, tr, opts...)
+	stopFollowUp()
+	return err
 }
 
 // finish stops the claim sources, closes the shim and reports the error; srv

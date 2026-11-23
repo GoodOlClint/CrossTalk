@@ -12,6 +12,7 @@ import (
 var g = struct {
 	mu     sync.Mutex
 	busy   int
+	long   int
 	paused bool
 	change chan struct{}
 }{change: make(chan struct{})}
@@ -75,6 +76,59 @@ func Hold(ctx context.Context) (func(), bool) {
 			return nil, false
 		}
 	}
+}
+
+// HoldLong is Hold for work that runs long (an upgrade follow-up attempt):
+// it is counted by Long, and PauseUnlessLong refuses while it runs.
+func HoldLong(ctx context.Context) (func(), bool) {
+	for {
+		g.mu.Lock()
+		if !g.paused {
+			g.busy++
+			g.long++
+			g.mu.Unlock()
+			l := leave()
+			var once sync.Once
+			return func() {
+				once.Do(func() {
+					g.mu.Lock()
+					g.long--
+					g.mu.Unlock()
+				})
+				l()
+			}, true
+		}
+		ch := g.change
+		g.mu.Unlock()
+		select {
+		case <-ch:
+		case <-ctx.Done():
+			return nil, false
+		}
+	}
+}
+
+// Long reports the long work counted by HoldLong.
+func Long() int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.long
+}
+
+// PauseUnlessLong is Pause, except that it pauses nothing while long work
+// runs; long reports that. Work cannot enter between the check and the pause.
+func PauseUnlessLong() (paused, long bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.long > 0 {
+		return false, true
+	}
+	if g.paused {
+		return false, false
+	}
+	g.paused = true
+	changed()
+	return true, false
 }
 
 func leave() func() {

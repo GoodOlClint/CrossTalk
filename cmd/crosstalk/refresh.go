@@ -88,7 +88,11 @@ type ingressPauser interface{ PauseIngress() (unpause func()) }
 // again is retired, which waits for its running calls, and those may need the
 // gate, while a fresh call from stdin could outlast that wait.
 func quiesceForExec(ctx context.Context, sh ingressPauser, conn *mcpserver.Conn) (func(), error) {
-	if !quiesce.Pause() {
+	paused, long := quiesce.PauseUnlessLong()
+	if long {
+		return nil, refresh.ErrBusy
+	}
+	if !paused {
 		return nil, errors.New("refresh: a pause is already in progress")
 	}
 	var unpause []func()
@@ -210,6 +214,7 @@ func startRefresh(ctx context.Context, home string, hs []harness.Harness, ho *mc
 				return execHandoff(srv, conn, argv0, id, p)
 			},
 			Listening: conn.Listening,
+			Busy:      func() bool { return quiesce.Long() > 0 },
 			GaveUp: func(path, why string) {
 				srv.HoldNotice(fmt.Sprintf("crosstalk: a new binary is installed at %s, but this session's CrossTalk server keeps running the old version because %s; messages still reach this session; restart the session to use the new version", path, why))
 			},

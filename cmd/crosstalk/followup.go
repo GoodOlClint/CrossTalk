@@ -165,7 +165,7 @@ func followUpRunner(env harness.InstallEnv, hs []harness.Harness, cfgDir string,
 		Targets:  followUpTargets(env, hs, cfgDir),
 		Interval: followUpInterval, Bound: followUpBound,
 		TargetTimeout: followUpStepTimeout,
-		Enter:         quiesce.Hold,
+		Enter:         quiesce.HoldLong,
 	}
 }
 

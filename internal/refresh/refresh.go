@@ -22,6 +22,10 @@ import (
 // tried again on the next tick.
 var ErrExecFailed = errors.New("refresh: exec failed")
 
+// ErrBusy from Quiesce: long background work is running; the tick ends without
+// counting a failed try, and the next tick tries again.
+var ErrBusy = errors.New("refresh: background work is running")
+
 // OffEnv set to anything but "" or "0" turns refresh off.
 const OffEnv = "CROSSTALK_NO_AUTO_REFRESH"
 
@@ -65,6 +69,9 @@ type Watcher struct {
 	// ones only a file that replays listens may take, and settling ones not
 	// acknowledged yet, which defer the decision to a later tick.
 	Listening func() (open, settling int)
+	// Busy, when set and true, ends a tick before the probe: long background
+	// work runs, and a later tick looks again without a failed try.
+	Busy func() bool
 	// Quiesce stops new work and waits for running work until ctx ends; undo
 	// restarts it.
 	Quiesce func(ctx context.Context) (undo func(), err error)
@@ -112,6 +119,9 @@ func (w *Watcher) Tick(ctx context.Context) {
 	if err != nil || same(cur, w.ID) || same(cur, w.bad) {
 		return
 	}
+	if w.Busy != nil && w.Busy() {
+		return
+	}
 	probe := w.Probe
 	if probe == nil {
 		probe = Probe
@@ -140,6 +150,9 @@ func (w *Watcher) Tick(ctx context.Context) {
 	qctx, cancel := context.WithTimeout(ctx, orDefault(w.QuiesceCap, DefaultQuiesceCap))
 	undo, err := w.Quiesce(qctx)
 	cancel()
+	if errors.Is(err, ErrBusy) {
+		return
+	}
 	if err != nil {
 		if !w.failed(cur, err) {
 			w.log().Info("refresh: not quiescent; trying again later", "err", err)
