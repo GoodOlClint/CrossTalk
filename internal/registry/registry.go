@@ -223,6 +223,28 @@ func (g *Registration) setInboxes(list []InboxMembership) error {
 	return nil
 }
 
+// SetDeliveryMode records the route the claim-serving shim reaches this agent
+// by ("" for the default) and rewrites the descriptor when it changed.
+func (g *Registration) SetDeliveryMode(mode string) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.agentLock == nil || g.released {
+		return ErrClosed
+	}
+	if g.desc.DeliveryMode == mode {
+		return nil
+	}
+	d := g.desc
+	d.DeliveryMode = mode
+	if g.published {
+		if err := writeAtomic(g.reg.DescriptorPath(d.AgentID), d); err != nil {
+			return err
+		}
+	}
+	g.desc = d
+	return nil
+}
+
 func (g *Registration) InstanceID() string { return g.desc.InstanceID }
 
 func (g *Registration) Descriptor() Descriptor {
@@ -247,7 +269,7 @@ func (g *Registration) Publish(d Descriptor) error {
 		return fmt.Errorf("registry: own start time: %w", err)
 	}
 	d.AgentID, d.Name, d.InstanceID = g.desc.AgentID, g.desc.Name, g.desc.InstanceID
-	d.Inboxes = g.desc.Inboxes
+	d.Inboxes, d.DeliveryMode = g.desc.Inboxes, g.desc.DeliveryMode
 	d.PID, d.StartedAt, d.Protocol, d.Installed = pid, st, Protocol, true
 	if d.Role == "" {
 		d.Role = RolePrimary

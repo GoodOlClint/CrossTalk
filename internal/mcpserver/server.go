@@ -150,6 +150,7 @@ func (s *Server) Run(ctx context.Context, t mcp.Transport, opts ...RunOption) er
 				return
 			case <-tick.C:
 				s.RetireSuperseded()
+				s.syncDeliveryModes(wctx)
 			}
 		}
 	}()
@@ -1093,5 +1094,38 @@ func (s *Server) retireLost(a *Agent) {
 	s.mu.Unlock()
 	if mine {
 		s.retire(a, "ingress lost")
+	}
+}
+
+// syncDeliveryModes copies, for each ready agent, the delivery mode its
+// harness reports into the agent's descriptor, so other sessions' listings
+// show it and a mode that stopped being true is cleared. A harness without
+// harness.DeliveryModer costs nothing.
+func (s *Server) syncDeliveryModes(ctx context.Context) {
+	for _, h := range s.harnesses {
+		dm, ok := h.(harness.DeliveryModer)
+		if !ok {
+			continue
+		}
+		s.mu.Lock()
+		var ready []*Agent
+		for _, a := range s.agents {
+			if a.isReady() && a.harness == h.Name() {
+				ready = append(ready, a)
+			}
+		}
+		s.mu.Unlock()
+		if len(ready) == 0 {
+			continue
+		}
+		modes := dm.DeliveryModes(ctx)
+		done, ok := quiesce.Hold(ctx)
+		if !ok {
+			return
+		}
+		for _, a := range ready {
+			_ = a.reg.SetDeliveryMode(modes[a.sessionRef])
+		}
+		done()
 	}
 }

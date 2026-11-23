@@ -72,6 +72,13 @@ type BackendChecker interface {
 	Backend(ctx context.Context, endpoint, sessionRef string) string
 }
 
+// DeliveryModer is implemented by a harness that can name, without a full
+// Discover, the sessions it reaches by a non-default delivery route.
+type DeliveryModer interface {
+	// DeliveryModes maps session_ref to the route label; nil when none.
+	DeliveryModes(ctx context.Context) map[string]string
+}
+
 // Self is the bound agent a harness renders or injects on behalf of.
 type Self struct {
 	Binding adapter.Binding

@@ -78,3 +78,18 @@ func TestHarnessMailSignal_InboxCopyAndRemoteSender_ExpectNoWakeRowEvenOnPullRec
 		}
 	}
 }
+
+func TestDeliveryModes_ExpectQueueWakeOnlyWithSettingOn(t *testing.T) {
+	e := newWakeEnv(t)
+	h, _ := newWakeHarness(t, e)
+	if m := h.DeliveryModes(context.Background()); m[wThread] != DeliveryQueueWake {
+		t.Fatalf("setting on: %v", m)
+	}
+	os.Remove(filepath.Join(h.wakeRoute().stateDir, SettingFile))
+	if m := h.DeliveryModes(context.Background()); len(m) != 0 {
+		t.Fatalf("setting off: %v", m)
+	}
+	if m := NewHarness(HarnessOptions{Adapter: stubThreads{Adapter: adapter.NewFake(adapter.Codex)}}).DeliveryModes(context.Background()); len(m) != 0 {
+		t.Fatalf("no route: %v", m)
+	}
+}
