@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
 	"time"
 	"unsafe"
 
@@ -124,6 +126,20 @@ func userPIDs() ([]int, error) {
 	return pids, nil
 }
 
+// systemBinary reports whether exe is an Apple binary under a SIP-protected
+// root, which a user cannot replace or make hold a lock of its own choosing.
+func systemBinary(exe string) bool {
+	if exe != filepath.Clean(exe) {
+		return false
+	}
+	for _, root := range []string{"/System/", "/usr/", "/bin/", "/sbin/"} {
+		if strings.HasPrefix(exe, root) && !strings.HasPrefix(exe, "/usr/local/") {
+			return true
+		}
+	}
+	return false
+}
+
 func openersAmong(path string, pids []int) ([]int, error) {
 	var st unix.Stat_t
 	if err := unix.Stat(path, &st); err != nil {
@@ -136,26 +152,33 @@ func openersAmong(path string, pids []int) ([]int, error) {
 		if pid == self || pid <= 0 {
 			continue
 		}
-		found, err := opensFile(pid, &st, vbuf)
+		found, unreadable, err := opensFile(pid, &st, vbuf)
 		if errors.Is(err, unix.ESRCH) {
 			continue
 		}
 		if err != nil {
 			return nil, fmt.Errorf("ownerproof: open files of %d: %w", pid, err)
 		}
-		if found {
+		if found || unreadable && !systemProcess(pid) {
 			out = append(out, pid)
 		}
 	}
 	return out, nil
 }
 
+func systemProcess(pid int) bool {
+	exe, _, err := args(pid)
+	return err == nil && systemBinary(exe)
+}
+
 // opensFile fails with ESRCH when pid is gone; any other failure means pid
-// could not be inspected.
-func opensFile(pid int, st *unix.Stat_t, vbuf []byte) (bool, error) {
+// could not be inspected. unreadable is true when an fd was skipped for EPERM
+// and none matched: that process may hold the lock on an fd the kernel will
+// not describe, so the caller counts it as an opener.
+func opensFile(pid int, st *unix.Stat_t, vbuf []byte) (found, unreadable bool, err error) {
 	fds, err := listFDs(pid)
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 	for i := 0; i+procFDInfoSize <= len(fds); i += procFDInfoSize {
 		if binary.NativeEndian.Uint32(fds[i+4:]) != proxFDTypeVnode {
@@ -163,26 +186,30 @@ func opensFile(pid int, st *unix.Stat_t, vbuf []byte) (bool, error) {
 		}
 		fd := int32(binary.NativeEndian.Uint32(fds[i:]))
 		n, err := procInfo(procInfoCallPIDFDInfo, pid, procPIDFDVnodeInfo, uint64(fd), vbuf)
-		// ponytail: macOS answers EPERM for some fds of same-user system agents
-		// (measured: 1 to 34 vnode fds each in 8 agents on one host), so failing
-		// closed here would fail every proof. Such an fd is skipped: an opener
-		// whose only fd on the lock is one the kernel will not describe is not
-		// seen. ENOENT is the same for a revoked fd (measured: a daemon helper's
-		// fd 10). Whole-process denial still fails closed above.
-		if errors.Is(err, unix.EBADF) || errors.Is(err, unix.EPERM) || errors.Is(err, unix.ENOENT) {
+		// macOS answers EPERM for some fds of Apple system agents (measured: 1 to
+		// 36 vnode fds each in 8 agents under /System and /usr on one host), so
+		// an unreadable fd of a non-system process is reported as a possible
+		// opener, and of a system binary it is skipped. ENOENT is a revoked fd
+		// (measured: a daemon helper's fd 10) and is skipped. Whole-process
+		// denial fails closed above.
+		if errors.Is(err, unix.EPERM) {
+			unreadable = true
+			continue
+		}
+		if errors.Is(err, unix.EBADF) || errors.Is(err, unix.ENOENT) {
 			continue
 		}
 		if err != nil {
-			return false, err
+			return false, false, err
 		}
 		if n < vnodeFDInfoSize {
-			return false, fmt.Errorf("short vnode info for fd %d", fd)
+			return false, false, fmt.Errorf("short vnode info for fd %d", fd)
 		}
 		if binary.NativeEndian.Uint32(vbuf[vstDevOff:]) == uint32(st.Dev) && binary.NativeEndian.Uint64(vbuf[vstInoOff:]) == st.Ino {
-			return true, nil
+			return true, false, nil
 		}
 	}
-	return false, nil
+	return false, unreadable, nil
 }
 
 // executableIs walks pid's memory regions for one mapped from the file at

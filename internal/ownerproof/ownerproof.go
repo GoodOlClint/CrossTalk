@@ -78,8 +78,10 @@ func LockHeld(path string) (bool, error) { return lockHeld(path) }
 // Openers returns the pids of processes this user can inspect that have the
 // file at path open, matched by device and inode, excluding this process.
 // A process that exits mid-walk is skipped; one whose fds cannot be listed is
-// an error. On macOS a single fd that fails with EBADF (closed mid-walk), EPERM
-// (denied) or ENOENT (revoked) is skipped.
+// an error. On macOS a single fd that fails with EBADF (closed mid-walk) or
+// ENOENT (revoked) is skipped; one that fails with EPERM (denied) makes the
+// process a counted opener unless its executable is an Apple binary under
+// /System, /usr (not /usr/local), /bin or /sbin.
 func Openers(path string) ([]int, error) {
 	pids, err := userPIDs()
 	if err != nil {

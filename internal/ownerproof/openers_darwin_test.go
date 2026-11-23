@@ -142,3 +142,32 @@ func TestOpeners_ProcessFDListENOENT_ExpectError(t *testing.T) {
 		t.Fatalf("openers %v err %v, want ENOENT: a process whose fds cannot be listed must fail closed", got, err)
 	}
 }
+
+func TestOpeners_UnreadableFDBesideOnlyOpener_ExpectUnreadableProcessCounted(t *testing.T) {
+	path := lockFile(t)
+	parent := startHelper(t, "read", path)
+	hidden := startHelper(t, "read", lockFile(t))
+	failFDInfo(t, hidden.pid, unix.EPERM)
+	got, err := OpenersAmong(path, []int{parent.pid, hidden.pid})
+	if err != nil || !slices.Equal(got, []int{parent.pid, hidden.pid}) {
+		t.Fatalf("openers %v err %v, want %d and %d: a process with an fd the kernel will not describe may hold the lock", got, err, parent.pid, hidden.pid)
+	}
+}
+
+func TestOpeners_UnreadableFDOnSystemBinary_ExpectNotCounted(t *testing.T) {
+	for _, c := range []struct {
+		exe  string
+		want bool
+	}{
+		{"/usr/libexec/routined", true},
+		{"/System/Library/Frameworks/X.framework/progressd", true},
+		{"/usr/local/bin/evil", false},
+		{"/Users/u/bin/evil", false},
+		{"/usr/libexec/../../tmp/evil", false},
+		{"", false},
+	} {
+		if got := systemBinary(c.exe); got != c.want {
+			t.Errorf("systemBinary(%q) = %v, want %v", c.exe, got, c.want)
+		}
+	}
+}
