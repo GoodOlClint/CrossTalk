@@ -49,6 +49,7 @@ type Harness struct {
 }
 
 var _ harness.Harness = (*Harness)(nil)
+var _ harness.DeliveryModer = (*Harness)(nil)
 
 func NewHarness(opt HarnessOptions) *Harness {
 	t := opt.Adapter
