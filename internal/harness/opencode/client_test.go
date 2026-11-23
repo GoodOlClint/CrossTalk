@@ -1,6 +1,7 @@
 package opencode
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -29,6 +30,7 @@ func newFake(t *testing.T, h func(w http.ResponseWriter, r *http.Request)) *fake
 	f := &fake{}
 	f.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		b, _ := io.ReadAll(r.Body)
+		r.Body = io.NopCloser(bytes.NewReader(b))
 		f.mu.Lock()
 		f.reqs = append(f.reqs, recorded{r.Method, r.URL.Path, basic(r), string(b)})
 		f.mu.Unlock()

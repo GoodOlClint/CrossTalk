@@ -14,6 +14,7 @@ import (
 
 	"github.com/GoodOlClint/crosstalk/internal/adapter"
 	"github.com/GoodOlClint/crosstalk/internal/harness"
+	"github.com/GoodOlClint/crosstalk/internal/msg"
 	"github.com/GoodOlClint/crosstalk/internal/registry"
 )
 
@@ -56,7 +57,12 @@ type Harness struct {
 	list sessionList
 }
 
-var _ harness.Supersession = (*Harness)(nil)
+var (
+	_ harness.Harness      = (*Harness)(nil)
+	_ harness.Noticer      = (*Harness)(nil)
+	_ harness.Supersession = (*Harness)(nil)
+	_ adapter.MailSignaler = (*Harness)(nil)
+)
 
 func NewHarness(opt Options) *Harness {
 	h := &Harness{client: NewClient(opt.ServicePath), dir: opt.Directory, now: opt.Now, logger: opt.Logger}
@@ -70,6 +76,12 @@ func NewHarness(opt Options) *Harness {
 }
 
 func (h *Harness) Name() adapter.Harness { return adapter.OpenCode }
+
+func (h *Harness) Notice(c msg.NoticeClass, fromHarness string) string {
+	return msg.PeerNotice(c, fromHarness)
+}
+
+func (h *Harness) NativeReplyAddress(harness.Self) string { return "" }
 
 type sessionDoc struct {
 	ID       string `json:"id"`

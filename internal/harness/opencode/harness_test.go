@@ -14,16 +14,6 @@ import (
 	"github.com/GoodOlClint/crosstalk/internal/harness"
 )
 
-var _ interface {
-	Name() adapter.Harness
-	Identify(context.Context, harness.RequestContext) (harness.Session, bool, error)
-	Bind(context.Context, harness.RequestContext) (adapter.Binding, bool, error)
-	Register(context.Context, string) (adapter.Binding, error)
-	Discover(context.Context) ([]harness.Session, error)
-	Status(context.Context, string) (adapter.SessionStatus, error)
-	harness.Supersession
-} = (*Harness)(nil)
-
 var t0 = time.Date(2026, 11, 23, 12, 0, 0, 0, time.UTC)
 
 func req(meta map[string]any) harness.RequestContext {

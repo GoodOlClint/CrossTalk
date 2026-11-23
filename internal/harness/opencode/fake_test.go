@@ -54,6 +54,16 @@ type service struct {
 	listRaw   string
 	activeRaw string
 	onList    func()
+	// prompt answers POST .../prompt; zero values give a 200 admitting the
+	// message to the session in the path.
+	prompt promptMode
+}
+
+type promptMode struct {
+	Status  int
+	Raw     string
+	Session string
+	Drop    bool
 }
 
 func (s *service) set(f func(*service)) {
@@ -70,8 +80,12 @@ func (s *service) handle(w http.ResponseWriter, r *http.Request) {
 	for k, v := range s.active {
 		active[k] = v
 	}
-	extra, getDelay, listRaw, activeRaw, onList := s.listExtra, s.getDelay, s.listRaw, s.activeRaw, s.onList
+	extra, getDelay, listRaw, activeRaw, onList, pm := s.listExtra, s.getDelay, s.listRaw, s.activeRaw, s.onList, s.prompt
 	s.mu.Unlock()
+	if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/prompt") {
+		servePrompt(w, r, pm)
+		return
+	}
 	if delay > 0 {
 		select {
 		case <-time.After(delay):
@@ -177,4 +191,40 @@ func (c *clock) add(d time.Duration) {
 	c.mu.Lock()
 	c.t = c.t.Add(d)
 	c.mu.Unlock()
+}
+
+func servePrompt(w http.ResponseWriter, r *http.Request, pm promptMode) {
+	switch {
+	case pm.Drop:
+		if c, _, err := w.(http.Hijacker).Hijack(); err == nil {
+			_ = c.Close()
+		}
+		return
+	case pm.Status != 0:
+		w.WriteHeader(pm.Status)
+		return
+	case pm.Raw != "":
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(pm.Raw))
+		return
+	}
+	var body struct {
+		Text     string `json:"text"`
+		Delivery string `json:"delivery"`
+	}
+	if json.NewDecoder(r.Body).Decode(&body) != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		return
+	}
+	if body.Delivery == "" {
+		body.Delivery = "steer"
+	}
+	id := strings.TrimSuffix(strings.TrimPrefix(r.URL.Path, "/api/session/"), "/prompt")
+	if pm.Session != "" {
+		id = pm.Session
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{
+		"id": "msg_1", "sessionID": id, "type": "user", "payload": map[string]any{"text": body.Text}, "delivery": body.Delivery,
+	}})
 }
