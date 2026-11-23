@@ -366,13 +366,13 @@ func pluginStep(env harness.InstallEnv) harness.Step {
 			if _, err := env.Run(ctx, "codex", add...); err != nil {
 				// codex reads an emptied checkout as another source; upgrade refills it.
 				if local || !checkoutEmpty(env.Home) {
-					return err
+					return mismatch(env, err)
 				}
 				if _, uerr := env.Run(ctx, "codex", upgrade...); uerr != nil {
 					return errors.Join(err, uerr)
 				}
 				if _, err := env.Run(ctx, "codex", add...); err != nil {
-					return err
+					return mismatch(env, err)
 				}
 			} else if !local {
 				cmds = append([][]string{upgrade}, cmds...)
@@ -385,6 +385,13 @@ func pluginStep(env harness.InstallEnv) harness.Step {
 			return nil
 		},
 	}
+}
+
+func mismatch(env harness.InstallEnv, err error) error {
+	if strings.Contains(err.Error(), "already added from a different source") {
+		return harness.MarketplaceMismatch("codex", env.Marketplace, err)
+	}
+	return err
 }
 
 func configStep(env harness.InstallEnv) harness.Step {

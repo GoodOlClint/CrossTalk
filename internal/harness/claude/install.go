@@ -236,24 +236,36 @@ func pluginStep(env harness.InstallEnv) harness.Step {
 		Title:  "Claude plugin",
 		Change: "claude plugin marketplace add " + env.Marketplace + ", then claude plugin install " + pluginID + " (marketplace update and plugin update when it is installed)",
 		Apply: func(ctx context.Context) error {
-			if _, err := env.Run(ctx, "claude", "plugin", "marketplace", "add", env.Marketplace); err != nil {
-				return err
-			}
-			p, err := installedPlugin(ctx, env)
-			if err != nil {
-				return err
-			}
-			if p == nil {
-				_, err = env.Run(ctx, "claude", "plugin", "install", pluginID)
-				return err
-			}
-			if _, err := env.Run(ctx, "claude", "plugin", "marketplace", "update", "crosstalk"); err != nil {
-				return err
-			}
-			_, err = env.Run(ctx, "claude", "plugin", "update", pluginID)
-			return err
+			return mismatch(env, applyPlugin(ctx, env))
 		},
 	}
+}
+
+func applyPlugin(ctx context.Context, env harness.InstallEnv) error {
+	if _, err := env.Run(ctx, "claude", "plugin", "marketplace", "add", env.Marketplace); err != nil {
+		return err
+	}
+	p, err := installedPlugin(ctx, env)
+	if err != nil {
+		return err
+	}
+	if p == nil {
+		_, err = env.Run(ctx, "claude", "plugin", "install", pluginID)
+		return err
+	}
+	if _, err := env.Run(ctx, "claude", "plugin", "marketplace", "update", "crosstalk"); err != nil {
+		return err
+	}
+	_, err = env.Run(ctx, "claude", "plugin", "update", pluginID)
+	return err
+}
+
+// mismatch recognises Claude's refusal to switch a marketplace between sources.
+func mismatch(env harness.InstallEnv, err error) error {
+	if err != nil && strings.Contains(err.Error(), "extraKnownMarketplaces") {
+		return harness.MarketplaceMismatch("claude", env.Marketplace, err)
+	}
+	return err
 }
 
 func rulePortStep(env harness.InstallEnv) (harness.Step, bool) {

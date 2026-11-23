@@ -98,6 +98,12 @@ func Lock(ctx context.Context, stateDir string, waiting func()) (release func(),
 	}
 }
 
+// ErrNotRetryable marks a target error that retrying cannot fix: the Runner
+// stops that target for the rest of its run, writes no marker, and tells the
+// session once. The stop is in memory, so the next process runs the target
+// once more.
+var ErrNotRetryable = errors.New("not retryable")
+
 // Target is one thing an upgrade brings up to date: Run is its install step,
 // Verify the check that it is now at the binary's version.
 type Target struct {
@@ -128,12 +134,13 @@ type Runner struct {
 	Enter func(ctx context.Context) (leave func(), ok bool)
 
 	beforeLock func()
+	stopped    map[string]bool
 }
 
 func (r *Runner) pending() []Target {
 	var p []Target
 	for _, t := range r.Targets {
-		if !Done(r.StateDir, r.Version, t.Name) && (t.Eligible == nil || t.Eligible()) {
+		if !r.stopped[t.Name] && !Done(r.StateDir, r.Version, t.Name) && (t.Eligible == nil || t.Eligible()) {
 			p = append(p, t)
 		}
 	}
@@ -223,8 +230,15 @@ func (r *Runner) attempt(ctx context.Context, first bool) (ran, pending bool) {
 		if err == nil {
 			err = MarkDone(r.StateDir, r.Version, t.Name)
 		}
-		if err != nil {
+		if errors.Is(err, ErrNotRetryable) {
+			if r.stopped == nil {
+				r.stopped = map[string]bool{}
+			}
+			r.stopped[t.Name] = true
+		} else if err != nil {
 			pending = true
+		}
+		if err != nil {
 			fmt.Fprintf(w, "%s %s: failed: %v\n", time.Now().UTC().Format(time.RFC3339), t.Name, err)
 		} else {
 			fmt.Fprintf(w, "%s %s: done\n", time.Now().UTC().Format(time.RFC3339), t.Name)
@@ -257,15 +271,17 @@ func runTarget(ctx context.Context, t Target, w io.Writer, timeout time.Duration
 // notice is the line for the session: after a retry, only targets that now
 // passed are worth telling.
 func (r *Runner) notice(outs []outcome, first bool) string {
-	var ok, bad []string
+	var ok, bad, manual []string
 	for _, o := range outs {
 		if o.err == nil {
 			ok = append(ok, o.name)
+		} else if errors.Is(o.err, ErrNotRetryable) {
+			manual = append(manual, o.name+": "+strings.TrimPrefix(firstLine(o.err), ErrNotRetryable.Error()+": "))
 		} else {
 			bad = append(bad, o.name+" ("+brief(o.err)+")")
 		}
 	}
-	if !first && len(ok) == 0 {
+	if !first && len(ok) == 0 && len(manual) == 0 {
 		return ""
 	}
 	var parts []string
@@ -275,14 +291,22 @@ func (r *Runner) notice(outs []outcome, first bool) string {
 	if first && len(bad) > 0 {
 		parts = append(parts, "could not update "+strings.Join(bad, ", ")+"; run `crosstalk install` (log: "+LogPath(r.StateDir, r.Version)+")")
 	}
+	if len(manual) > 0 {
+		parts = append(parts, "needs you, not retried: "+strings.Join(manual, "; "))
+	}
 	return "CrossTalk " + r.Version + " upgrade: " + strings.Join(parts, "; ")
 }
 
 // brief is the first line of err, at most 120 bytes; the log has the rest.
 func brief(err error) string {
-	s, _, _ := strings.Cut(err.Error(), "\n")
+	s := firstLine(err)
 	if len(s) > 120 {
 		s = s[:120] + "..."
 	}
+	return s
+}
+
+func firstLine(err error) string {
+	s, _, _ := strings.Cut(err.Error(), "\n")
 	return s
 }

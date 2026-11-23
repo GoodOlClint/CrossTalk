@@ -647,3 +647,35 @@ func TestReapOrphanWaitStopsOnCancel(t *testing.T) {
 		t.Fatal("a cancelled wait dropped the record")
 	}
 }
+
+func TestFollowUpNotRetryableStopsTarget(t *testing.T) {
+	st := t.TempDir()
+	after, now, waits := fakeClock()
+	var stuck, flaky atomic.Int32
+	var notices []string
+	r := &Runner{StateDir: st, Version: ver, Interval: 15 * time.Minute, Bound: 6 * time.Hour, After: after, Now: now,
+		Notice: func(n string) { notices = append(notices, n) },
+		Targets: []Target{
+			{Name: "codex", Run: func(context.Context, io.Writer) error {
+				stuck.Add(1)
+				return fmt.Errorf("%w: remove it: boom", ErrNotRetryable)
+			}, Verify: func(context.Context) error { return nil }},
+			{Name: "claude", Run: func(context.Context, io.Writer) error { flaky.Add(1); return nil },
+				Verify: func(context.Context) error {
+					if flaky.Load() < 2 {
+						return errors.New("stale")
+					}
+					return nil
+				}},
+		}}
+	r.Run(context.Background())
+	if stuck.Load() != 1 || len(*waits) != 1 {
+		t.Errorf("not-retryable target ran %d times, waits %d; want 1 and 1 (only the flaky target retried)", stuck.Load(), len(*waits))
+	}
+	if Done(st, ver, "codex") || !Done(st, ver, "claude") {
+		t.Errorf("markers: codex=%v claude=%v", Done(st, ver, "codex"), Done(st, ver, "claude"))
+	}
+	if len(notices) != 2 || !strings.Contains(notices[0], "codex: remove it: boom") || strings.Count(strings.Join(notices, "\n"), "remove it") != 1 {
+		t.Errorf("notices = %q, want the codex line once", notices)
+	}
+}

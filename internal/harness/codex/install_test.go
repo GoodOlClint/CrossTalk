@@ -380,6 +380,9 @@ func TestCodexPluginDifferentSourceStillFails(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "different source") {
 			t.Errorf("%s: a marketplace added from another source: err = %v", mkt, err)
 		}
+		if !errors.Is(err, harness.ErrMarketplaceMismatch) || !strings.Contains(err.Error(), "codex plugin marketplace remove crosstalk") || !strings.Contains(err.Error(), "crosstalk install") {
+			t.Errorf("%s: err = %v, want ErrMarketplaceMismatch naming the remove and re-add commands", mkt, err)
+		}
 		if want := []string{"codex plugin marketplace add " + mkt}; !slices.Equal(r.calls, want) {
 			t.Errorf("%s: calls = %v, want only %v", mkt, r.calls, want)
 		}
