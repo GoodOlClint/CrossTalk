@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -255,8 +256,12 @@ func TestOSPeerPIDs(t *testing.T) {
 			defer conn.Close()
 			self := netip.MustParseAddrPort(conn.LocalAddr().String())
 			svc := netip.MustParseAddrPort(ln.Addr().String())
-			if pids, err := osPeerPIDs(context.Background(), self, svc); err != nil || len(pids) != 0 {
-				t.Fatalf("unaccepted connection: %v %v, want no holder", pids, err)
+			wantPending := 0
+			if runtime.GOOS == "linux" {
+				wantPending = os.Getpid()
+			}
+			if pids, err := osPeerPIDs(context.Background(), self, svc); err != nil || (wantPending == 0 && len(pids) != 0) || (wantPending != 0 && (len(pids) != 1 || pids[0] != wantPending)) {
+				t.Fatalf("unaccepted connection: %v %v, want holder %d (0: none)", pids, err, wantPending)
 			}
 			acc, err := ln.Accept()
 			if err != nil {
