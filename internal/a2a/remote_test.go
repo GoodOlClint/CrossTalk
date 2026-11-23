@@ -557,3 +557,19 @@ func TestValidateAttestedRejectsFormatChars(t *testing.T) {
 		}
 	}
 }
+
+func TestValidateAttestedHarnessAllowList(t *testing.T) {
+	name := base64.RawURLEncoding.EncodeToString([]byte("Remote Alice"))
+	for harness, want := range map[string]bool{
+		"claude":   true,
+		"codex":    true,
+		"opencode": true,
+		"gemini":   false,
+		"OpenCode": false,
+		"":         false,
+	} {
+		if _, ok := ValidateAttested(remoteID, name, harness, registry.RolePrimary); ok != want {
+			t.Errorf("harness %q: ok = %v, want %v", harness, ok, want)
+		}
+	}
+}

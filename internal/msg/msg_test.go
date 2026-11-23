@@ -207,3 +207,22 @@ func TestUUIDv7Time(t *testing.T) {
 		}
 	}
 }
+
+func TestPeerNoticeNamesHarness(t *testing.T) {
+	head, tail := noticeTeammateHead, noticeTeammateTail
+	for from, name := range map[string]string{
+		"claude":   "Claude Code",
+		"codex":    "Codex",
+		"opencode": "OpenCode",
+		"":         "agent",
+		"gemini":   "agent",
+	} {
+		want := head + name + tail
+		if got := PeerNotice(NoticeTeammate, from); got != want {
+			t.Errorf("from %q: notice = %q, want %q", from, got, want)
+		}
+		if got := PeerNotice(NoticeTeammateAgain, from); got != want+noticeAgain {
+			t.Errorf("from %q: again notice mismatch", from)
+		}
+	}
+}
