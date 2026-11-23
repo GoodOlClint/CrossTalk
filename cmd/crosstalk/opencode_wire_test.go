@@ -139,7 +139,7 @@ func TestOpenCodeReplyRouteAfterUnknown(t *testing.T) {
 		})
 	}
 
-	t.Run("ask with ErrNoEndpoint is rejected", func(t *testing.T) {
+	t.Run("receiver sentinel: an ask whose adapter wraps ErrNoEndpoint is rejected", func(t *testing.T) {
 		e := newOCEnv(t, func(a adapter.Adapter) adapter.Adapter { return noEndpoint{a} })
 		if err := os.Remove(e.path); err != nil {
 			t.Fatal(err)
@@ -160,7 +160,6 @@ func TestOpenCodeConcurrentPullWakeDeadline(t *testing.T) {
 	e.srv.Set(func(s *opencodetest.Service) { s.Prompt.Delay = 8 * time.Second })
 	m := ocMsg(msg.Inform, "mailboxed body")
 	done := make(chan receiver.Result, 1)
-	start := time.Now()
 	go func() {
 		done <- e.r.Receive(context.Background(), receiver.Inbound{Ingress: receiver.UDS, Message: m, Sender: unverified})
 	}()
@@ -171,6 +170,7 @@ func TestOpenCodeConcurrentPullWakeDeadline(t *testing.T) {
 	if len(e.srv.Prompts()) == 0 {
 		t.Fatal("no wake prompt reached the service")
 	}
+	start := time.Now()
 	es, _, err := e.r.Pull("", 0)
 	if err != nil {
 		t.Fatal(err)
@@ -182,5 +182,7 @@ func TestOpenCodeConcurrentPullWakeDeadline(t *testing.T) {
 	if d := time.Since(start); d > 5*time.Second+margin {
 		t.Fatalf("pull returned after %v, past the wake deadline plus margin", d)
 	}
-	<-done
+	if r := <-done; r.State != adapter.Mailboxed {
+		t.Fatalf("receive %+v, want mailboxed", r)
+	}
 }

@@ -24,9 +24,18 @@ func TestHarnessesListsOpenCodeSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, h := range hs {
+	claudeAt := -1
+	for i, h := range hs {
+		if h.Name() == adapter.Claude {
+			claudeAt = i
+		}
+	}
+	for i, h := range hs {
 		if h.Name() != adapter.OpenCode {
 			continue
+		}
+		if claudeAt < 0 || i > claudeAt {
+			t.Fatalf("OpenCode at %d, Claude at %d: explicit metadata must outrank the parent pid", i, claudeAt)
 		}
 		got, err := h.Discover(context.Background())
 		if err != nil {

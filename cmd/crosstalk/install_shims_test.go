@@ -159,6 +159,8 @@ func TestClassifyShimParent(t *testing.T) {
 		{"opencode serve --service --port 0", 88, parentOpenCode},
 		{"/opt/homebrew/bin/opencode", 88, parentOther},
 		{"/opt/homebrew/bin/opencode serve", 88, parentOther},
+		{"opencode run serve --service", 88, parentOther},
+		{"opencode run --service serve", 88, parentOther},
 		{"/bin/zsh -l", 1, parentOther},
 		{"", 0, parentOther},
 	} {
