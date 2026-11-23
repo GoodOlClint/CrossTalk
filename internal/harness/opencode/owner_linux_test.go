@@ -2,6 +2,7 @@ package opencode
 
 import (
 	"context"
+	"errors"
 	"net"
 	"os"
 	"syscall"
@@ -9,7 +10,7 @@ import (
 	"time"
 )
 
-func TestOwnerUnacceptedDeferAcceptConnection(t *testing.T) {
+func TestOwnerDeferAcceptServiceIsChecked(t *testing.T) {
 	lc := net.ListenConfig{Control: func(_, _ string, c syscall.RawConn) error {
 		var serr error
 		if err := c.Control(func(fd uintptr) {
@@ -24,22 +25,37 @@ func TestOwnerUnacceptedDeferAcceptConnection(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer ln.Close()
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			defer c.Close()
+		}
+	}()
 
 	oldPIDs, oldWait := peerPIDs, peerWait
-	peerPIDs, peerWait = osPeerPIDs, 400*time.Millisecond
+	peerPIDs, peerWait = osPeerPIDs, 500*time.Millisecond
 	t.Cleanup(func() { peerPIDs, peerWait = oldPIDs, oldWait })
 
-	conn, err := net.Dial("tcp4", ln.Addr().String())
+	dial := func(pid int) (net.Conn, error) {
+		ctx, cancel := context.WithTimeout(context.WithValue(context.Background(), servicePID{}, pid), 5*time.Second)
+		defer cancel()
+		return dialService(ctx, "tcp4", ln.Addr().String())
+	}
+	conn, err := dial(os.Getpid())
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("service that accepts only once data arrives: %v", err)
 	}
-	defer conn.Close()
+	conn.Close()
 
-	start := time.Now()
-	if msg := peerRefusal(context.Background(), conn, os.Getpid()); msg != "" {
-		t.Fatalf("connection to the service's own listener, not yet accepted: refused after %v: %s", time.Since(start), msg)
-	}
-	if msg := peerRefusal(context.Background(), conn, os.Getpid()+1); msg == "" {
-		t.Fatal("connection whose listener is held by another pid was accepted as the service's")
+	conn, err = dial(os.Getpid() + 1)
+	var oe *ownerError
+	if !errors.As(err, &oe) {
+		if conn != nil {
+			conn.Close()
+		}
+		t.Fatalf("holder other than the service pid: err %v, want an ownerError", err)
 	}
 }
