@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -95,7 +97,7 @@ func TestHarnessCompatWorkflowSafe(t *testing.T) {
 		}
 	}
 	body := jobs["harness"]
-	for _, want := range []string{"environment: harness-compat\n", "secrets.OPENROUTER_API_KEY", "HARNESS_COMPAT_CODEX_MODEL", "HARNESS_COMPAT_CLAUDE_MODEL", "fail-fast: false"} {
+	for _, want := range []string{"environment: harness-compat\n", "secrets.OPENROUTER_API_KEY", "HARNESS_COMPAT_CODEX_MODEL", "HARNESS_COMPAT_CLAUDE_MODEL", "HARNESS_COMPAT_OPENCODE_MODEL", "@opencode/cli@$VERSION", "fail-fast: false"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("harness lacks %q", want)
 		}
@@ -1168,7 +1170,7 @@ func TestHarnessCompatLegNeverKeysOnModelProse(t *testing.T) {
 		l := strings.TrimSpace(line)
 		// The words the prompts use may appear only inside a prompt handed to a session, never in a check.
 		for _, word := range []string{"READY", "PONG"} {
-			if strings.Contains(l, word) && !strings.HasPrefix(l, "start_claude ") && !strings.HasPrefix(l, "start_codex ") && !strings.HasPrefix(l, "start_codex_nd ") && !strings.Contains(l, "compat-") {
+			if strings.Contains(l, word) && !strings.HasPrefix(l, "start_claude ") && !strings.HasPrefix(l, "start_codex ") && !strings.HasPrefix(l, "start_codex_nd ") && !strings.HasPrefix(l, "oc_prompt ") && !strings.Contains(l, "compat-") {
 				t.Errorf("line %d matches model prose (%s) outside a prompt: %s", i+1, word, l)
 			}
 		}
@@ -1219,12 +1221,12 @@ func TestHarnessCompatRestructureJobs(t *testing.T) {
 	}
 }
 
-func TestHarnessCompatLegNamesAreTheFourSameHarnessLegs(t *testing.T) {
+func TestHarnessCompatLegNamesAreTheSixSameHarnessLegs(t *testing.T) {
 	if _, err := exec.LookPath("jq"); err != nil {
 		t.Skip("jq not on PATH")
 	}
 	out, err := exec.Command(filepath.Join(releaseRepoRoot(t), "scripts", "harness-compat.sh"), "legs",
-		`[{"harness":"codex","version":"0.171.0"},{"harness":"claude-code","version":"2.1.330"}]`).CombinedOutput()
+		`[{"harness":"codex","version":"0.171.0"},{"harness":"claude-code","version":"2.1.330"},{"harness":"opencode","version":"2.4.1"}]`).CombinedOutput()
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
@@ -1236,8 +1238,8 @@ func TestHarnessCompatLegNamesAreTheFourSameHarnessLegs(t *testing.T) {
 	for _, l := range legs {
 		got[l.Leg] = l.Runner
 	}
-	want := map[string]string{"claude-linux": "ubuntu-latest", "claude-macos": "macos-latest", "codex-linux": "ubuntu-latest", "codex-macos": "macos-latest"}
-	if len(got) != 4 {
+	want := map[string]string{"claude-linux": "ubuntu-latest", "claude-macos": "macos-latest", "codex-linux": "ubuntu-latest", "codex-macos": "macos-latest", "opencode-linux": "ubuntu-latest", "opencode-macos": "macos-latest"}
+	if len(got) != 6 {
 		t.Fatalf("legs = %v, want exactly %v", got, want)
 	}
 	for k, v := range want {
@@ -1350,15 +1352,17 @@ func TestHarnessCompatOnlyTheQueuePhaseAnswersHookDialogs(t *testing.T) {
 func TestHarnessCompatLegNeedsOnlyItsOwnHarnessModel(t *testing.T) {
 	script := filepath.Join(releaseRepoRoot(t), "scripts", "harness-compat-live.sh")
 	for leg, c := range map[string]struct{ set, unset string }{
-		"claude-linux": {"CLAUDE_MODEL", "CODEX_MODEL"},
-		"claude-macos": {"CLAUDE_MODEL", "CODEX_MODEL"},
-		"codex-linux":  {"CODEX_MODEL", "CLAUDE_MODEL"},
-		"codex-macos":  {"CODEX_MODEL", "CLAUDE_MODEL"},
+		"claude-linux":   {"CLAUDE_MODEL", "CODEX_MODEL"},
+		"claude-macos":   {"CLAUDE_MODEL", "CODEX_MODEL"},
+		"codex-linux":    {"CODEX_MODEL", "CLAUDE_MODEL"},
+		"codex-macos":    {"CODEX_MODEL", "CLAUDE_MODEL"},
+		"opencode-linux": {"OPENCODE_MODEL", "CODEX_MODEL"},
+		"opencode-macos": {"OPENCODE_MODEL", "CLAUDE_MODEL"},
 	} {
 		cmd := exec.Command(script, "leg", leg, t.TempDir())
 		var env []string
 		for _, kv := range os.Environ() {
-			if !strings.HasPrefix(kv, "CLAUDE_MODEL=") && !strings.HasPrefix(kv, "CODEX_MODEL=") && !strings.HasPrefix(kv, "CROSSTALK_BIN=") && !strings.HasPrefix(kv, "LIVE_LOGS=") {
+			if !strings.HasPrefix(kv, "CLAUDE_MODEL=") && !strings.HasPrefix(kv, "CODEX_MODEL=") && !strings.HasPrefix(kv, "OPENCODE_MODEL=") && !strings.HasPrefix(kv, "CROSSTALK_BIN=") && !strings.HasPrefix(kv, "LIVE_LOGS=") {
 				env = append(env, kv)
 			}
 		}
@@ -1570,9 +1574,12 @@ func TestHarnessCompatReportJobFailsWhenAHarnessDidNotPass(t *testing.T) {
 		t.Error("the report job must not exit early with exit 0 before the failure check")
 	}
 	for results, want := range map[string]bool{
-		`{"codex":{"pass":true},"claude-code":{"pass":true}}`:  true,
-		`{"codex":{"pass":true},"claude-code":{"pass":false}}`: false,
-		`{"codex":{"pass":false}}`:                             false,
+		`{"codex":{"pass":true},"claude-code":{"pass":true}}`:                           true,
+		`{"codex":{"pass":true},"claude-code":{"pass":false}}`:                          false,
+		`{"codex":{"pass":false}}`:                                                      false,
+		`{"codex":{"pass":true},"claude-code":{"pass":true},"opencode":{"pass":true}}`:  true,
+		`{"codex":{"pass":true},"claude-code":{"pass":true},"opencode":{"pass":false}}`: false,
+		`{"opencode":{"pass":false}}`:                                                   false,
 	} {
 		cmd := exec.Command("sh", "-c", `printf '%s' "$R" | jq -e 'all(.[]; .pass)' >/dev/null`)
 		cmd.Env = append(os.Environ(), "R="+results)
@@ -1820,5 +1827,499 @@ func TestHarnessCompatTestedCodeAllowsOnlyRecordChanges(t *testing.T) {
 	c.Dir = dir
 	if out, err := c.CombinedOutput(); err == nil || !strings.Contains(string(out), "failed") {
 		t.Fatalf("a git diff error must fail the check, got err=%v\n%s", err, out)
+	}
+}
+
+func compatJobs(t *testing.T, jobs ...map[string]any) string {
+	t.Helper()
+	var b strings.Builder
+	for _, j := range jobs {
+		b.WriteString(journalLine(t, j))
+	}
+	f := filepath.Join(t.TempDir(), "jobs.json")
+	if err := os.WriteFile(f, []byte(b.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return f
+}
+
+func compatJob(name, conclusion string, steps ...string) map[string]any {
+	var st []map[string]any
+	for _, n := range steps {
+		st = append(st, map[string]any{"name": n, "conclusion": "failure"})
+	}
+	return map[string]any{"name": name, "conclusion": conclusion, "steps": st}
+}
+
+func compatScript(t *testing.T, args ...string) (string, error) {
+	t.Helper()
+	out, err := exec.Command(filepath.Join(releaseRepoRoot(t), "scripts", "harness-compat.sh"), args...).CombinedOutput()
+	return strings.TrimSpace(string(out)), err
+}
+
+func TestHarnessCompatOpenCodeLegsAndReport(t *testing.T) {
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not on PATH")
+	}
+	run := func(args ...string) string {
+		t.Helper()
+		out, err := compatScript(t, args...)
+		if err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+		return out
+	}
+	only := run("legs", `[{"harness":"opencode","version":"2.4.1"}]`, "0.167.0")
+	if want := `[{"leg":"opencode-linux","harness":"opencode","version":"2.4.1","runner":"ubuntu-latest"},{"leg":"opencode-macos","harness":"opencode","version":"2.4.1","runner":"macos-latest"}]`; only != want {
+		t.Fatalf("opencode-only legs = %s, want %s (the Codex queue override must not touch it)", only, want)
+	}
+	mixed := run("legs", `[{"harness":"codex","version":"0.171.0"},{"harness":"claude-code","version":"2.1.330"},{"harness":"opencode","version":"2.4.1"}]`)
+	var legs []struct{ Leg, Harness, Version, Runner string }
+	if err := json.Unmarshal([]byte(mixed), &legs); err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]string{}
+	for _, l := range legs {
+		got[l.Leg] = l.Runner + " " + l.Harness + " " + l.Version
+	}
+	want := map[string]string{
+		"codex-linux": "ubuntu-latest codex 0.171.0", "codex-macos": "macos-latest codex 0.171.0",
+		"claude-linux": "ubuntu-latest claude-code 2.1.330", "claude-macos": "macos-latest claude-code 2.1.330",
+		"opencode-linux": "ubuntu-latest opencode 2.4.1", "opencode-macos": "macos-latest opencode 2.4.1",
+	}
+	if fmt.Sprint(got) != fmt.Sprint(want) || len(legs) != 6 {
+		t.Fatalf("mixed legs = %v, want %v", got, want)
+	}
+	if noOC := run("legs", `[{"harness":"codex","version":"0.171.0"}]`); strings.Contains(noOC, "opencode") {
+		t.Fatalf("a Codex-only change must not run an OpenCode leg: %s", noOC)
+	}
+
+	ocLegs := only
+	cases := []struct {
+		name, legs string
+		jobs       []map[string]any
+		wantPass   map[string]bool
+	}{
+		{"opencode-only pass", ocLegs,
+			[]map[string]any{passJob("harness-opencode-linux"), passJob("harness-opencode-macos")},
+			map[string]bool{"opencode": true}},
+		{"opencode fails while codex and claude pass",
+			run("legs", `[{"harness":"codex","version":"0.171.0"},{"harness":"claude-code","version":"2.1.330"},{"harness":"opencode","version":"2.4.1"}]`),
+			[]map[string]any{passJob("harness-codex-linux"), passJob("harness-codex-macos"), passJob("harness-claude-linux"), passJob("harness-claude-macos"),
+				passJob("harness-opencode-linux"), compatJob("harness-opencode-macos", "failure", "Run the leg")},
+			map[string]bool{"codex": true, "claude-code": true, "opencode": false}},
+		{"a changed harness with only its Linux result is not a pass", ocLegs,
+			[]map[string]any{passJob("harness-opencode-linux")},
+			map[string]bool{"opencode": false}},
+		{"a changed harness with only its macOS result is not a pass", ocLegs,
+			[]map[string]any{passJob("harness-opencode-macos")},
+			map[string]bool{"opencode": false}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			out := run("report", compatJobs(t, c.jobs...), c.legs)
+			var res map[string]struct{ Pass bool }
+			if err := json.Unmarshal([]byte(out), &res); err != nil {
+				t.Fatal(err)
+			}
+			if len(res) != len(c.wantPass) {
+				t.Fatalf("report = %s, want harnesses %v", out, c.wantPass)
+			}
+			for h, p := range c.wantPass {
+				if res[h].Pass != p {
+					t.Errorf("%s pass = %v, want %v\n%s", h, res[h].Pass, p, out)
+				}
+			}
+		})
+	}
+}
+
+func passJob(name string) map[string]any {
+	return map[string]any{"name": name, "conclusion": "success", "steps": []map[string]any{{"name": "Run the leg", "conclusion": "success"}}}
+}
+
+func TestHarnessCompatCheckUpdatesAllIncludesOpenCode(t *testing.T) {
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not on PATH")
+	}
+	root := releaseRepoRoot(t)
+	bin := t.TempDir()
+	fake := "#!/bin/sh\necho \"$*\" >> \"$FAKE_LOG\"\ncase \"$2\" in @opencode/cli) echo 2.4.1 ;; @openai/codex) echo 0.171.0 ;; *) echo 2.1.330 ;; esac\n"
+	if err := os.WriteFile(filepath.Join(bin, "npm"), []byte(fake), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rec := filepath.Join(bin, "record.json")
+	if err := os.WriteFile(rec, []byte(`{"codex": {"tested": "0.171.0", "checked": "2026-11-20"}, "claude-code": {"tested": "2.1.330", "checked": "2026-11-20"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	logf := filepath.Join(bin, "npm.log")
+	run := func(args ...string) (string, error) {
+		cmd := exec.Command(filepath.Join(root, "scripts", "harness-compat.sh"), append([]string{"check-updates", rec}, args...)...)
+		cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "FAKE_LOG="+logf)
+		out, err := cmd.CombinedOutput()
+		return strings.TrimSpace(string(out)), err
+	}
+	if out, err := run("all", "", "", ""); err != nil || out != `[{"harness":"opencode","version":"2.4.1"}]` {
+		t.Fatalf("all with codex and claude-code recorded: %q, %v (an unrecorded opencode reads as unverified)", out, err)
+	}
+	if b, _ := os.ReadFile(logf); !strings.Contains(string(b), "view @opencode/cli version") || strings.Contains(string(b), "opencode-ai") {
+		t.Errorf("npm was asked for: %s", b)
+	}
+	if out, err := run("opencode", "2.4.1", "", "2.4.1"); err != nil || out != `[]` {
+		t.Errorf("recorded equal: %q, %v", out, err)
+	}
+	if out, err := run("opencode", "2.4.1", "true", "2.4.1"); err != nil || out != `[{"harness":"opencode","version":"2.4.1"}]` {
+		t.Errorf("forced: %q, %v", out, err)
+	}
+	if out, err := run("all", "2.4.1", "", ""); err == nil {
+		t.Errorf("a forced version for all harnesses was accepted: %s", out)
+	}
+}
+
+func TestHarnessCompatFailedStepsAttributesByHarness(t *testing.T) {
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not on PATH")
+	}
+	jobs := compatJobs(t,
+		compatJob("compare-claude-linux", "failure", "Harness probes"),
+		compatJob("harness-claude-macos", "failure", "Run the leg"),
+		compatJob("compare-codex-linux", "failure", "Harness probes"),
+		compatJob("harness-codex-macos", "failure", "Run the leg"),
+		compatJob("compare-opencode-linux", "failure", "Harness probes"),
+		compatJob("harness-opencode-linux", "failure", "Run the leg"),
+		compatJob("harness-opencode-macos", "success"),
+		compatJob("build (ubuntu-latest)", "failure", "go vet"),
+	)
+	for h, own := range map[string]string{"opencode": "opencode", "codex": "codex", "claude-code": "claude"} {
+		out, err := compatScript(t, "failed-steps", jobs, h)
+		if err != nil {
+			t.Fatalf("%s: %v\n%s", h, err, out)
+		}
+		for _, other := range []string{"claude", "codex", "opencode"} {
+			has := strings.Contains(out, "-"+other+"-")
+			if (other == own) != has {
+				t.Errorf("%s: lists %s jobs = %v\n%s", h, other, has, out)
+			}
+		}
+		if !strings.Contains(out, "build (ubuntu-latest): go vet") {
+			t.Errorf("%s: a shared job failure is dropped:\n%s", h, out)
+		}
+	}
+	if out, err := compatScript(t, "failed-steps", jobs, "cursor"); err == nil {
+		t.Errorf("unknown harness accepted: %s", out)
+	}
+}
+
+func TestHarnessCompatMixedPassFailBumpsAndFilesIssue(t *testing.T) {
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not on PATH")
+	}
+	legs, err := compatScript(t, "legs", `[{"harness":"codex","version":"0.172.0"},{"harness":"opencode","version":"2.4.1"}]`)
+	if err != nil {
+		t.Fatal(legs)
+	}
+	jobs := compatJobs(t,
+		passJob("harness-codex-linux"), passJob("harness-codex-macos"),
+		passJob("harness-opencode-linux"), compatJob("harness-opencode-macos", "failure", "Run the leg"))
+	results, err := compatScript(t, "report", jobs, legs)
+	if err != nil {
+		t.Fatal(results)
+	}
+	if out, err := compatScript(t, "passing", results); err != nil || out != "codex 0.172.0" {
+		t.Errorf("passing = %q, %v", out, err)
+	}
+	if out, err := compatScript(t, "failing", results); err != nil || out != "opencode 2.4.1" {
+		t.Errorf("failing = %q, %v", out, err)
+	}
+	onlyOC, _ := compatScript(t, "legs", `[{"harness":"opencode","version":"2.4.1"}]`)
+	okJobs := compatJobs(t, passJob("harness-opencode-linux"), passJob("harness-opencode-macos"))
+	okRes, err := compatScript(t, "report", okJobs, onlyOC)
+	if err != nil {
+		t.Fatal(okRes)
+	}
+	if out, _ := compatScript(t, "passing", okRes); out != "opencode 2.4.1" {
+		t.Errorf("opencode-only passing = %q", out)
+	}
+	if out, _ := compatScript(t, "failing", okRes); out != "" {
+		t.Errorf("opencode-only failing = %q", out)
+	}
+	rec := filepath.Join(t.TempDir(), "rec.json")
+	orig := "{\n  \"codex\": {\"tested\": \"0.171.0\", \"checked\": \"2026-11-20\"},\n  \"claude-code\": {\"tested\": \"2.1.329\", \"checked\": \"2026-11-20\"}\n}\n"
+	if err := os.WriteFile(rec, []byte(orig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := compatScript(t, "bump-record", rec, "opencode", "2.4.1", "2026-11-23"); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	b, _ := os.ReadFile(rec)
+	want := strings.TrimSuffix(orig, "\n}\n") + ",\n  \"opencode\": {\"tested\": \"2.4.1\", \"checked\": \"2026-11-23\"}\n}\n"
+	if string(b) != want {
+		t.Errorf("record after the opencode bump:\n%s\nwant\n%s", b, want)
+	}
+
+	fake, bin := t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "gh"), []byte(fakeIssueGH), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	jf := compatJobs(t,
+		compatJob("harness-codex-linux", "failure", "Run the leg"),
+		compatJob("compare-opencode-macos", "failure", "Harness probes"),
+		compatJob("harness-opencode-macos", "failure", "Run the leg"))
+	cmd := exec.Command(filepath.Join(releaseRepoRoot(t), "scripts", "harness-compat.sh"), "file-issue", "Owner/Repo", "opencode", "2.4.1", "https://github.com/Owner/Repo/actions/runs/7", jf)
+	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "FAKE_DIR="+fake)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	created, _ := os.ReadFile(filepath.Join(fake, "created"))
+	c := string(created)
+	for _, w := range []string{"harness-compat: opencode 2.4.1 did not pass", "version 2.4.1", "compare-opencode-macos: Harness probes", "harness-opencode-macos: Run the leg", "--label harness-compat"} {
+		if !strings.Contains(c, w) {
+			t.Errorf("issue lacks %q:\n%s", w, c)
+		}
+	}
+	if strings.Contains(c, "codex") {
+		t.Errorf("an opencode issue lists a codex job:\n%s", c)
+	}
+	home, _ := os.UserHomeDir()
+	host, _ := os.Hostname()
+	for _, id := range []string{home, os.Getenv("USER"), host, "/Users/", "/home/"} {
+		if id != "" && strings.Contains(c, id) {
+			t.Errorf("issue text contains identifying %q:\n%s", id, c)
+		}
+	}
+}
+
+const fakeOpenCodeServe = `import json, os, socket, sys, time
+port = int(os.environ["COMPAT_OPENCODE_PORT"])
+s = socket.socket()
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+s.bind(("127.0.0.1", port))
+s.listen(5)
+d = os.path.join(os.environ["XDG_STATE_HOME"], "opencode")
+os.makedirs(d, exist_ok=True)
+f = os.path.join(d, "service.json")
+host = os.environ.get("FAKE_HOST", "127.0.0.1")
+doc = {"version": "2.4.1", "url": "http://%s:%d" % (host, port), "pid": os.getpid() + int(os.environ.get("FAKE_PID_DELTA", "0")), "password": os.environ.get("FAKE_PASSWORD", "sekret")}
+open(f, "w").write(json.dumps(doc))
+os.chmod(f, int(os.environ.get("FAKE_MODE", "600"), 8))
+time.sleep(60)
+`
+
+func TestHarnessCompatCompareOpenCodeFailsClosed(t *testing.T) {
+	for _, tool := range []string{"jq", "python3", "lsof"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			t.Skip(tool + " not on PATH")
+		}
+	}
+	freePort := func() int {
+		l, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer l.Close()
+		return l.Addr().(*net.TCPAddr).Port
+	}
+	cases := []struct {
+		name, version string
+		env           []string
+		busy          bool
+		reason        string
+	}{
+		{"banner before version", "echo banner; echo 'opencode v2.4.1'", nil, false, "version"},
+		{"unparseable version", "echo 'opencode dev'", nil, false, "version"},
+		{"service.json mode 0644", "echo 'opencode v2.4.1'", []string{"FAKE_MODE=644"}, false, "mode"},
+		{"non-loopback url", "echo 'opencode v2.4.1'", []string{"FAKE_HOST=10.1.2.3"}, false, "loopback"},
+		{"pid is not the listener", "echo 'opencode v2.4.1'", []string{"FAKE_PID_DELTA=7"}, false, "pid"},
+		{"empty password", "echo 'opencode v2.4.1'", []string{"FAKE_PASSWORD="}, false, "password"},
+		{"port held by another process", "echo 'opencode v2.4.1'", nil, true, "port"},
+		{"every service.json check passes, then the session call has no server", "echo 'opencode v2.4.1'", nil, false, "session"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			bin, home := t.TempDir(), t.TempDir()
+			serve := filepath.Join(bin, "serve.py")
+			if err := os.WriteFile(serve, []byte(fakeOpenCodeServe), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			fake := "#!/bin/sh\ncase \"$1\" in --version) " + c.version + " ;; serve) exec python3 -I \"$FAKE_SERVE\" ;; esac\n"
+			if err := os.WriteFile(filepath.Join(bin, "opencode"), []byte(fake), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			port := freePort()
+			if c.busy {
+				l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer l.Close()
+			}
+			cmd := exec.Command(filepath.Join(releaseRepoRoot(t), "scripts", "harness-compat.sh"), "compare-opencode", home)
+			cmd.Env = append(os.Environ(), append([]string{
+				"PATH=" + bin + string(os.PathListSeparator) + os.Getenv("PATH"),
+				"FAKE_SERVE=" + serve, fmt.Sprintf("COMPAT_OPENCODE_PORT=%d", port), "COMPAT_WAIT_TRIES=6",
+			}, c.env...)...)
+			out, err := cmd.CombinedOutput()
+			if err == nil {
+				t.Fatalf("passed, want failure mentioning %q\n%s", c.reason, out)
+			}
+			if !strings.Contains(strings.ToLower(string(out)), c.reason) {
+				t.Errorf("failure lacks the reason %q:\n%s", c.reason, out)
+			}
+			if strings.Contains(string(out), "sekret") {
+				t.Errorf("the password reached the output:\n%s", out)
+			}
+		})
+	}
+}
+
+func TestHarnessCompatOpenCodeServiceChecksTheListenerPid(t *testing.T) {
+	for _, tool := range []string{"jq", "python3", "lsof"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			t.Skip(tool + " not on PATH")
+		}
+	}
+	script := filepath.Join(releaseRepoRoot(t), "scripts", "harness-compat-live.sh")
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	port := l.Addr().(*net.TCPAddr).Port
+	f := filepath.Join(t.TempDir(), "service.json")
+	write := func(pid int, host string) {
+		doc := fmt.Sprintf(`{"version":"2.4.1","url":"http://%s:%d","pid":%d,"password":"sekret"}`, host, port, pid)
+		if err := os.WriteFile(f, []byte(doc), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cases := []struct {
+		name string
+		pid  int
+		host string
+		ok   bool
+	}{
+		{"pid is the listener", os.Getpid(), "127.0.0.1", true},
+		{"pid is another process", os.Getpid() + 1, "127.0.0.1", false},
+		{"url is not loopback", os.Getpid(), "10.1.2.3", false},
+	}
+	for _, c := range cases {
+		write(c.pid, c.host)
+		out, err := exec.Command(script, "opencode-service", f).CombinedOutput()
+		if (err == nil) != c.ok {
+			t.Errorf("%s: err = %v, want ok=%v\n%s", c.name, err, c.ok, out)
+		}
+		if strings.Contains(string(out), "sekret") {
+			t.Errorf("%s: the password reached the output:\n%s", c.name, out)
+		}
+		if c.ok && strings.TrimSpace(string(out)) != fmt.Sprintf("http://127.0.0.1:%d", port) {
+			t.Errorf("%s: printed %q", c.name, out)
+		}
+	}
+}
+
+func TestHarnessCompatOpenCodeLegShape(t *testing.T) {
+	b, err := os.ReadFile(filepath.Join(releaseRepoRoot(t), "scripts", "harness-compat-live.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(b)
+	if n := strings.Count(src, "\n\topencode-linux | opencode-macos)\n\t\topencode_roundtrip\n"); n != 1 {
+		t.Errorf("both opencode legs must run the shared opencode_roundtrip once; arms = %d", n)
+	}
+	if !strings.Contains(src, `jq '.password = "***"'`) || !strings.Contains(src, "--config -") {
+		t.Error("the staged service.json must have its password redacted and the Basic header must go through curl --config -")
+	}
+	for i, line := range strings.Split(src, "\n") {
+		if strings.Contains(line, "curl") && strings.Contains(line, "OPENROUTER_API_KEY") && !strings.Contains(line, "key-usage") && !strings.Contains(line, "@$hdr") {
+			t.Errorf("line %d puts the key near a curl command line: %s", i+1, strings.TrimSpace(line))
+		}
+	}
+	wf := readCompatWorkflow(t)
+	for _, want := range []string{"compare-opencode", "install \"$name\" --yes", "opencode) pkg=@opencode/cli", "OPENCODE_MODEL: ${{ vars.HARNESS_COMPAT_OPENCODE_MODEL }}"} {
+		if !strings.Contains(wf, want) {
+			t.Errorf("workflow lacks %q", want)
+		}
+	}
+}
+
+func TestHarnessCompatCompareOpenCodeChecksTheCandidateVersion(t *testing.T) {
+	for _, tool := range []string{"jq", "python3", "lsof"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			t.Skip(tool + " not on PATH")
+		}
+	}
+	bin, home := t.TempDir(), t.TempDir()
+	fake := "#!/bin/sh\ncase \"$1\" in --version) echo 'opencode v2.4.0' ;; esac\n"
+	if err := os.WriteFile(filepath.Join(bin, "opencode"), []byte(fake), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(filepath.Join(releaseRepoRoot(t), "scripts", "harness-compat.sh"), "compare-opencode", home, "2.4.1")
+	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	out, err := cmd.CombinedOutput()
+	if err == nil || !strings.Contains(string(out), "candidate") {
+		t.Fatalf("a different opencode on PATH must fail with the candidate named: %v\n%s", err, out)
+	}
+}
+
+func TestHarnessCompatOpenCodeLegKeepsAnExistingConfig(t *testing.T) {
+	home := t.TempDir()
+	cfg := filepath.Join(home, ".config", "opencode", "opencode.json")
+	if err := os.MkdirAll(filepath.Dir(cfg), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cfg, []byte("sentinel"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(filepath.Join(releaseRepoRoot(t), "scripts", "harness-compat-live.sh"), "leg", "opencode-linux", home)
+	cmd.Env = append(os.Environ(), "OPENROUTER_API_KEY=k", "OPENCODE_MODEL=m", "CROSSTALK_BIN=/usr/bin/true", "LIVE_LOGS="+t.TempDir())
+	out, err := cmd.CombinedOutput()
+	if err == nil || !strings.Contains(string(out), "scratch home") {
+		t.Fatalf("an existing opencode.json must stop the leg: %v\n%s", err, out)
+	}
+	if b, _ := os.ReadFile(cfg); string(b) != "sentinel" {
+		t.Errorf("the config was overwritten: %q", b)
+	}
+}
+
+func TestHarnessCompatStageLogsScrubsTheOpenCodeServicePassword(t *testing.T) {
+	raw, dest := t.TempDir(), filepath.Join(t.TempDir(), "out")
+	pw := "svc-pass-xyz"
+	basic := "b3BlbmNvZGU6c3ZjLXBhc3MteHl6"
+	if err := os.WriteFile(filepath.Join(raw, "opencode-service.log"), []byte("start password="+pw+" Authorization: Basic "+basic+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(filepath.Join(releaseRepoRoot(t), "scripts", "harness-compat-live.sh"), "stage-logs", raw, dest)
+	cmd.Env = append(os.Environ(), "OPENROUTER_API_KEY=k-123", "OPENCODE_SERVICE_PASSWORD="+pw)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	got, _ := os.ReadFile(filepath.Join(dest, "opencode-service.log"))
+	if strings.Contains(string(got), pw) || strings.Contains(string(got), basic) {
+		t.Errorf("staged log keeps the service credential: %s", got)
+	}
+}
+
+func TestHarnessCompatOpenCodeServiceMustBeTheLaunchedPid(t *testing.T) {
+	for _, tool := range []string{"jq", "lsof"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			t.Skip(tool + " not on PATH")
+		}
+	}
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	f := filepath.Join(t.TempDir(), "service.json")
+	doc := fmt.Sprintf(`{"url":"http://127.0.0.1:%d","pid":%d,"password":"x"}`, l.Addr().(*net.TCPAddr).Port, os.Getpid())
+	if err := os.WriteFile(f, []byte(doc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	script := filepath.Join(releaseRepoRoot(t), "scripts", "harness-compat-live.sh")
+	if out, err := exec.Command(script, "opencode-service", f, fmt.Sprint(os.Getpid())).CombinedOutput(); err != nil {
+		t.Errorf("launched pid matches: %v\n%s", err, out)
+	}
+	if out, err := exec.Command(script, "opencode-service", f, fmt.Sprint(os.Getpid()+1)).CombinedOutput(); err == nil {
+		t.Errorf("a service this leg did not launch was accepted:\n%s", out)
 	}
 }
