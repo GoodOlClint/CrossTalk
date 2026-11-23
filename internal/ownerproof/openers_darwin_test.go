@@ -162,8 +162,8 @@ func TestOpeners_UnreadableFDOnSystemBinary_ExpectNotCounted(t *testing.T) {
 		{"/usr/libexec/routined", true},
 		{"/System/Library/Frameworks/X.framework/progressd", true},
 		{"/usr/local/bin/evil", false},
+		{"/System/Volumes/Data/private/tmp/evil", false},
 		{"/Users/u/bin/evil", false},
-		{"/usr/libexec/../../tmp/evil", false},
 		{"", false},
 	} {
 		if got := systemBinary(c.exe); got != c.want {
@@ -189,5 +189,20 @@ func TestOpeners_UnreadableFDOnSystemProcess_ExpectSkippedButConfirmedKept(t *te
 	_, unreadable, err = scanAmong(path, []int{sysProc.pid})
 	if err != nil || !slices.Equal(unreadable, []int{sysProc.pid}) {
 		t.Fatalf("unreadable %v err %v, want %d", unreadable, err, sysProc.pid)
+	}
+}
+
+func TestProcessExe_RealProcesses_ExpectKernelPath(t *testing.T) {
+	sleep := exec.Command("/bin/sleep", "30")
+	if err := sleep.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { sleep.Process.Kill(); sleep.Wait() })
+	if got := processExe(sleep.Process.Pid); !systemBinary(got) {
+		t.Fatalf("processExe(sleep) = %q, want a system path", got)
+	}
+	h := startHelper(t, "read", lockFile(t))
+	if got := processExe(h.pid); got == "" || systemBinary(got) {
+		t.Fatalf("processExe(helper) = %q, want a non-system path", got)
 	}
 }

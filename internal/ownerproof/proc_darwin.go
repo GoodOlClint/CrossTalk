@@ -78,6 +78,8 @@ const (
 	// proc_regionwithpathinfo: proc_regioninfo (96 bytes, pri_address at 80,
 	// pri_size at 88) then vnode_info_path, whose vinfo_stat starts at 96.
 	procPIDRegionPathInfo = 8
+	procPIDPathInfo       = 11
+	procPIDPathMax        = 4096
 	regionPathInfoSize    = 1272
 	regionAddrOff         = 80
 	regionSizeOff         = 88
@@ -126,10 +128,11 @@ func userPIDs() ([]int, error) {
 	return pids, nil
 }
 
-// systemBinary reports whether exe is an Apple binary under a SIP-protected
-// root, which a user cannot replace or make hold a lock of its own choosing.
+// systemBinary reports whether exe, a kernel-resolved path, is under a system
+// root. /System/Volumes holds firmlinks into the user's data volume, so it is
+// not a system root.
 func systemBinary(exe string) bool {
-	if exe != filepath.Clean(exe) {
+	if exe != filepath.Clean(exe) || strings.HasPrefix(exe, "/System/Volumes/") {
 		return false
 	}
 	for _, root := range []string{"/System/", "/usr/", "/bin/", "/sbin/"} {
@@ -140,7 +143,16 @@ func systemBinary(exe string) bool {
 	return false
 }
 
-var processExe = func(pid int) string { exe, _, _ := args(pid); return exe }
+// processExe is the kernel's path for pid's executable (proc_pidpath), not the
+// path string the process was started with.
+var processExe = func(pid int) string {
+	buf := make([]byte, procPIDPathMax)
+	if _, err := procInfo(procInfoCallPIDInfo, pid, procPIDPathInfo, 0, buf); err != nil {
+		return ""
+	}
+	path, _, _ := bytes.Cut(buf, []byte{0})
+	return string(path)
+}
 
 func scanAmong(path string, pids []int) (confirmed, unreadable []int, err error) {
 	var st unix.Stat_t

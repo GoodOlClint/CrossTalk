@@ -81,7 +81,7 @@ func LockHeld(path string) (bool, error) { return lockHeld(path) }
 // an error. On macOS a single fd that fails with EBADF (closed mid-walk) or
 // ENOENT (revoked) is skipped; one that fails with EPERM (denied) makes the
 // process a counted opener unless its executable is an Apple binary under
-// /System, /usr (not /usr/local), /bin or /sbin.
+// /System (not /System/Volumes), /usr (not /usr/local), /bin or /sbin.
 func Openers(path string) ([]int, error) {
 	pids, err := userPIDs()
 	if err != nil {
@@ -119,5 +119,10 @@ func OpenersSplit(path string) (confirmed, unreadable []int, err error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	return scanAmong(path, pids)
+}
+
+// OpenersAmongSplit is OpenersSplit over the given pids only.
+func OpenersAmongSplit(path string, pids []int) (confirmed, unreadable []int, err error) {
 	return scanAmong(path, pids)
 }
