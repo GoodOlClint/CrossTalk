@@ -88,7 +88,7 @@ func TestServeClaims_PinnedNameHeldAgainstRealServer(t *testing.T) {
 		time.Sleep(time.Millisecond)
 	}
 	before := reg.n.Load()
-	for l1 := dir.n.Load(); dir.n.Load() < l1+30; {
+	for l1 := dir.n.Load(); dir.n.Load() < l1+31; {
 		if time.Now().After(deadline) {
 			t.Fatal("ServeClaims stopped polling")
 		}
