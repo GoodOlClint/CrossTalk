@@ -30,6 +30,7 @@ type Descriptor struct {
 	StartedAt        time.Time         `json:"started_at"`
 	Protocol         int               `json:"protocol"`
 	Inboxes          []InboxMembership `json:"inboxes,omitempty"`
+	DeliveryMode     string            `json:"delivery_mode,omitempty"`
 }
 
 type InboxMembership struct {

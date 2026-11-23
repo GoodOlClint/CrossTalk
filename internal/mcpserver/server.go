@@ -150,6 +150,7 @@ func (s *Server) Run(ctx context.Context, t mcp.Transport, opts ...RunOption) er
 				return
 			case <-tick.C:
 				s.RetireSuperseded()
+				s.syncDeliveryModes(wctx)
 			}
 		}
 	}()
@@ -1093,5 +1094,35 @@ func (s *Server) retireLost(a *Agent) {
 	s.mu.Unlock()
 	if mine {
 		s.retire(a, "ingress lost")
+	}
+}
+
+// syncDeliveryModes copies each ready agent's delivery mode from this shim's
+// own Discover into its descriptor, so other sessions' listings show it and
+// a mode that stopped being true is cleared.
+func (s *Server) syncDeliveryModes(ctx context.Context) {
+	s.mu.Lock()
+	ready := make([]*Agent, 0, len(s.agents))
+	for _, a := range s.agents {
+		if a.isReady() {
+			ready = append(ready, a)
+		}
+	}
+	s.mu.Unlock()
+	if len(ready) == 0 {
+		return
+	}
+	sessions, err := s.backend.Discover(ctx)
+	if err != nil {
+		return
+	}
+	for _, a := range ready {
+		mode := ""
+		for _, ss := range sessions {
+			if string(ss.Harness) == string(a.harness) && ss.SessionRef == a.sessionRef && ss.DeliveryMode != "" {
+				mode = ss.DeliveryMode
+			}
+		}
+		_ = a.reg.SetDeliveryMode(mode)
 	}
 }

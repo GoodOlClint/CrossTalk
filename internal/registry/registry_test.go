@@ -504,3 +504,21 @@ func TestRenameAfterReleaseNameRefused(t *testing.T) {
 		t.Errorf("name m still locked: %q", other.Name())
 	}
 }
+
+func TestDescriptorWithoutDeliveryModeReadsAndModeRoundTrips(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "a1.json")
+	if err := os.WriteFile(path, []byte(`{"agent_id":"a1","name":"n","harness":"codex","role":"primary","protocol":1}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	d, err := readDescriptor(path)
+	if err != nil || d.AgentID != "a1" || d.DeliveryMode != "" {
+		t.Fatalf("read %+v, %v", d, err)
+	}
+	d.DeliveryMode = "queue-wake (experimental)"
+	if err := writeAtomic(path, d); err != nil {
+		t.Fatal(err)
+	}
+	if d, err = readDescriptor(path); err != nil || d.DeliveryMode != "queue-wake (experimental)" {
+		t.Fatalf("round trip %+v, %v", d, err)
+	}
+}

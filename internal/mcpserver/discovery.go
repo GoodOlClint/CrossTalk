@@ -150,6 +150,9 @@ func (s *Server) listAgents(ctx context.Context) ([]Row, []string) {
 		if r.Cwd == "" {
 			r.Cwd = d.Cwd
 		}
+		if r.DeliveryMode == "" {
+			r.DeliveryMode = d.DeliveryMode
+		}
 	}
 
 	s.addInboxes(rows, ds)
