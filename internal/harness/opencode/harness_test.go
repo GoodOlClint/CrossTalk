@@ -446,6 +446,7 @@ func TestSupersededFalseOnEveryError(t *testing.T) {
 func TestSupersededServiceReplaced(t *testing.T) {
 	r := newRig(t, "2.4.0", nil)
 	writeSvc(t, filepath.Dir(r.path), r.f.srv.URL, "2.4.0", 5151)
+	setOwner(t, owners(5151))
 	if r.h.Superseded(sess("ses_deleted", 4242)) {
 		t.Error("descriptor of the old service pid superseded by the new service's 404")
 	}

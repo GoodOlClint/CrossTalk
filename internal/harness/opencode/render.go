@@ -2,6 +2,7 @@ package opencode
 
 import (
 	"encoding/json"
+	"strings"
 
 	"github.com/GoodOlClint/crosstalk/internal/harness"
 	"github.com/GoodOlClint/crosstalk/internal/msg"
@@ -33,7 +34,7 @@ func RenderIn(m msg.Message, verifiedSender bool, fromHarness, fromAgentID, inbo
 		Parts     []msg.Part `json:"parts"`
 	}{msg.PeerNotice(class, fromHarness), m.From, fromHarness, fromAgentID, verifiedSender, m.MessageID, m.InReplyTo, kind, inbox, inboxCopy, m.Parts}
 	out, _ := json.Marshal(data)
-	return Preamble + "\n" + string(out)
+	return Preamble + "\n" + strings.ReplaceAll(string(out), "\u0085", `\u0085`)
 }
 
 func (h *Harness) Render(m msg.Message, from harness.Identity) any {

@@ -97,3 +97,14 @@ func TestRenderPreambleIsFixed(t *testing.T) {
 		t.Fatalf("preamble %q", Preamble)
 	}
 }
+
+func TestRenderEscapesNEL(t *testing.T) {
+	text := "a\u0085b c"
+	out := RenderIn(msg.Message{MessageID: "m", Parts: []msg.Part{{Type: "text", Text: text}}}, true, "claude", "", "", false, msg.NoticeTeammate)
+	if strings.ContainsRune(out, '\u0085') || strings.ContainsRune(out, ' ') {
+		t.Fatalf("raw line separator in %q", out)
+	}
+	if e := parseRendered(t, out); e.Parts[0].Text != text {
+		t.Fatalf("round trip %q, want %q", e.Parts[0].Text, text)
+	}
+}
