@@ -198,6 +198,7 @@ func TestPairExpired(t *testing.T) {
 	x, c := p.open()
 	pending, peers := p.files()
 	p.clk.Advance(10 * time.Minute)
+	c.Transport.(*http.Transport).CloseIdleConnections()
 	if st, _ := p.post(c, p.good(x.Fingerprint, "beta")); st != http.StatusGone {
 		t.Fatalf("redeem at the expiry instant: %d, want 410", st)
 	}
@@ -206,6 +207,7 @@ func TestPairExpired(t *testing.T) {
 	q := startPairGateway(t, nil)
 	y, d := q.open()
 	q.clk.Advance(10*time.Minute - time.Nanosecond)
+	d.Transport.(*http.Transport).CloseIdleConnections()
 	if st, body := q.post(d, q.good(y.Fingerprint, "beta")); st != http.StatusOK {
 		t.Fatalf("redeem one nanosecond before expiry: %d %s, want 200", st, body)
 	}

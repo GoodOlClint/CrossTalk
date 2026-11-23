@@ -810,6 +810,7 @@ func TestAdmission(t *testing.T) {
 	if _, err := send(t, cl, ctx, textMsg("q2", map[string]any{"kind": "ask"}), true); !errors.Is(err, sdk.ErrServerError) {
 		t.Fatalf("second open ask: %v", err)
 	}
+	waitFor(t, "q1 injected", func() bool { return len(e.fake.Writes()) == 1 })
 	entered := make(chan struct{}, 1)
 	e.fake.ScriptInject(adapter.Outcome{State: adapter.Unknown, Entered: entered})
 	wctx, cancel := context.WithCancel(ctx)
