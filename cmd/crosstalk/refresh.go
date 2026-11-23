@@ -88,6 +88,9 @@ type ingressPauser interface{ PauseIngress() (unpause func()) }
 // again is retired, which waits for its running calls, and those may need the
 // gate, while a fresh call from stdin could outlast that wait.
 func quiesceForExec(ctx context.Context, sh ingressPauser, conn *mcpserver.Conn) (func(), error) {
+	if followUpAttempts.Load() > 0 {
+		return nil, refresh.ErrBusy
+	}
 	if !quiesce.Pause() {
 		return nil, errors.New("refresh: a pause is already in progress")
 	}

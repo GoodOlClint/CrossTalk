@@ -311,3 +311,36 @@ func TestRefreshExecFailedGivesNotice(t *testing.T) {
 		t.Fatalf("%+v, gave up %d: want one exec and one give-up", r, gaveUp)
 	}
 }
+
+// ErrBusy from Quiesce defers the tick without using up the bounded tries.
+func TestRefreshBusyDoesNotCountAsFailedTry(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "crosstalk")
+	os.WriteFile(bin, []byte("v1"), 0o755)
+	id, _ := mcpserver.IdentityOf(bin)
+	os.Link(bin, bin+".was-v1")
+	os.WriteFile(bin+".n", []byte("v2"), 0o755)
+	os.Rename(bin+".n", bin)
+	var r rec
+	w := r.watcher(bin, id, mcpserver.IdentityOf)
+	w.QuiesceTries = 2
+	busy := true
+	quiet := w.Quiesce
+	w.Quiesce = func(ctx context.Context) (func(), error) {
+		if busy {
+			r.quiesces++
+			return nil, ErrBusy
+		}
+		return quiet(ctx)
+	}
+	var gaveUp int
+	w.GaveUp = func(string, string) { gaveUp++ }
+	for range 5 {
+		w.Tick(context.Background())
+	}
+	busy = false
+	w.Tick(context.Background())
+	if gaveUp != 0 || r.execs != 1 {
+		t.Fatalf("gave up %d times, execs %d: want a busy tick uncounted and an exec once quiet", gaveUp, r.execs)
+	}
+}

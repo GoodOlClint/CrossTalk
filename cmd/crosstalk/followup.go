@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"strconv"
+	"sync/atomic"
 	"time"
 
 	"github.com/GoodOlClint/crosstalk/internal/harness"
@@ -159,13 +160,26 @@ func followUpTargets(env harness.InstallEnv, hs []harness.Harness, cfgDir string
 	return ts
 }
 
+// followUpAttempts counts the follow-up attempts running now; a refresh tick
+// does not pause stdin for them (ADR 0030).
+var followUpAttempts atomic.Int32
+
+func enterAttempt(ctx context.Context) (func(), bool) {
+	leave, ok := quiesce.Hold(ctx)
+	if !ok {
+		return nil, false
+	}
+	followUpAttempts.Add(1)
+	return func() { followUpAttempts.Add(-1); leave() }, true
+}
+
 func followUpRunner(env harness.InstallEnv, hs []harness.Harness, cfgDir string, notice func(string)) *upgrade.Runner {
 	return &upgrade.Runner{
 		StateDir: env.StateDir, Version: env.Version, Notice: notice,
 		Targets:  followUpTargets(env, hs, cfgDir),
 		Interval: followUpInterval, Bound: followUpBound,
 		TargetTimeout: followUpStepTimeout,
-		Enter:         quiesce.Hold,
+		Enter:         enterAttempt,
 	}
 }
 

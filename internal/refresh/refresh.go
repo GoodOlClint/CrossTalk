@@ -22,6 +22,10 @@ import (
 // tried again on the next tick.
 var ErrExecFailed = errors.New("refresh: exec failed")
 
+// ErrBusy from Quiesce: long background work is running; the tick ends without
+// counting a failed try, and the next tick tries again.
+var ErrBusy = errors.New("refresh: background work is running")
+
 // OffEnv set to anything but "" or "0" turns refresh off.
 const OffEnv = "CROSSTALK_NO_AUTO_REFRESH"
 
@@ -140,6 +144,9 @@ func (w *Watcher) Tick(ctx context.Context) {
 	qctx, cancel := context.WithTimeout(ctx, orDefault(w.QuiesceCap, DefaultQuiesceCap))
 	undo, err := w.Quiesce(qctx)
 	cancel()
+	if errors.Is(err, ErrBusy) {
+		return
+	}
 	if err != nil {
 		if !w.failed(cur, err) {
 			w.log().Info("refresh: not quiescent; trying again later", "err", err)
