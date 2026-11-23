@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"io/fs"
@@ -12,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/GoodOlClint/crosstalk/internal/adapter"
 	"github.com/GoodOlClint/crosstalk/internal/harness"
 	"github.com/GoodOlClint/crosstalk/internal/refresh"
 )
@@ -376,5 +378,52 @@ func TestParseInstallNoAutoRefresh(t *testing.T) {
 func TestHarnessOffEnvMatchesRefresh(t *testing.T) {
 	if harness.OffEnv != refresh.OffEnv {
 		t.Errorf("harness.OffEnv %q, refresh.OffEnv %q", harness.OffEnv, refresh.OffEnv)
+	}
+}
+
+type fakeInstallHarness struct{ harness.Harness }
+
+func (fakeInstallHarness) Name() adapter.Harness { return "fake" }
+func (fakeInstallHarness) Found() bool           { return false }
+func (fakeInstallHarness) InstallSteps(harness.InstallEnv) []harness.Step {
+	return nil
+}
+func (fakeInstallHarness) UninstallSteps(harness.InstallEnv) []harness.Step { return nil }
+func (fakeInstallHarness) Checks(context.Context, harness.InstallEnv) []harness.CheckResult {
+	return nil
+}
+func (fakeInstallHarness) Registered(harness.InstallEnv) (bool, error) { return false, nil }
+func (fakeInstallHarness) SetUp(harness.InstallEnv) (bool, error)      { return false, nil }
+
+func TestInstallNamesComeFromRegisteredHarnesses(t *testing.T) {
+	installSandbox(t)
+	old := installHarnesses
+	installHarnesses = func(dir string) ([]harness.Harness, error) {
+		hs, err := old(dir)
+		return append(hs, fakeInstallHarness{}), err
+	}
+	t.Cleanup(func() { installHarnesses = old })
+
+	code, out := installRunCmd(t, "install", "--no-such-flag")
+	if code != 2 || !strings.Contains(out, "[claude|codex|fake]") {
+		t.Errorf("usage does not list fake: exit %d\n%s", code, out)
+	}
+	if code, out := installRunCmd(t, "install", "fake", "--yes"); code != 1 || !strings.Contains(out, "fake: not found on PATH") {
+		t.Errorf("install fake: exit %d, want 1 and a not-found line\n%s", code, out)
+	}
+	if code, out := installRunCmd(t, "install", "bogus", "--yes"); code != 2 || !strings.Contains(out, `unknown harness "bogus"`) || !strings.Contains(out, "[claude|codex|fake]") {
+		t.Errorf("install bogus: exit %d\n%s", code, out)
+	}
+	code, out = installRunCmd(t, "install", "--yes")
+	if code != 1 || !strings.Contains(out, "neither claude, codex nor fake is on PATH") {
+		t.Errorf("no-PATH message does not name fake: exit %d\n%s", code, out)
+	}
+}
+
+func TestInstallNoPathMessageTwoHarnesses(t *testing.T) {
+	installSandbox(t)
+	code, out := installRunCmd(t, "install", "--yes")
+	if code != 1 || !strings.Contains(out, "crosstalk: neither claude nor codex is on PATH") {
+		t.Errorf("exit %d\n%s", code, out)
 	}
 }
