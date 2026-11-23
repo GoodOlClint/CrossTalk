@@ -88,7 +88,7 @@ func TestImportDeliveredIsIdempotent(t *testing.T) {
 		t.Fatalf("two imports wrote %d records, want 2", len(rs))
 	}
 
-	if !e.r.CloseRoute(id) {
+	if !e.closeRoute(id) {
 		t.Fatal("route not open")
 	}
 	if err := e.r.ImportDelivered(d); err != nil {

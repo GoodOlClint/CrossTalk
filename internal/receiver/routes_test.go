@@ -14,12 +14,22 @@ import (
 type clock struct {
 	mu sync.Mutex
 	t  time.Time
+	// step advances t after each reading.
+	step time.Duration
 }
 
 func (c *clock) now() time.Time {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.t
+	t := c.t
+	c.t = c.t.Add(c.step)
+	return t
+}
+
+func (c *clock) setStep(d time.Duration) {
+	c.mu.Lock()
+	c.step = d
+	c.mu.Unlock()
 }
 
 func (c *clock) advance(d time.Duration) {
@@ -72,7 +82,7 @@ func TestInformRouteExpiresAfterTTL(t *testing.T) {
 	if !routeClosed(t, e, old.MessageID) {
 		t.Fatal("expired inform route not journaled closed")
 	}
-	if e.r.RouteOpen(old.MessageID) || e.r.CloseRoute(old.MessageID) {
+	if e.r.RouteOpen(old.MessageID) || e.closeRoute(old.MessageID) {
 		t.Fatal("expired inform route still open")
 	}
 	if !e.r.RouteOpen(ask.MessageID) {

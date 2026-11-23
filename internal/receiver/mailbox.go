@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"time"
 
 	"github.com/GoodOlClint/crosstalk/internal/adapter"
 	"github.com/GoodOlClint/crosstalk/internal/journal"
@@ -191,12 +192,16 @@ func (r *Receiver) pull(after string, limit int) ([]Entry, bool, error) {
 	_, idx := dedupeEntries(rs)
 	outs := map[string]*outboundState{}
 	routes := map[string]journal.Record{}
+	opened := map[string]time.Time{}
 	var order []mailKey
 	seen := map[dedupeKey]bool{}
 	for _, rec := range rs {
 		switch rec.Type {
 		case journal.TypeRoute:
 			routes[rec.MessageID] = rec
+			if rec.State == journal.StateOpen {
+				opened[rec.MessageID] = rec.At
+			}
 		case journal.TypeDedupe:
 			if k := (dedupeKey{rec.Sender, rec.MessageID}); !seen[k] {
 				seen[k] = true
@@ -300,7 +305,7 @@ func (r *Receiver) pull(after string, limit int) ([]Entry, bool, error) {
 		if out[i].PossiblySeen {
 			next = journal.StateConfirmed
 		} else if rt, ok := routes[out[i].MessageID]; ok && msg.Kind(rt.Kind) != msg.Ask && idx[keys[i]].binding.SameConversation(cur) {
-			if err := r.restartRoute(rt); err != nil {
+			if err := r.restartRoute(rt, opened[rt.MessageID]); err != nil {
 				if i == 0 {
 					return nil, false, err
 				}
@@ -319,10 +324,11 @@ func (r *Receiver) pull(after string, limit int) ([]Entry, bool, error) {
 }
 
 // restartRoute reopens the reply route a pulled inform's journal record names,
-// with OpenedAt now. The old route stays in place until the new open record is
-// durable, and the append runs under r.mu so a concurrent sweep's close cannot
-// land after it.
-func (r *Receiver) restartRoute(rec journal.Record) error {
+// with OpenedAt now, unless it was closed within one TTL of openedAt, which
+// only a reply or a failed injection does. The old route stays in place until
+// the new open record is durable, and the check and append run under r.mu, as
+// every route close does.
+func (r *Receiver) restartRoute(rec journal.Record, openedAt time.Time) error {
 	r.sweep()
 	at := r.now().UTC()
 	rt := route{Session: rec.Session, MessageID: rec.MessageID, Sender: rec.Sender, Name: rec.To, Kind: msg.Kind(rec.Kind), OpenedAt: at}
@@ -330,6 +336,9 @@ func (r *Receiver) restartRoute(rec journal.Record) error {
 	open.At = at
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if l, ok := r.j.Latest(open); ok && l.State == journal.StateClosed && !l.At.After(openedAt.Add(InformRouteTTL)) {
+		return nil
+	}
 	if err := r.j.Append(open); err != nil {
 		return err
 	}
@@ -386,7 +395,7 @@ func (r *Receiver) Recover(rp journal.Replay) error {
 				r.mu.Unlock()
 				continue
 			}
-			errs = append(errs, r.j.Append(journal.Record{Type: journal.TypeRoute, Session: u.Session, MessageID: u.MessageID, Sender: u.Sender, To: u.To, Kind: u.Kind, State: journal.StateClosed}))
+			errs = append(errs, r.j.Append(journal.Record{Type: journal.TypeRoute, At: r.now().UTC(), Session: u.Session, MessageID: u.MessageID, Sender: u.Sender, To: u.To, Kind: u.Kind, State: journal.StateClosed}))
 		case u.Type == journal.TypeDedupe && u.State == journal.StateSubmitted:
 			if l, claimed := r.j.DispatchStateFor(scopeOfKey(u.Sender), u.MessageID); claimed {
 				if l.Type == journal.TypeOutcome && l.State == journal.StateMailboxed {

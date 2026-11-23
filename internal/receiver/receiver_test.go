@@ -480,7 +480,7 @@ func TestNativeReplyBounce(t *testing.T) {
 	if w[1].Message.From != "crosstalk" || w[1].Delivery.Target != selfBinding || !w[1].Delivery.VerifiedSender {
 		t.Fatalf("bounce %+v", w[1])
 	}
-	if !e.r.CloseRoute(m.MessageID) {
+	if !e.closeRoute(m.MessageID) {
 		t.Fatal("bounce closed the route")
 	}
 	e.native(ownSession, "no routes")
@@ -516,7 +516,7 @@ func TestCloseRouteLeavesOnlyOutstandingDelivery(t *testing.T) {
 	a1, a2 := newMsg(msg.Ask, "q1"), newMsg(msg.Ask, "q2")
 	e.recv(A2A, alice, a1)
 	e.recv(A2A, alice, a2)
-	if !e.r.CloseRoute(a1.MessageID) || e.r.CloseRoute(a1.MessageID) {
+	if !e.closeRoute(a1.MessageID) || e.closeRoute(a1.MessageID) {
 		t.Fatal("CloseRoute should report true once")
 	}
 	e.native(ownSession, "answer")
