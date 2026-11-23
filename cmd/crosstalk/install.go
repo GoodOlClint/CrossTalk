@@ -26,15 +26,56 @@ import (
 	"github.com/GoodOlClint/crosstalk/internal/upgrade"
 )
 
-const installUsage = `usage: crosstalk install   [claude|codex] [--yes] [--path] [--bin-dir DIR] [--skip-rule-port] [--no-auto-refresh] [--check] [--codex-no-daemon-queue] [--remote --bind ADDR [--port N] [--alias NAME]]
-       crosstalk uninstall [claude|codex] [--yes] [--purge] [--bin-dir DIR]
-       crosstalk reinstall [claude|codex] [--yes] [--path] [--bin-dir DIR] [--skip-rule-port] [--no-auto-refresh] [--codex-no-daemon-queue] [--remote --bind ADDR [--port N] [--alias NAME]]
+// installHarnesses builds the harness list install runs against; a test swaps it.
+var installHarnesses = harnesses
+
+const installUsageFmt = `usage: crosstalk install   [%[1]s] [--yes] [--path] [--bin-dir DIR] [--skip-rule-port] [--no-auto-refresh] [--check] [--codex-no-daemon-queue] [--remote --bind ADDR [--port N] [--alias NAME]]
+       crosstalk uninstall [%[1]s] [--yes] [--purge] [--bin-dir DIR]
+       crosstalk reinstall [%[1]s] [--yes] [--path] [--bin-dir DIR] [--skip-rule-port] [--no-auto-refresh] [--codex-no-daemon-queue] [--remote --bind ADDR [--port N] [--alias NAME]]
 
   --no-auto-refresh        write CROSSTALK_NO_AUTO_REFRESH=1 into each registration: a running shim then never re-execs itself
                            when its binary is replaced (restart it by hand)
   --codex-no-daemon-queue  EXPERIMENTAL, Codex only, macOS only, off unless given: wake an idle codex --no-daemon session
                            through Codex's local queue when a message arrives; each wake is a paid model turn
 `
+
+// installNames returns the sorted names of the harnesses that implement harness.Installer.
+func installNames(hs []harness.Harness) []string {
+	var names []string
+	for _, h := range hs {
+		if _, ok := h.(harness.Installer); ok {
+			names = append(names, string(h.Name()))
+		}
+	}
+	slices.Sort(names)
+	return names
+}
+
+// nor joins names as "a, b nor c".
+func nor(names []string) string {
+	if len(names) < 2 {
+		return strings.Join(names, "")
+	}
+	return strings.Join(names[:len(names)-1], ", ") + " nor " + names[len(names)-1]
+}
+
+func installUsage(names []string) string {
+	return fmt.Sprintf(installUsageFmt, strings.Join(names, "|"))
+}
+
+// usageNames is the name list for argument errors, printed before the
+// harnesses are otherwise built; ok is false when they cannot be built.
+func usageNames() (names []string, ok bool) {
+	dir, err := registry.DefaultDir()
+	if err != nil {
+		return nil, false
+	}
+	hs, err := installHarnesses(dir)
+	if err != nil {
+		return nil, false
+	}
+	return installNames(hs), true
+}
 
 type installOpts struct {
 	mode                                       string
@@ -76,9 +117,6 @@ func parseInstallArgs(mode string, args []string) (installOpts, error) {
 			break
 		}
 		n := fs.Arg(0)
-		if n != "claude" && n != "codex" {
-			return o, fmt.Errorf("unknown harness %q", n)
-		}
 		o.names = append(o.names, n)
 		args = fs.Args()[1:]
 	}
@@ -129,8 +167,17 @@ type installTarget struct {
 // terminal a person can answer prompts on.
 func runInstall(mode string, args []string, in io.Reader, tty bool, stdout, stderr io.Writer) int {
 	o, err := parseInstallArgs(mode, args)
+	known, ok := usageNames()
+	if ok {
+		for _, n := range o.names {
+			if !slices.Contains(known, n) {
+				fmt.Fprintf(stderr, "crosstalk %s: unknown harness %q\n%s", mode, n, installUsage(known))
+				return 2
+			}
+		}
+	}
 	if err != nil {
-		fmt.Fprintf(stderr, "crosstalk %s: %v\n%s", mode, err, installUsage)
+		fmt.Fprintf(stderr, "crosstalk %s: %v\n%s", mode, err, installUsage(known))
 		return 2
 	}
 	home, err := os.UserHomeDir()
@@ -164,11 +211,12 @@ func runInstall(mode string, args []string, in io.Reader, tty bool, stdout, stde
 		fmt.Fprintf(stderr, "crosstalk %s: %v\n", mode, err)
 		return 1
 	}
-	hs, err := harnesses(stateDir)
+	hs, err := installHarnesses(stateDir)
 	if err != nil {
 		fmt.Fprintf(stderr, "crosstalk %s: %v\n", mode, err)
 		return 1
 	}
+	known = installNames(hs)
 	var all, targets []installTarget
 	for _, h := range hs {
 		if i, ok := h.(harness.Installer); ok {
@@ -190,7 +238,7 @@ func runInstall(mode string, args []string, in io.Reader, tty bool, stdout, stde
 		}
 	}
 	if len(targets) == 0 {
-		fmt.Fprintln(stderr, "crosstalk: neither claude nor codex is on PATH")
+		fmt.Fprintf(stderr, "crosstalk: neither %s is on PATH\n", nor(known))
 		return 1
 	}
 	env := harness.InstallEnv{
