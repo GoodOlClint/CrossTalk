@@ -46,6 +46,22 @@ Item 5, TUI 2 after an API prompt and a prompt typed in TUI 1 (draft untouched):
 ┃  draft in t2 not submitted
 ```
 
+## M4: install mechanics
+
+Run 2026-11-23 with OpenCode 2.4.1 under a scratch `HOME` and `XDG_*` directories (`OPENCODE_DISABLE_AUTOUPDATE=1`, `OPENCODE_DISABLE_MODELS_FETCH=1`, `OPENCODE_DISABLE_CLAUDE_CODE=1`); no model, no operator config.
+
+- `opencode mcp add crosstalk --global -- /abs/crosstalk mcp` on an `opencode.json` with a `//` comment and a `/* */` comment and a trailing comma keeps every comment and the trailing comma, and appends `mcp.servers.crosstalk = {"type":"local","command":["/abs/crosstalk","mcp"]}` (reformatted with two-space indent for the new block only).
+- `--env KEY=VALUE` exists on `mcp add` and writes `"environment": {"KEY":"VALUE"}` in the same entry, so `CROSSTALK_NO_AUTO_REFRESH=1` needs no second edit.
+- A second add of the same name replaces the entry (rc 0), so the CLI is idempotent but not a no-op; CrossTalk therefore checks first and skips the add when the entry is already right.
+- With no config file it creates `opencode.json` containing only the `mcp` block. With only `opencode.jsonc` it edits that file; with both `opencode.json` and `opencode.jsonc` it edits `opencode.json` and leaves the other.
+- A v1-shaped entry `mcp.crosstalk` is not touched: the add puts `mcp.servers.crosstalk` beside it, which is the K2 both-shapes failure, so install checks for it before the add.
+- `"mcp": {"servers": "nope"}` makes the CLI exit 1 ("Can not add index to parent of type string") and leave the file as it was.
+- `opencode mcp list` printed "No MCP servers configured" after an add, so it is not what `Registered` or K2 read; they read the config files.
+
+Choice (D8): add through the CLI with `--env`, after CrossTalk has parsed the file, refused a conflicting entry and checked that `mcp.servers` is an object; then re-read the file and, if the entry is not exactly the installed command and environment, restore the bytes taken before the run. Uninstall edits the JSON text itself, only when the file has no comments.
+
+M3 (does v2 prompt for CrossTalk's MCP tools) needs a model and was not run. The published config schema (`https://opencode.ai/config.json`) names permission keys for built-in tools and takes any other key as a rule, and states no default for MCP tools, so the default cannot be read offline. Install adds no allow rule and no K4; M3 stays open for slice 9.
+
 ## Defects for the coordinator
 
 Listed, not fixed here.

@@ -30,6 +30,9 @@ func installFake(name string, args []string) int {
 	if name == "claude" {
 		return installFakeClaude(home, args)
 	}
+	if name == "opencode" {
+		return installFakeOpenCode(home, args)
+	}
 	return installFakeCodex(args)
 }
 
@@ -180,6 +183,48 @@ func installFakeCodex(args []string) int {
 	default:
 		fmt.Fprintln(os.Stderr, "fake codex: unhandled", a)
 		return 2
+	}
+	return 0
+}
+
+// installFakeOpenCode emulates opencode --version and opencode mcp add
+// --global as the real 2.4.1 CLI behaves (spike 22, M4): it splices the
+// entry into the config and leaves comments alone.
+func installFakeOpenCode(home string, args []string) int {
+	if len(args) == 1 && args[0] == "--version" {
+		fmt.Println("opencode v2.4.1")
+		return 0
+	}
+	if len(args) < 6 || strings.Join(args[:4], " ") != "mcp add crosstalk --global" {
+		fmt.Fprintln(os.Stderr, "fake opencode: unhandled", strings.Join(args, " "))
+		return 2
+	}
+	rest := args[4:]
+	env := map[string]string{}
+	for len(rest) >= 2 && rest[0] == "--env" {
+		k, v, _ := strings.Cut(rest[1], "=")
+		env[k] = v
+		rest = rest[2:]
+	}
+	if len(rest) < 2 || rest[0] != "--" {
+		return 2
+	}
+	ent := map[string]any{"type": "local", "command": rest[1:]}
+	if len(env) > 0 {
+		ent["environment"] = env
+	}
+	b, _ := json.Marshal(map[string]any{"servers": map[string]any{"crosstalk": ent}})
+	block := `"mcp": ` + string(b)
+	path := filepath.Join(home, ".config", "opencode", "opencode.json")
+	out := "{" + block + "}\n"
+	if cur, err := os.ReadFile(path); err == nil {
+		s := string(cur)
+		i := strings.LastIndex(s, "}")
+		out = s[:i] + "  " + block + "\n" + s[i:]
+	}
+	os.MkdirAll(filepath.Dir(path), 0o755)
+	if err := os.WriteFile(path, []byte(out), 0o644); err != nil {
+		return 1
 	}
 	return 0
 }

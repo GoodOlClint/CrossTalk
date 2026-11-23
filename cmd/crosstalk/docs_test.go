@@ -193,3 +193,17 @@ func TestFAQCoversAutoRefresh(t *testing.T) {
 		}
 	}
 }
+
+func TestDocsSetupNamesOpenCodeInstallChecks(t *testing.T) {
+	doc := repoFile(t, "docs/setup.md")
+	for _, want := range []string{
+		"`claude`, `codex` and `opencode`", "crosstalk install opencode", "K13", "K2, K5 and K6",
+		"Supported OpenCode versions", "2.4", "1.x", "ADR 0032", "Kilo",
+		"`immediate`", "`next_turn`", "stored without a model turn", "paid model turn",
+		"restart the OpenCode service", "refuses to rewrite a config that has comments",
+	} {
+		if !strings.Contains(doc, want) {
+			t.Errorf("setup.md lacks %q", want)
+		}
+	}
+}
