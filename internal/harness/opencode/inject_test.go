@@ -143,8 +143,8 @@ func TestInjectFailureStates(t *testing.T) {
 		want  adapter.State
 		posts int
 	}{
-		{"401", func(_ *testing.T, r *rig, _ *adapter.Delivery) { r.svc.set(func(s *service) { s.prompt.Status = 401 }) }, adapter.Unreachable, 1},
-		{"404", func(_ *testing.T, r *rig, _ *adapter.Delivery) { r.svc.set(func(s *service) { s.prompt.Status = 404 }) }, adapter.Unreachable, 1},
+		{"401", func(_ *testing.T, r *rig, _ *adapter.Delivery) { r.svc.Set(func(s *service) { s.Prompt.Status = 401 }) }, adapter.Unreachable, 1},
+		{"404", func(_ *testing.T, r *rig, _ *adapter.Delivery) { r.svc.Set(func(s *service) { s.Prompt.Status = 404 }) }, adapter.Unreachable, 1},
 		{"refused connection", func(t *testing.T, r *rig, d *adapter.Delivery) {
 			u := refusedURL(t)
 			r.h = NewHarness(Options{ServicePath: writeSvc(t, t.TempDir(), u, "2.4.0", 4242)})
@@ -158,36 +158,36 @@ func TestInjectFailureStates(t *testing.T) {
 		}, adapter.Unreachable, 0},
 		{"origin differs from binding", func(_ *testing.T, _ *rig, d *adapter.Delivery) { d.Target.HarnessEndpoint = "http://127.0.0.1:1" }, adapter.Unreachable, 0},
 		{"bad session id", func(_ *testing.T, _ *rig, d *adapter.Delivery) { d.Target.SessionRef = "ses_../x" }, adapter.Unreachable, 0},
-		{"500 after send", func(_ *testing.T, r *rig, _ *adapter.Delivery) { r.svc.set(func(s *service) { s.prompt.Status = 500 }) }, adapter.Unknown, 1},
-		{"503 after send", func(_ *testing.T, r *rig, _ *adapter.Delivery) { r.svc.set(func(s *service) { s.prompt.Status = 503 }) }, adapter.Unknown, 1},
-		{"dropped response", func(_ *testing.T, r *rig, _ *adapter.Delivery) { r.svc.set(func(s *service) { s.prompt.Drop = true }) }, adapter.Unknown, 1},
+		{"500 after send", func(_ *testing.T, r *rig, _ *adapter.Delivery) { r.svc.Set(func(s *service) { s.Prompt.Status = 500 }) }, adapter.Unknown, 1},
+		{"503 after send", func(_ *testing.T, r *rig, _ *adapter.Delivery) { r.svc.Set(func(s *service) { s.Prompt.Status = 503 }) }, adapter.Unknown, 1},
+		{"dropped response", func(_ *testing.T, r *rig, _ *adapter.Delivery) { r.svc.Set(func(s *service) { s.Prompt.Drop = true }) }, adapter.Unknown, 1},
 		{"success names another session", func(_ *testing.T, r *rig, _ *adapter.Delivery) {
-			r.svc.set(func(s *service) { s.prompt.Session = "ses_other9" })
+			r.svc.Set(func(s *service) { s.Prompt.Session = "ses_other9" })
 		}, adapter.Unknown, 1},
 		{"non-JSON 200", func(_ *testing.T, r *rig, _ *adapter.Delivery) {
-			r.svc.set(func(s *service) { s.prompt.Raw = "ok, admitted" })
+			r.svc.Set(func(s *service) { s.Prompt.Raw = "ok, admitted" })
 		}, adapter.Unknown, 1},
 		{"200 without data", func(_ *testing.T, r *rig, _ *adapter.Delivery) {
-			r.svc.set(func(s *service) { s.prompt.Raw = `{"ok":true}` })
+			r.svc.Set(func(s *service) { s.Prompt.Raw = `{"ok":true}` })
 		}, adapter.Unknown, 1},
 		{"200 without message id", func(_ *testing.T, r *rig, _ *adapter.Delivery) {
-			r.svc.set(func(s *service) { s.prompt.Raw = `{"data":{"sessionID":"` + sid + `","delivery":"steer"}}` })
+			r.svc.Set(func(s *service) { s.Prompt.Raw = `{"data":{"sessionID":"` + sid + `","delivery":"steer"}}` })
 		}, adapter.Unknown, 1},
 		{"200 with other delivery", func(_ *testing.T, r *rig, _ *adapter.Delivery) {
-			r.svc.set(func(s *service) {
-				s.prompt.Raw = `{"data":{"id":"msg_1","sessionID":"` + sid + `","delivery":"later"}}`
+			r.svc.Set(func(s *service) {
+				s.Prompt.Raw = `{"data":{"id":"msg_1","sessionID":"` + sid + `","delivery":"later"}}`
 			})
 		}, adapter.Unknown, 1},
 		{"202 with admitted fields", func(_ *testing.T, r *rig, _ *adapter.Delivery) {
-			r.svc.set(func(s *service) {
-				s.prompt.Raw, s.prompt.RawStatus = `{"data":{"id":"msg_1","sessionID":"`+sid+`","delivery":"steer"}}`, 202
+			r.svc.Set(func(s *service) {
+				s.Prompt.Raw, s.Prompt.RawStatus = `{"data":{"id":"msg_1","sessionID":"`+sid+`","delivery":"steer"}}`, 202
 			})
 		}, adapter.Unknown, 1},
 		{"200 without delivery", func(_ *testing.T, r *rig, _ *adapter.Delivery) {
-			r.svc.set(func(s *service) { s.prompt.Raw = `{"data":{"id":"msg_1","sessionID":"` + sid + `"}}` })
+			r.svc.Set(func(s *service) { s.Prompt.Raw = `{"data":{"id":"msg_1","sessionID":"` + sid + `"}}` })
 		}, adapter.Unknown, 1},
 		{"200 with null delivery", func(_ *testing.T, r *rig, _ *adapter.Delivery) {
-			r.svc.set(func(s *service) { s.prompt.Raw = `{"data":{"id":"msg_1","sessionID":"` + sid + `","delivery":null}}` })
+			r.svc.Set(func(s *service) { s.Prompt.Raw = `{"data":{"id":"msg_1","sessionID":"` + sid + `","delivery":null}}` })
 		}, adapter.Unknown, 1},
 		{"binding has no endpoint", func(_ *testing.T, _ *rig, d *adapter.Delivery) { d.Target.HarnessEndpoint = "" }, adapter.Unreachable, 0},
 	}

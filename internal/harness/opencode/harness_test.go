@@ -247,7 +247,7 @@ func TestDiscoverFilter(t *testing.T) {
 	dir := append(bound("ses_boundold", "ses_boundhidden", "ses_boundarchived", "ses_boundgone"),
 		descriptors{{Harness: "codex", SessionRef: "ses_old"}}...)
 	r := newRig(t, "2.4.0", dir, sessions...)
-	r.svc.set(func(s *service) { s.active["ses_busy"] = true })
+	r.svc.Set(func(s *service) { s.Active["ses_busy"] = true })
 	got, err := r.h.Discover(context.Background())
 	if err != nil {
 		t.Fatal(err)
@@ -323,7 +323,7 @@ func TestDiscoverServiceDown(t *testing.T) {
 		t.Errorf("service down: %v %v", got, err)
 	}
 	r := newRig(t, "2.4.0", bound(sid), fakeSession{ID: sid, Updated: t0})
-	r.svc.set(func(s *service) { s.status = 401 })
+	r.svc.Set(func(s *service) { s.Status = 401 })
 	if got, err := r.h.Discover(ctx); err != nil || len(got) != 0 {
 		t.Errorf("401: %v %v", got, err)
 	}
@@ -335,7 +335,7 @@ func TestStatus(t *testing.T) {
 		fakeSession{ID: "ses_idle", Updated: t0},
 		fakeSession{ID: "ses_busy", Updated: t0},
 		fakeSession{ID: "ses_arch", Updated: t0, Archived: true})
-	r.svc.set(func(s *service) { s.active["ses_busy"] = true })
+	r.svc.Set(func(s *service) { s.Active["ses_busy"] = true })
 	for _, tc := range []struct {
 		id   string
 		want adapter.SessionStatus
@@ -358,7 +358,7 @@ func TestStatus(t *testing.T) {
 	if got, _ := down.Status(ctx, "ses_idle"); got != (adapter.SessionStatus{}) {
 		t.Errorf("service down: %+v", got)
 	}
-	r.svc.set(func(s *service) { s.status = 401 })
+	r.svc.Set(func(s *service) { s.Status = 401 })
 	got, err := r.h.Status(ctx, "ses_idle")
 	if got.Reachable || got.Loaded {
 		t.Errorf("401: %+v", got)
@@ -394,16 +394,16 @@ func TestSupersededFalseOnEveryError(t *testing.T) {
 		name string
 		mod  func(*service)
 	}{
-		{"401", func(s *service) { s.status = 401 }},
-		{"500", func(s *service) { s.status = 500 }},
-		{"503", func(s *service) { s.status = 503 }},
-		{"truncated list", func(s *service) { s.listExtra = map[string]any{"next": "cursor_2"} }},
-		{"null data", func(s *service) { s.listRaw = `{"data":null}` }},
-		{"no data", func(s *service) { s.listRaw = `{"sessions":[]}` }},
+		{"401", func(s *service) { s.Status = 401 }},
+		{"500", func(s *service) { s.Status = 500 }},
+		{"503", func(s *service) { s.Status = 503 }},
+		{"truncated list", func(s *service) { s.ListExtra = map[string]any{"next": "cursor_2"} }},
+		{"null data", func(s *service) { s.ListRaw = `{"data":null}` }},
+		{"no data", func(s *service) { s.ListRaw = `{"sessions":[]}` }},
 	}
 	for _, tc := range cases {
 		r := newRig(t, "2.4.0", nil, fakeSession{ID: "ses_arch", Updated: t0, Archived: true})
-		r.svc.set(tc.mod)
+		r.svc.Set(tc.mod)
 		if r.h.Superseded(sess("ses_deleted", 4242)) {
 			t.Errorf("%s: superseded", tc.name)
 		}
@@ -433,7 +433,7 @@ func TestSupersededFalseOnEveryError(t *testing.T) {
 	}
 
 	slow := newRig(t, "2.4.0", nil)
-	slow.svc.set(func(s *service) { s.delay = 3 * time.Second })
+	slow.svc.Set(func(s *service) { s.Delay = 3 * time.Second })
 	start := time.Now()
 	if slow.h.Superseded(sess("ses_deleted", 4242)) {
 		t.Error("slow service: superseded")
@@ -501,8 +501,8 @@ func TestSupersededReconfirms(t *testing.T) {
 
 func TestSupersededServiceReplacedMidCall(t *testing.T) {
 	r := newRig(t, "2.4.0", nil)
-	r.svc.set(func(s *service) {
-		s.onList = func() { writeSvc(t, filepath.Dir(r.path), r.f.srv.URL, "2.4.0", 5151) }
+	r.svc.Set(func(s *service) {
+		s.OnList = func() { writeSvc(t, filepath.Dir(r.path), r.f.srv.URL, "2.4.0", 5151) }
 	})
 	if r.h.Superseded(sess("ses_deleted", 4242)) {
 		t.Error("404 from a service that replaced the descriptor's one mid-call: superseded")
@@ -516,7 +516,7 @@ func TestSupersededServiceReplacedMidCall(t *testing.T) {
 
 func TestSupersededSharedBudget(t *testing.T) {
 	r := newRig(t, "2.4.0", nil)
-	r.svc.set(func(s *service) { s.getDelay = time.Second })
+	r.svc.Set(func(s *service) { s.GetDelay = time.Second })
 	start := time.Now()
 	for i := 0; i < 6; i++ {
 		if r.h.Superseded(sess(fmt.Sprintf("ses_gone%d", i), 4242)) && i > 0 {
@@ -543,7 +543,7 @@ func TestUntestedMajorIsNoEvidence(t *testing.T) {
 
 func TestActiveUnknownShape(t *testing.T) {
 	r := newRig(t, "2.4.0", nil, fakeSession{ID: sid, Updated: t0})
-	r.svc.set(func(s *service) { s.activeRaw = `{}` })
+	r.svc.Set(func(s *service) { s.ActiveRaw = `{}` })
 	got, err := r.h.Discover(context.Background())
 	if err != nil || len(got) != 1 || got[0].Status != "" {
 		t.Errorf("unknown activity shape reported a status: %+v %v", got, err)

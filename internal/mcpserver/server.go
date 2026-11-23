@@ -25,7 +25,7 @@ import (
 )
 
 // Instructions is the always-present minimum a harness shows its model.
-const Instructions = "CrossTalk messages other agent sessions on this Mac, Claude Code or Codex. " +
+const Instructions = "CrossTalk messages other agent sessions on this Mac. " +
 	"Call list_agents first; you=true marks this session. " +
 	"send_message tells; ask expects an answer, arriving later as a new message. " +
 	"Answer with reply and its message_id, never native SendMessage; on no_such_message, send_message to the sender. " +
