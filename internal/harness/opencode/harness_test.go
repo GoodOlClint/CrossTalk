@@ -584,3 +584,27 @@ func TestSupersededKeepsOneSnapshot(t *testing.T) {
 		t.Errorf("snapshot pid %d, want the current service's", r.h.list.pid)
 	}
 }
+
+func TestSupersededUnarchiveWithinTTL(t *testing.T) {
+	r := newRig(t, "2.4.0", nil, fakeSession{ID: sid, Updated: t0, Archived: true})
+	if !r.h.Superseded(sess(sid, 4242)) {
+		t.Fatal("archived session not superseded")
+	}
+	r.svc.Set(func(s *service) { s.Sessions[0].Archived = false })
+	r.clk.add(time.Second)
+	if r.h.Superseded(sess(sid, 4242)) {
+		t.Error("unarchived within the TTL: still superseded")
+	}
+}
+
+func TestSupersededBare404IsNotDeleted(t *testing.T) {
+	r := newRig(t, "2.4.0", nil)
+	r.svc.Set(func(s *service) { s.BareNotFound = true })
+	if r.h.Superseded(sess("ses_deleted", 4242)) {
+		t.Error("404 without SessionNotFoundError: superseded")
+	}
+	st, err := r.h.Status(context.Background(), "ses_deleted")
+	if err != nil || st.Reachable || st.Loaded {
+		t.Errorf("status on a bare 404: %+v %v", st, err)
+	}
+}

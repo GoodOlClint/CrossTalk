@@ -50,6 +50,8 @@ type Service struct {
 	ListRaw   string
 	ActiveRaw string
 	OnList    func()
+	// BareNotFound makes an unknown session answer 404 without SessionNotFoundError.
+	BareNotFound bool
 	// Prompt answers POST .../prompt; zero values give a 200 admitting the
 	// message to the session in the path.
 	Prompt PromptMode
@@ -79,7 +81,7 @@ func (s *Service) Handle(w http.ResponseWriter, r *http.Request) {
 	for k, v := range s.Active {
 		active[k] = v
 	}
-	extra, getDelay, listRaw, activeRaw, onList, pm, pageSize := s.ListExtra, s.GetDelay, s.ListRaw, s.ActiveRaw, s.OnList, s.Prompt, s.PageSize
+	extra, getDelay, listRaw, activeRaw, onList, pm, pageSize, bare := s.ListExtra, s.GetDelay, s.ListRaw, s.ActiveRaw, s.OnList, s.Prompt, s.PageSize, s.BareNotFound
 	s.mu.Unlock()
 	if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/prompt") {
 		servePrompt(w, r, pm)
@@ -141,7 +143,11 @@ func (s *Service) Handle(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		w.WriteHeader(http.StatusNotFound)
-		_, _ = w.Write([]byte(`{"error":"not found"}`))
+		if bare {
+			_, _ = w.Write([]byte(`{"error":"not found"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"_tag":"SessionNotFoundError","sessionID":"` + id + `","message":"Session not found: ` + id + `"}`))
 	default:
 		w.WriteHeader(http.StatusNotFound)
 	}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net"
 	"os"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -57,5 +58,8 @@ func TestOwnerDeferAcceptServiceIsChecked(t *testing.T) {
 			conn.Close()
 		}
 		t.Fatalf("holder other than the service pid: err %v, want an ownerError", err)
+	}
+	if !strings.Contains(oe.msg, "held by a process other than") {
+		t.Errorf("ownerError message %q does not name a foreign holder", oe.msg)
 	}
 }
