@@ -189,7 +189,7 @@ func (h *Harness) Discover(ctx context.Context) ([]harness.Session, error) {
 	if err != nil {
 		return nil, nil
 	}
-	docs, _, err := listSessions(ctx, c)
+	docs, err := listSessions(ctx, c)
 	if err != nil {
 		return nil, nil
 	}
@@ -283,9 +283,9 @@ func (h *Harness) Status(ctx context.Context, id string) (adapter.SessionStatus,
 }
 
 // Superseded is true only when the descriptor's own service (same pid, tested
-// major) returns a complete list that marks the session archived or omits it,
-// and a fresh GET of the session then answers archived or 404 (D7). Anything
-// else, including any error or a spent budget, is false.
+// major) returns a list that does not show the session live, and a fresh GET of
+// the session then answers archived or 404 (D7). Anything else, including any
+// error or a spent budget, is false.
 func (h *Harness) Superseded(s harness.Session) bool {
 	if s.HarnessPID <= 0 {
 		return false
@@ -300,7 +300,7 @@ func (h *Harness) Superseded(s harness.Session) bool {
 	if l.pid != svc.PID || h.now().Sub(l.at) >= supersedeTTL {
 		*l = h.fetchList(c, svc.PID)
 	}
-	if !l.ok || !l.complete {
+	if !l.ok {
 		return false
 	}
 	if d, listed := l.sessions[s.SessionRef]; listed && !d.isArchived() {
@@ -327,7 +327,6 @@ type sessionList struct {
 	at        time.Time
 	budget    time.Time
 	ok        bool
-	complete  bool
 	sessions  map[string]sessionDoc
 	confirmed map[string]bool
 }
@@ -338,8 +337,8 @@ func (h *Harness) fetchList(c *Client, pid int) sessionList {
 	l := sessionList{pid: pid, at: h.now(), budget: time.Now().Add(supersedeDeadline), confirmed: map[string]bool{}}
 	ctx, cancel := context.WithDeadline(context.Background(), l.budget)
 	defer cancel()
-	if docs, complete, err := listSessions(ctx, c); err == nil {
-		l.ok, l.complete, l.sessions = true, complete, make(map[string]sessionDoc, len(docs))
+	if docs, err := listSessions(ctx, c); err == nil {
+		l.ok, l.sessions = true, make(map[string]sessionDoc, len(docs))
 		for _, d := range docs {
 			l.sessions[d.ID] = d
 		}
@@ -347,59 +346,22 @@ func (h *Harness) fetchList(c *Client, pid int) sessionList {
 	return l
 }
 
-const maxListPages = 20
-
-// listSessions reads GET /api/session and follows cursor.next until a page is
-// empty. complete is false when a page carries a field other than data and
-// cursor, the cursor is malformed or repeats, a later page fails, or
-// maxListPages is spent.
-func listSessions(ctx context.Context, c *Client) (docs []sessionDoc, complete bool, err error) {
-	cursor := ""
-	for page := 0; page < maxListPages; page++ {
-		r, err := c.SessionsPage(ctx, cursor)
-		if err != nil {
-			if page > 0 {
-				return docs, false, nil
-			}
-			return nil, false, err
-		}
-		var top map[string]json.RawMessage
-		if err := json.Unmarshal(r.Body, &top); err != nil {
-			return nil, false, &Error{Kind: KindUnknown, Status: r.Status, Msg: "session list is not an object"}
-		}
-		var got []sessionDoc
-		data := bytes.TrimSpace(top["data"])
-		if len(data) == 0 || data[0] != '[' || json.Unmarshal(data, &got) != nil {
-			return nil, false, &Error{Kind: KindUnknown, Status: r.Status, Msg: "session list has no data array"}
-		}
-		docs = append(docs, got...)
-		for k := range top {
-			if k != "data" && k != "cursor" {
-				return docs, false, nil
-			}
-		}
-		if len(got) == 0 {
-			return docs, true, nil
-		}
-		raw, hasCursor := top["cursor"]
-		if !hasCursor {
-			return docs, true, nil
-		}
-		var cur struct {
-			Next *string `json:"next"`
-		}
-		if json.Unmarshal(raw, &cur) != nil {
-			return docs, false, nil
-		}
-		if cur.Next == nil || *cur.Next == "" {
-			return docs, true, nil
-		}
-		if *cur.Next == cursor {
-			return docs, false, nil
-		}
-		cursor = *cur.Next
+// listSessions reads the first page of GET /api/session. OpenCode 2.4.1 always
+// adds a cursor and pages 50 at a time, so the list is never taken as complete.
+func listSessions(ctx context.Context, c *Client) (docs []sessionDoc, err error) {
+	r, err := c.Sessions(ctx)
+	if err != nil {
+		return nil, err
 	}
-	return docs, false, nil
+	var top map[string]json.RawMessage
+	if err := json.Unmarshal(r.Body, &top); err != nil {
+		return nil, &Error{Kind: KindUnknown, Status: r.Status, Msg: "session list is not an object"}
+	}
+	data := bytes.TrimSpace(top["data"])
+	if len(data) == 0 || data[0] != '[' || json.Unmarshal(data, &docs) != nil {
+		return nil, &Error{Kind: KindUnknown, Status: r.Status, Msg: "session list has no data array"}
+	}
+	return docs, nil
 }
 
 func activeSessions(ctx context.Context, c *Client) (map[string]bool, error) {

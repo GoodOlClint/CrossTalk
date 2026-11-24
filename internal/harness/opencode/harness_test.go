@@ -397,7 +397,6 @@ func TestSupersededFalseOnEveryError(t *testing.T) {
 		{"401", func(s *service) { s.Status = 401 }},
 		{"500", func(s *service) { s.Status = 500 }},
 		{"503", func(s *service) { s.Status = 503 }},
-		{"truncated list", func(s *service) { s.ListExtra = map[string]any{"next": "cursor_2"} }},
 		{"null data", func(s *service) { s.ListRaw = `{"data":null}` }},
 		{"no data", func(s *service) { s.ListRaw = `{"sessions":[]}` }},
 	}
@@ -455,28 +454,6 @@ func TestSupersededServiceReplaced(t *testing.T) {
 	}
 }
 
-func TestSupersededCache(t *testing.T) {
-	r := newRig(t, "2.4.0", nil,
-		fakeSession{ID: "ses_a", Updated: t0},
-		fakeSession{ID: "ses_b", Updated: t0},
-		fakeSession{ID: "ses_c", Updated: t0, Archived: true})
-	for _, id := range []string{"ses_a", "ses_b", "ses_c", "ses_a", "ses_c"} {
-		r.h.Superseded(sess(id, 4242))
-	}
-	const perList = 2
-	if n := r.count("/api/session"); n != perList {
-		t.Fatalf("%d list requests inside 5 s, want %d: one page and the empty page that ends the list", n, perList)
-	}
-	r.clk.add(supersedeTTL + time.Millisecond)
-	r.h.Superseded(sess("ses_a", 4242))
-	if n := r.count("/api/session"); n != 2*perList {
-		t.Fatalf("%d list requests after the TTL, want %d", n, 2*perList)
-	}
-	if n := len(r.f.requests()); n != 2*perList+1 {
-		t.Errorf("%d requests in all, want %d: two lists and one GET confirming the archived session", n, 2*perList+1)
-	}
-}
-
 func TestSupersededPagedList(t *testing.T) {
 	r := newRig(t, "2.4.0", nil,
 		fakeSession{ID: "ses_p1", Updated: t0},
@@ -486,26 +463,40 @@ func TestSupersededPagedList(t *testing.T) {
 		fakeSession{ID: "ses_p5", Updated: t0, Archived: true})
 	r.svc.Set(func(s *service) { s.PageSize = 2 })
 	if r.h.Superseded(sess("ses_p4", 4242)) {
-		t.Error("live session on page 2 superseded")
+		t.Error("live session off the first page superseded")
 	}
 	if !r.h.Superseded(sess("ses_p5", 4242)) {
-		t.Error("archived session on page 3 not superseded")
+		t.Error("archived session off the first page not superseded")
 	}
 	if !r.h.Superseded(sess("ses_deleted", 4242)) {
-		t.Error("deleted session not superseded across pages")
+		t.Error("deleted session not superseded")
 	}
-	if n := r.count("/api/session"); n != 4 {
-		t.Errorf("%d list requests, want 4: three pages and the empty page", n)
+	if r.h.Superseded(sess("ses_p1", 4242)) {
+		t.Error("live session on the first page superseded")
+	}
+	if n := r.count("/api/session"); n != 1 {
+		t.Errorf("%d list requests, want 1", n)
 	}
 }
 
-func TestSupersededFalseWhenListNeverEnds(t *testing.T) {
-	r := newRig(t, "2.4.0", nil)
-	r.svc.Set(func(s *service) {
-		s.ListRaw = `{"data":[{"id":"ses_x","time":{"created":1,"updated":1}}],"cursor":{"next":"p1"}}`
-	})
-	if r.h.Superseded(sess("ses_deleted", 4242)) {
-		t.Error("a list whose cursor repeats counted as complete")
+func TestSupersededCache(t *testing.T) {
+	r := newRig(t, "2.4.0", nil,
+		fakeSession{ID: "ses_a", Updated: t0},
+		fakeSession{ID: "ses_b", Updated: t0},
+		fakeSession{ID: "ses_c", Updated: t0, Archived: true})
+	for _, id := range []string{"ses_a", "ses_b", "ses_c", "ses_a", "ses_c"} {
+		r.h.Superseded(sess(id, 4242))
+	}
+	if n := r.count("/api/session"); n != 1 {
+		t.Fatalf("%d list requests inside 5 s, want 1", n)
+	}
+	r.clk.add(supersedeTTL + time.Millisecond)
+	r.h.Superseded(sess("ses_a", 4242))
+	if n := r.count("/api/session"); n != 2 {
+		t.Fatalf("%d list requests after the TTL, want 2", n)
+	}
+	if n := len(r.f.requests()); n != 3 {
+		t.Errorf("%d requests in all, want 3: two lists and one GET confirming the archived session", n)
 	}
 }
 

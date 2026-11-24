@@ -3,7 +3,6 @@ package opencodetest
 import (
 	"encoding/json"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -112,22 +111,9 @@ func (s *Service) Handle(w http.ResponseWriter, r *http.Request) {
 				data = append(data, x.Doc(true))
 			}
 		}
-		out := map[string]any{"data": data, "cursor": map[string]any{"previous": nil, "next": nil}}
-		off := 0
-		if c := r.URL.Query().Get("cursor"); strings.HasPrefix(c, "p") {
-			off, _ = strconv.Atoi(c[1:])
-		}
-		if off > len(data) {
-			off = len(data)
-		}
-		end := len(data)
-		if pageSize > 0 && off+pageSize < end {
-			end = off + pageSize
-		}
-		page := data[off:end]
-		out["data"] = page
-		if len(page) > 0 {
-			out["cursor"] = map[string]any{"previous": "p" + strconv.Itoa(off), "next": "p" + strconv.Itoa(end)}
+		out := map[string]any{"data": data, "cursor": map[string]any{"previous": "p0", "next": "p1"}}
+		if pageSize > 0 && pageSize < len(data) {
+			out["data"] = data[:pageSize]
 		}
 		for k, v := range extra {
 			out[k] = v
