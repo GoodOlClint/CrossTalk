@@ -182,8 +182,8 @@ func TestOpenCodeConcurrentPullWakeDeadline(t *testing.T) {
 	var p pulled
 	select {
 	case p = <-pc:
-	case <-time.After(30 * time.Second):
-		t.Fatal("pull still blocked on the 60 s prompt after 30 s")
+	case <-time.After(15 * time.Second):
+		t.Fatal("pull still blocked on the stalled prompt after 15 s")
 	}
 	if p.err != nil {
 		t.Fatal(p.err)
