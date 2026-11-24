@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"regexp"
 	"syscall"
 	"time"
@@ -85,7 +86,15 @@ func NewClient(servicePath string) *Client {
 var sessionID = regexp.MustCompile(`^ses_[A-Za-z0-9]+$`)
 
 func (c *Client) Sessions(ctx context.Context) (*Response, error) {
-	return c.do(ctx, http.MethodGet, "/api/session", nil)
+	return c.SessionsPage(ctx, "")
+}
+
+func (c *Client) SessionsPage(ctx context.Context, cursor string) (*Response, error) {
+	p := "/api/session"
+	if cursor != "" {
+		p += "?cursor=" + url.QueryEscape(cursor)
+	}
+	return c.do(ctx, http.MethodGet, p, nil)
 }
 
 func (c *Client) ActiveSessions(ctx context.Context) (*Response, error) {

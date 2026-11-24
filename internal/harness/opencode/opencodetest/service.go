@@ -3,6 +3,7 @@ package opencodetest
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -42,6 +43,8 @@ type Service struct {
 	Sessions  []Session
 	Active    map[string]bool
 	ListExtra map[string]any
+	// PageSize caps a list page; 0 puts every session on one page.
+	PageSize  int
 	Status    int
 	Delay     time.Duration
 	GetDelay  time.Duration
@@ -77,7 +80,7 @@ func (s *Service) Handle(w http.ResponseWriter, r *http.Request) {
 	for k, v := range s.Active {
 		active[k] = v
 	}
-	extra, getDelay, listRaw, activeRaw, onList, pm := s.ListExtra, s.GetDelay, s.ListRaw, s.ActiveRaw, s.OnList, s.Prompt
+	extra, getDelay, listRaw, activeRaw, onList, pm, pageSize := s.ListExtra, s.GetDelay, s.ListRaw, s.ActiveRaw, s.OnList, s.Prompt, s.PageSize
 	s.mu.Unlock()
 	if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/prompt") {
 		servePrompt(w, r, pm)
@@ -109,7 +112,23 @@ func (s *Service) Handle(w http.ResponseWriter, r *http.Request) {
 				data = append(data, x.Doc(true))
 			}
 		}
-		out := map[string]any{"data": data}
+		out := map[string]any{"data": data, "cursor": map[string]any{"previous": nil, "next": nil}}
+		off := 0
+		if c := r.URL.Query().Get("cursor"); strings.HasPrefix(c, "p") {
+			off, _ = strconv.Atoi(c[1:])
+		}
+		if off > len(data) {
+			off = len(data)
+		}
+		end := len(data)
+		if pageSize > 0 && off+pageSize < end {
+			end = off + pageSize
+		}
+		page := data[off:end]
+		out["data"] = page
+		if len(page) > 0 {
+			out["cursor"] = map[string]any{"previous": "p" + strconv.Itoa(off), "next": "p" + strconv.Itoa(end)}
+		}
 		for k, v := range extra {
 			out[k] = v
 		}

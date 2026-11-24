@@ -347,22 +347,59 @@ func (h *Harness) fetchList(c *Client, pid int) sessionList {
 	return l
 }
 
-// listSessions reads GET /api/session. complete is false when the response
-// carries any top-level field besides data, which may mark a further page.
+const maxListPages = 20
+
+// listSessions reads GET /api/session and follows cursor.next until a page is
+// empty. complete is false when a page carries a field other than data and
+// cursor, the cursor is malformed or repeats, a later page fails, or
+// maxListPages is spent.
 func listSessions(ctx context.Context, c *Client) (docs []sessionDoc, complete bool, err error) {
-	r, err := c.Sessions(ctx)
-	if err != nil {
-		return nil, false, err
+	cursor := ""
+	for page := 0; page < maxListPages; page++ {
+		r, err := c.SessionsPage(ctx, cursor)
+		if err != nil {
+			if page > 0 {
+				return docs, false, nil
+			}
+			return nil, false, err
+		}
+		var top map[string]json.RawMessage
+		if err := json.Unmarshal(r.Body, &top); err != nil {
+			return nil, false, &Error{Kind: KindUnknown, Status: r.Status, Msg: "session list is not an object"}
+		}
+		var got []sessionDoc
+		data := bytes.TrimSpace(top["data"])
+		if len(data) == 0 || data[0] != '[' || json.Unmarshal(data, &got) != nil {
+			return nil, false, &Error{Kind: KindUnknown, Status: r.Status, Msg: "session list has no data array"}
+		}
+		docs = append(docs, got...)
+		for k := range top {
+			if k != "data" && k != "cursor" {
+				return docs, false, nil
+			}
+		}
+		if len(got) == 0 {
+			return docs, true, nil
+		}
+		raw, hasCursor := top["cursor"]
+		if !hasCursor {
+			return docs, true, nil
+		}
+		var cur struct {
+			Next *string `json:"next"`
+		}
+		if json.Unmarshal(raw, &cur) != nil {
+			return docs, false, nil
+		}
+		if cur.Next == nil || *cur.Next == "" {
+			return docs, true, nil
+		}
+		if *cur.Next == cursor {
+			return docs, false, nil
+		}
+		cursor = *cur.Next
 	}
-	var top map[string]json.RawMessage
-	if err := json.Unmarshal(r.Body, &top); err != nil {
-		return nil, false, &Error{Kind: KindUnknown, Status: r.Status, Msg: "session list is not an object"}
-	}
-	data := bytes.TrimSpace(top["data"])
-	if len(data) == 0 || data[0] != '[' || json.Unmarshal(data, &docs) != nil {
-		return nil, false, &Error{Kind: KindUnknown, Status: r.Status, Msg: "session list has no data array"}
-	}
-	return docs, len(top) == 1, nil
+	return docs, false, nil
 }
 
 func activeSessions(ctx context.Context, c *Client) (map[string]bool, error) {
