@@ -266,8 +266,10 @@ func (h *Harness) Status(ctx context.Context, id string) (adapter.SessionStatus,
 	d, err := getSession(ctx, c, id)
 	var e *Error
 	switch {
-	case errors.As(err, &e) && e.Kind == KindNotFound:
+	case errors.As(err, &e) && e.Kind == KindNotFound && e.Deleted:
 		return adapter.SessionStatus{Reachable: true}, nil
+	case errors.As(err, &e) && e.Kind == KindNotFound:
+		return adapter.SessionStatus{}, nil
 	case errors.As(err, &e) && e.Kind == KindUnreachable:
 		return adapter.SessionStatus{}, nil
 	case err != nil:
@@ -306,16 +308,16 @@ func (h *Harness) Superseded(s harness.Session) bool {
 	if d, listed := l.sessions[s.SessionRef]; listed && !d.isArchived() {
 		return false
 	}
-	if v, done := l.confirmed[s.SessionRef]; done {
-		return v
+	if l.confirmed[s.SessionRef] {
+		return false
 	}
 	ctx, cancel := context.WithDeadline(context.Background(), l.budget)
 	defer cancel()
 	d, err := getSession(ctx, c, s.SessionRef)
 	var e *Error
-	v := err == nil && d.isArchived() || errors.As(err, &e) && e.Kind == KindNotFound
-	if err == nil || v {
-		l.confirmed[s.SessionRef] = v
+	v := err == nil && d.isArchived() || errors.As(err, &e) && e.Kind == KindNotFound && e.Deleted
+	if err == nil && !v {
+		l.confirmed[s.SessionRef] = true
 	}
 	return v
 }

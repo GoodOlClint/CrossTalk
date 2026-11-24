@@ -85,7 +85,7 @@ func ReadService(path string) (Service, error) {
 	if !fi.Mode().IsRegular() {
 		return fail(ReasonNotRegular)
 	}
-	if fi.Mode().Perm() != 0o600 {
+	if fi.Mode()&(os.ModePerm|os.ModeSetuid|os.ModeSetgid|os.ModeSticky) != 0o600 {
 		return fail(ReasonMode)
 	}
 	if st, ok := fi.Sys().(*syscall.Stat_t); !ok || int(st.Uid) != currentUID() {

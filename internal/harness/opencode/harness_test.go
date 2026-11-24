@@ -495,8 +495,8 @@ func TestSupersededCache(t *testing.T) {
 	if n := r.count("/api/session"); n != 2 {
 		t.Fatalf("%d list requests after the TTL, want 2", n)
 	}
-	if n := len(r.f.requests()); n != 3 {
-		t.Errorf("%d requests in all, want 3: two lists and one GET confirming the archived session", n)
+	if n := len(r.f.requests()); n != 4 {
+		t.Errorf("%d requests in all, want 4: two lists and a GET for each of the two checks of the archived session", n)
 	}
 }
 
