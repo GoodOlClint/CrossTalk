@@ -388,16 +388,23 @@ func (h *Harness) Checks(ctx context.Context, env harness.InstallEnv) []harness.
 			}
 		}
 	}
-	return []harness.CheckResult{k2, k5, k6, h.k13()}
+	return []harness.CheckResult{k2, k5, k6, h.k13(ctx, env)}
 }
 
-func (h *Harness) k13() harness.CheckResult {
+func (h *Harness) k13(ctx context.Context, env harness.InstallEnv) harness.CheckResult {
 	r := harness.CheckResult{ID: "K13", WarnOnly: true}
 	svc, err := ReadService(h.client.ServicePath)
 	var se *ServiceError
 	switch {
 	case errors.As(err, &se) && se.Reason == ReasonMissing:
 		r.OK, r.Detail = true, "OpenCode service not running (service.json absent); not checked"
+		if env.Run != nil {
+			if out, err := env.Run(ctx, "opencode", "--version"); err == nil {
+				if v := versionOut.FindString(string(out)); strings.HasPrefix(v, "1.") {
+					r.OK, r.Detail = false, "OpenCode 1.x found: unsupported, see ADR 0032"
+				}
+			}
+		}
 		return r
 	case err != nil:
 		r.Detail = err.Error()

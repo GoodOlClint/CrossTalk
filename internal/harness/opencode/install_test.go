@@ -557,6 +557,32 @@ func TestChecksK2K5K6K13(t *testing.T) {
 			t.Errorf("missing service.json = %+v", r)
 		}
 	})
+
+	t.Run("K13 v1 binary without service.json", func(t *testing.T) {
+		s := newSandbox(t)
+		setBin(t, s)
+		project(t, "")
+		s.write(t, cfg(s))
+		s.cli.version = "1.4.0"
+		r, ok := checkByID(s.h.Checks(ctx, s.env), "K13")
+		if !ok {
+			t.Fatal("no K13")
+		}
+		if r.OK || !r.WarnOnly || !strings.Contains(r.Detail, "1.x") || !strings.Contains(r.Detail, "ADR 0032") {
+			t.Errorf("K13 = %+v", r)
+		}
+	})
+
+	t.Run("K13 v2 binary without service.json", func(t *testing.T) {
+		s := newSandbox(t)
+		setBin(t, s)
+		project(t, "")
+		s.write(t, cfg(s))
+		r, _ := checkByID(s.h.Checks(ctx, s.env), "K13")
+		if !r.OK || !strings.Contains(r.Detail, "not running") {
+			t.Errorf("K13 = %+v", r)
+		}
+	})
 }
 
 func TestInstallRefusesToReAddExistingEntryForEnvironment(t *testing.T) {

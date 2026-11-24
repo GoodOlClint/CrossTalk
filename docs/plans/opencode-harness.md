@@ -122,7 +122,7 @@ Whether a real model treats a peer prompt plus notice as intended is not yet obs
 | K2 | Exactly one CrossTalk server entry across global and the working directory's project config |
 | K5 | The registered command is the installed binary |
 | K6 | A live handshake with the registered command (the `Handshake` helper) |
-| K13 (new, warn-only) | `service.json` is present, mode 0600, loopback, and its version passes `CheckVersion` (an untested 2.x minor warns); names the v1 case ("OpenCode 1.x found: unsupported, see ADR 0032"). A missing `service.json` means the service is not running and passes with a note. No request is made to the service |
+| K13 (new, warn-only) | `service.json` is present, mode 0600, loopback, and its version passes `CheckVersion` (an untested 2.x minor warns); names the v1 case ("OpenCode 1.x found: unsupported, see ADR 0032"). A missing `service.json` means the service is not running and passes with a note, except that when the installed `opencode --version` reports major 1 (a v1 never writes `service.json`) it names the v1 case. No request is made to the service |
 | K1, K3, K4, K9, K10 | Not applicable (no plugin, no TOML, no backend probe, no queue wake); K4 not added: M3 measured no prompt for CrossTalk's MCP tools on 2.4.1 |
 | K11 | `classifyShimParent` learns `opencode serve --service` as a parent kind whose restart text says: restart the service (`opencode` TUIs reconnect), which ends running turns |
 | `PluginUpdater`, `Leftover` | Not implemented. The upgrade follow-up (ADR 0031) therefore skips OpenCode; the shim's in-place refresh (ADR 0030) covers upgrades |
