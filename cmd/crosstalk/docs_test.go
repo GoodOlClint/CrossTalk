@@ -250,7 +250,7 @@ func TestDocsDesignAndAgentsNameOpenCode(t *testing.T) {
 	if strings.Contains(agents, "OpenCode harness, planned") {
 		t.Error("AGENTS.md still says OpenCode is planned and not built")
 	}
-	for _, want := range []string{"OpenCode harness, built on main", "v0.3.0", "ADR 0032", "ADR 0033", "ADR 0034", "third harness"} {
+	for _, want := range []string{"OpenCode harness, released in v0.3.0", "v0.3.0", "ADR 0032", "ADR 0033", "ADR 0034", "third harness"} {
 		if !strings.Contains(agents, want) {
 			t.Errorf("AGENTS.md lacks %q", want)
 		}

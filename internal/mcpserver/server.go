@@ -36,7 +36,7 @@ const Instructions = "CrossTalk messages other agent sessions on this Mac. " +
 // Version is stamped with -ldflags -X by the release build; the sed in
 // scripts/release-build.sh reads the literal below.
 var (
-	Version = "0.2.6"
+	Version = "0.3.0"
 )
 
 const (
