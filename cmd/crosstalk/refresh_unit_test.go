@@ -60,11 +60,11 @@ func TestPollableStdinIsADuplicate(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer w.Close()
-	if err := syscall.Dup2(int(r.Fd()), 0); err != nil {
+	if err := dup2(int(r.Fd()), 0); err != nil {
 		t.Fatal(err)
 	}
 	r.Close()
-	defer func() { syscall.Dup2(saved, 0); syscall.Close(saved); stdinFlags = -1 }()
+	defer func() { dup2(saved, 0); syscall.Close(saved); stdinFlags = -1 }()
 	f, err := pollableStdin()
 	if err != nil {
 		t.Fatalf("pipe stdin not pollable: %v", err)
