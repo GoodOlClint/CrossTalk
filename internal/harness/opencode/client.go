@@ -38,8 +38,8 @@ type Error struct {
 	Status int
 	Msg    string
 	Err    error
-	// Deleted: the 404 body names SessionNotFoundError.
-	Deleted bool
+	// NotFoundID is the sessionID of a SessionNotFoundError 404 body, else empty.
+	NotFoundID string
 }
 
 func (e *Error) Error() string {
@@ -163,11 +163,15 @@ func (c *Client) do(ctx context.Context, method, path string, body []byte) (*Res
 		return nil, &Error{Kind: KindUnreachable, Status: 401, Msg: "service refused the credential"}
 	case http.StatusNotFound:
 		var doc struct {
-			Tag string `json:"_tag"`
+			Tag       string `json:"_tag"`
+			SessionID string `json:"sessionID"`
 		}
-		b, _ := io.ReadAll(io.LimitReader(resp.Body, maxBody))
-		_ = json.Unmarshal(b, &doc)
-		return nil, &Error{Kind: KindNotFound, Status: 404, Msg: "not found", Deleted: doc.Tag == "SessionNotFoundError"}
+		b, err := io.ReadAll(io.LimitReader(resp.Body, maxBody+1))
+		e := &Error{Kind: KindNotFound, Status: 404, Msg: "not found"}
+		if err == nil && len(b) <= maxBody && json.Unmarshal(b, &doc) == nil && doc.Tag == "SessionNotFoundError" {
+			e.NotFoundID = doc.SessionID
+		}
+		return nil, e
 	}
 	out, err := io.ReadAll(io.LimitReader(resp.Body, maxBody+1))
 	if err != nil || len(out) > maxBody {

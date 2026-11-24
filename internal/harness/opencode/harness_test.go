@@ -608,3 +608,23 @@ func TestSupersededBare404IsNotDeleted(t *testing.T) {
 		t.Errorf("status on a bare 404: %+v %v", st, err)
 	}
 }
+
+func TestSupersededNotFoundForAnotherSession(t *testing.T) {
+	r := newRig(t, "2.4.0", nil, fakeSession{ID: sid, Updated: t0, ListArchived: true})
+	r.svc.Set(func(s *service) { s.NotFoundID = "ses_other"; s.Sessions = nil })
+	if r.h.Superseded(sess(sid, 4242)) {
+		t.Error("404 naming another session: superseded")
+	}
+}
+
+func TestSupersededDeletionStaysConfirmedInWindow(t *testing.T) {
+	r := newRig(t, "2.4.0", nil)
+	if !r.h.Superseded(sess("ses_deleted", 4242)) {
+		t.Fatal("deleted session not superseded")
+	}
+	r.svc.Set(func(s *service) { s.Status = 500 })
+	r.clk.add(2 * time.Second)
+	if !r.h.Superseded(sess("ses_deleted", 4242)) {
+		t.Error("confirmed deletion lost inside the TTL window")
+	}
+}
