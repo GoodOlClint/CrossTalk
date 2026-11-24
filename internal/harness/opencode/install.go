@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/GoodOlClint/crosstalk/internal/harness"
 )
@@ -393,21 +394,22 @@ func (h *Harness) Checks(ctx context.Context, env harness.InstallEnv) []harness.
 
 func (h *Harness) k13(ctx context.Context, env harness.InstallEnv) harness.CheckResult {
 	r := harness.CheckResult{ID: "K13", WarnOnly: true}
+	const cliV1 = "installed opencode is 1.x: unsupported, see ADR 0032"
+	v1 := installedIsV1(ctx, env)
 	svc, err := ReadService(h.client.ServicePath)
 	var se *ServiceError
 	switch {
 	case errors.As(err, &se) && se.Reason == ReasonMissing:
 		r.OK, r.Detail = true, "OpenCode service not running (service.json absent); not checked"
-		if env.Run != nil {
-			if out, err := env.Run(ctx, "opencode", "--version"); err == nil {
-				if v := versionOut.FindString(string(out)); strings.HasPrefix(v, "1.") {
-					r.OK, r.Detail = false, "OpenCode 1.x found: unsupported, see ADR 0032"
-				}
-			}
+		if v1 {
+			r.OK, r.Detail = false, "OpenCode 1.x found: unsupported, see ADR 0032"
 		}
 		return r
 	case err != nil:
 		r.Detail = err.Error()
+		if v1 {
+			r.Detail += "; " + cliV1
+		}
 		return r
 	}
 	warn, verr := CheckVersion(svc.Version)
@@ -421,7 +423,25 @@ func (h *Harness) k13(ctx context.Context, env harness.InstallEnv) harness.Check
 	default:
 		r.OK, r.Detail = true, "OpenCode service "+svc.Version+" on loopback, service.json mode 0600"
 	}
+	if v1 {
+		r.OK = false
+		if !strings.Contains(r.Detail, "1.x") {
+			r.Detail += "; " + cliV1
+		}
+	}
 	return r
+}
+
+const versionProbeTimeout = 5 * time.Second
+
+func installedIsV1(ctx context.Context, env harness.InstallEnv) bool {
+	if env.Run == nil {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(ctx, versionProbeTimeout)
+	defer cancel()
+	out, err := env.Run(ctx, "opencode", "--version")
+	return err == nil && strings.HasPrefix(versionOut.FindString(string(out)), "1.")
 }
 
 func sameBin(a, b string) bool {
