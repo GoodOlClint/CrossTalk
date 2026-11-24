@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/GoodOlClint/crosstalk/internal/harness"
 )
@@ -28,6 +29,7 @@ type fakeCLI struct {
 	t         *testing.T
 	cfgPath   string
 	version   string
+	bare      bool
 	ignoreEnv bool
 	onAdd     func()
 	failAdd   bool
@@ -41,6 +43,9 @@ func (f *fakeCLI) run(_ context.Context, name string, args ...string) ([]byte, e
 	}
 	switch {
 	case len(args) == 1 && args[0] == "--version":
+		if f.bare {
+			return []byte(f.version + "\n"), nil
+		}
 		return []byte("opencode v" + f.version + "\n"), nil
 	case len(args) >= 4 && args[0] == "mcp" && args[1] == "add" && args[2] == "crosstalk" && args[3] == "--global":
 		if f.onAdd != nil {
@@ -555,6 +560,62 @@ func TestChecksK2K5K6K13(t *testing.T) {
 		}
 		if r := k13(t, 0, "", ""); !r.OK || !strings.Contains(r.Detail, "not running") {
 			t.Errorf("missing service.json = %+v", r)
+		}
+	})
+
+	t.Run("K13 v1 binary without service.json", func(t *testing.T) {
+		s := newSandbox(t)
+		setBin(t, s)
+		project(t, "")
+		s.write(t, cfg(s))
+		s.cli.version, s.cli.bare = "1.4.0", true
+		r, ok := checkByID(s.h.Checks(ctx, s.env), "K13")
+		if !ok {
+			t.Fatal("no K13")
+		}
+		if r.OK || !r.WarnOnly || !strings.Contains(r.Detail, "1.x") || !strings.Contains(r.Detail, "ADR 0032") {
+			t.Errorf("K13 = %+v", r)
+		}
+	})
+
+	t.Run("K13 v1 binary with a v2 service.json", func(t *testing.T) {
+		s := newSandbox(t)
+		setBin(t, s)
+		project(t, "")
+		s.write(t, cfg(s))
+		writeSvc(t, s.svcDir, "http://127.0.0.1:49374", "2.4.1", 4242)
+		s.cli.version = "1.4.0"
+		r, _ := checkByID(s.h.Checks(ctx, s.env), "K13")
+		if r.OK || !strings.Contains(r.Detail, "installed opencode is 1.x") {
+			t.Errorf("K13 = %+v", r)
+		}
+	})
+
+	t.Run("K13 version probe is bounded", func(t *testing.T) {
+		s := newSandbox(t)
+		setBin(t, s)
+		project(t, "")
+		s.write(t, cfg(s))
+		s.env.Run = func(ctx context.Context, _ string, _ ...string) ([]byte, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		c, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		r, _ := checkByID(s.h.Checks(c, s.env), "K13")
+		if !r.OK || c.Err() != nil {
+			t.Errorf("K13 = %+v, ctx %v", r, c.Err())
+		}
+	})
+
+	t.Run("K13 v2 binary without service.json", func(t *testing.T) {
+		s := newSandbox(t)
+		setBin(t, s)
+		project(t, "")
+		s.write(t, cfg(s))
+		r, _ := checkByID(s.h.Checks(ctx, s.env), "K13")
+		if !r.OK || !strings.Contains(r.Detail, "not running") {
+			t.Errorf("K13 = %+v", r)
 		}
 	})
 }
