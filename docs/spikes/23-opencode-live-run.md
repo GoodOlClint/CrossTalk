@@ -66,3 +66,43 @@ printf 'user = "opencode:%s"\n' "$PW" | curl -s --config - -X POST -H 'content-t
 - A `crosstalk send` only addresses a bound session; an unbound OpenCode session is in `list_agents` (`crosstalk: false`) but `send` answers no CrossTalk agent of that name.
 - A reply to an inform is delivered to the sender as a raw prompt and starts the sender's own turn; a ping-pong between two sessions that always reply is possible (the nudge at 30 sends per peer is the only brake, ADR 0014).
 - The service wrote a copy of `service.json` under `$XDG_CONFIG_HOME/opencode/` as well as under `$XDG_STATE_HOME/opencode/`.
+
+## Re-run 2026-11-24: Claude and Codex senders, L9, L12 --check
+
+Date: 2026-11-24, main at 2169ef8 (PRs #319 and #320 included). Closes the gaps the first run named: Claude and Codex as senders into an OpenCode session, the live L9 for a bound session, and the live L12 `--check`.
+
+Setup. OpenCode 2.4.1, model `openrouter/qwen/qwen3.8-27b`, the CrossTalk binary built from main into a scratch directory (version string 0.2.6). The service ran in the real OpenCode directories as in the first run; their pre-run state was recorded and restored byte for byte (the database and listing compare identical). The Homebrew install and the user-scope MCP registrations were not touched. The Claude sender was a throwaway session started with `--mcp-config` and `--strict-mcp-config` pointing at the scratch binary. The first Codex sender was started with `-c mcp_servers.crosstalk.command=<scratch binary>`; a second, plain Codex session (daemon-hosted, the installed 0.2.6 shim) was used for the reply-back check, because a `-c` session cannot receive (operator ruling 2026-11-09). Role labels: target session (bound by one model call), Claude sender, Codex sender, L9 sessions.
+
+Budget: stated before the first model call as 10 prompts that start a turn, stop at 20. Used: 9 (bind target 1, Claude inform 1, Claude ask 1, steer 1, `-c` Codex inform 1 (the model's turn), plain Codex ask 1, the target's own `list_agents` view 1, two L9 binds 2). Claude and Codex sender turns ran on their own logins.
+
+| Step | Expected | Actual | Result | Model | OpenCode | Date | Issue |
+|---|---|---|---|---|---|---|---|
+| S2 target bound | Row for the session, harness opencode, `crosstalk` true after one call | One prompt; the service shows `rename` and `list_agents` tool parts completed; the row listed with `harness: opencode`, `crosstalk: true`. Listener pid equalled `service.json` pid before any send (M6). From the installed 0.2.6 shim the row showed `reachable: false`; from the scratch build it showed `reachable: true` | pass | `openrouter/qwen/qwen3.8-27b` | 2.4.1 | 2026-11-24 |  |
+| S3 Claude inform | Row visible; inform lands with the notice intact; the OpenCode reply routes back | Sender result `accepted`; the stored user message is the preamble plus one JSON object with `notice`, `from`, `from_harness: claude`, `sender_verified: true`, `kind: inform`, `in_reply_to: null` and the text intact; the model answered and the Claude session received `received` with `in_reply_to` equal to the inform id | pass | `openrouter/qwen/qwen3.8-27b` | 2.4.1 | 2026-11-24 |  |
+| S3 Claude ask | Lands as `kind: ask`; answered; reply routed back with `in_reply_to` the ask id | Landed as `kind: ask`, `sender_verified: true`; the Claude session received `4` with `in_reply_to` equal to the ask id. The reply reached the Claude session as an inform, as in L5 | pass | `openrouter/qwen/qwen3.8-27b` | 2.4.1 | 2026-11-24 |  |
+| S3 steer | An inform sent during an active turn is stored after the running tool call, in the same turn, no extra turn | The target ran `sleep 45`; the Claude inform was accepted during it; the stored user message appeared after the tool call finished (47 s after the prompt) with no `idle` between the prompt and the inform; one `idle` at the end of the turn | pass | `openrouter/qwen/qwen3.8-27b` | 2.4.1 | 2026-11-24 |  |
+| S4 Codex (`-c` scratch build) | Row visible; inform lands; reply back | Row visible (`opencode`, `crosstalk: true`, `reachable: true`); sender result `accepted`; landed with `from_harness: codex`, `sender_verified: true`, text intact. The model's reply to this sender was `unreachable` in the journal (task failed): a `-c` Codex session has a private app-server and cannot receive | pass for send; reply back blocked by design | `openrouter/qwen/qwen3.8-27b` | 2.4.1 | 2026-11-24 |  |
+| S4 Codex (plain, installed shim) | Ask answered, reply routed back | The ask was accepted; the Codex session received `{"text":"6","in_reply_to":<ask id>}`. This sender ran the installed 0.2.6 shim, not the scratch build | pass (installed shim) | `openrouter/qwen/qwen3.8-27b` | 2.4.1 | 2026-11-24 |  |
+| S4 Codex rows in the target's view | The target's own `list_agents` lists Codex sessions | One prompt; the target's reply listed the Codex sessions with `harness` codex | pass | `openrouter/qwen/qwen3.8-27b` | 2.4.1 | 2026-11-24 |  |
+| L9 (supersedes the L9 row above) | After archive or delete a row drops or shows retired within one sweep; a verified send to it is the no-such-agent result, not `mailboxed` | Two bound sessions: one archived through `PATCH {"archived":true}`, one deleted; about 30 s later neither was in `list_agents`. A verified `send_message` from the Claude sender to each by name and by `agent_id` (four sends) returned `state: unknown`, `reason: no_such_agent`. The service reported `time.archived` set for the archived session and `SessionNotFoundError` for the deleted one | pass | `openrouter/qwen/qwen3.8-27b` | 2.4.1 | 2026-11-24 | #316 fixed |
+| L12 `--check` and install (supersedes the L12 row above) | With a stand-in `opencode` printing 1.4.0 and no `service.json`, `--check` names 1.x unsupported; install refuses; config byte-identical | `--check` exit 1: K2, K5, K6 FAIL (no entry), K13 WARN "OpenCode 1.x found: unsupported, see ADR 0032" (K13 is warn-only by design, so it warns, it does not fail); `install` exit 1 with "OpenCode 1.x found: unsupported, see ADR 0032; nothing was written"; an existing config compared byte-identical and an absent config was not created | pass | none | 1.4.0 (stand-in) | 2026-11-24 | #317 fixed |
+
+Superseded rows from the first run: L9 and the `--check` half of L12 (both now pass live), and the "senders not exercised" gap in the Peers paragraph and in L2 to L5. Still reduced: L10 (password rotation untested) and the D15 mailbox-only wake.
+
+Findings: none new. The `-c` Codex limit is the known one (the Codex section of `docs/setup.md`); no issue filed.
+
+Commands (key redacted):
+
+```
+# $S is a scratch directory; $ENV_FILE holds OPENROUTER_API_KEY and was sourced in one subshell only
+go build -o $S/bin/crosstalk ./cmd/crosstalk
+$S/bin/crosstalk install opencode --bin-dir $S/bin --yes     # after writing {"model":"openrouter/qwen/qwen3.8-27b"} to the global opencode.json
+( set -a; . "$ENV_FILE"; set +a; export OPENCODE_DISABLE_AUTOUPDATE=1 OPENCODE_DISABLE_MODELS_FETCH=1 OPENCODE_DISABLE_CLAUDE_CODE=1
+  nohup opencode serve --service > $S/service.log 2>&1 & )
+lsof -nP -iTCP:49374 -sTCP:LISTEN; jq .pid ~/.local/state/opencode/service.json
+# API calls as in the first run, password on stdin through curl --config -
+claude --model sonnet --permission-mode auto --mcp-config $S/claude-mcp.json --strict-mcp-config   # MCP server crosstalk = $S/bin/crosstalk mcp
+codex -c mcp_servers.crosstalk.command=\"$S/bin/crosstalk\" -c 'mcp_servers.crosstalk.args=["mcp"]' -c 'mcp_servers.crosstalk.default_tools_approval_mode="approve"'
+( export HOME=$S/l12/home XDG_CONFIG_HOME=$S/l12/cfg XDG_DATA_HOME=$S/l12/data XDG_STATE_HOME=$S/l12/state XDG_CACHE_HOME=$S/l12/cache PATH=$S/l12/fakebin:/usr/bin:/bin   # fakebin/opencode prints 1.4.0
+  $S/bin/crosstalk install opencode --check; $S/bin/crosstalk install opencode --yes --bin-dir $S/l12/home/bin )
+```

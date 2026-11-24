@@ -233,7 +233,7 @@ func TestDocsDesignAndAgentsNameOpenCode(t *testing.T) {
 	for n, wants := range map[string][]string{
 		"46": {"not yet verified (slice 9)"},
 		"47": {"not yet verified (slice 9)", "TestInjectFailureStates"},
-		"49": {"not yet verified (slice 9)", "M3"},
+		"49": {"Re-run 2026-11-24", "M3"},
 	} {
 		for _, want := range wants {
 			if !strings.Contains(rows[n], want) {
