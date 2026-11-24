@@ -431,11 +431,17 @@ func TestHarnessCompatAssertDiscovery(t *testing.T) {
 		line, _ := json.Marshal(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": []map[string]any{{"type": "tool_result", "content": string(b)}}}})
 		return string(line) + "\n"
 	}
+	toolSearch := func() string {
+		line, _ := json.Marshal(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": []map[string]any{{"type": "tool_result", "content": []map[string]any{{"type": "tool_reference", "tool_name": "x"}}}}}})
+		return string(line) + "\n"
+	}
 	cases := []struct {
 		name, log string
 		ok        bool
 	}{
 		{"listed and bound", row("abc", true), true},
+		{"array tool result after the listing", row("abc", true) + toolSearch(), true},
+		{"array tool result only", toolSearch(), false},
 		{"peer missing from the listing", row("other", true), false},
 		{"listed but unbound beside a bound sibling", row("abc", false), false},
 		{"no listing at all", "", false},

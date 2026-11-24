@@ -323,7 +323,7 @@ key-usage)
 assert-discovery)
 	jsonl="${2:?usage: harness-compat-live.sh assert-discovery CLAUDE_JSONL CODEX_ID}"
 	id="${3:?}"
-	if jq -e --arg id "$id" 'select(.type == "user") | .message.content | if type == "array" then .[] else empty end | .content | (if type == "string" then . else tostring end) | (try fromjson catch empty) | .agents[]? | select(.agent_id == $id and .crosstalk == true)' "$jsonl" >/dev/null 2>&1; then
+	if jq -e --arg id "$id" 'select(.type == "user") | .message.content | if type == "array" then .[] | objects else empty end | .content | (if type == "string" then . else tostring end) | (try fromjson catch empty) | objects | .agents[]? | select(.agent_id == $id and .crosstalk == true)' "$jsonl" >/dev/null 2>&1; then
 		echo "PASS discovery: Claude's list_agents showed codex $id"
 	else
 		echo "FAIL discovery: no list_agents result shows codex $id"
