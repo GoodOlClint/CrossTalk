@@ -217,11 +217,17 @@ compare-opencode)
 	}
 	req="$(jq -nc --arg id "$ses" '{jsonrpc: "2.0", id: 2, method: "tools/call", params: {name: "list_agents", arguments: {}, _meta: {"ai.opencode/sessionID": $id}}}')"
 	init='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"compat","version":"0"}}}'
-	resp="$( (printf '%s\n' "$init"; sleep 1; printf '%s\n' '{"jsonrpc":"2.0","method":"notifications/initialized"}'; printf '%s\n' "$req"; sleep 3) | "$xt" mcp 2>/dev/null | jq -c 'select(.id == 2)' )" || true
+	errlog="$(mktemp)"
+	t0="$(date +%s)"
+	resp="$( (printf '%s\n' "$init"; sleep 1; printf '%s\n' '{"jsonrpc":"2.0","method":"notifications/initialized"}'; printf '%s\n' "$req"; sleep 3) | "$xt" mcp 2>"$errlog" | jq -c 'select(.id == 2)' )" || true
 	printf '%s' "$resp" | jq -e '[.. | objects | select(.harness? == "opencode" and .you? == true and .name? == "compat")] | length == 1' >/dev/null 2>&1 || {
-		echo "a tools/call carrying _meta ai.opencode/sessionID $ses did not bind to an opencode row" >&2
+		echo "a tools/call carrying _meta ai.opencode/sessionID $ses did not bind to an opencode row after $(($(date +%s) - t0))s" >&2
+		echo "shim stderr:" >&2
+		cat "$errlog" >&2
+		rm -f "$errlog"
 		exit 1
 	}
+	rm -f "$errlog"
 	echo "opencode service.json, session and _meta binding ok"
 	;;
 passing | failing)

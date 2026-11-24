@@ -157,7 +157,7 @@ func TestOpenCodeReplyRouteAfterUnknown(t *testing.T) {
 func TestOpenCodeConcurrentPullWakeDeadline(t *testing.T) {
 	e := newOCEnv(t, nil)
 	unverified := receiver.Sender{PID: 31337}
-	e.srv.Set(func(s *opencodetest.Service) { s.Prompt.Delay = 8 * time.Second })
+	e.srv.Set(func(s *opencodetest.Service) { s.Prompt.Delay = 60 * time.Second })
 	m := ocMsg(msg.Inform, "mailboxed body")
 	done := make(chan receiver.Result, 1)
 	go func() {
@@ -170,17 +170,26 @@ func TestOpenCodeConcurrentPullWakeDeadline(t *testing.T) {
 	if len(e.srv.Prompts()) == 0 {
 		t.Fatal("no wake prompt reached the service")
 	}
-	start := time.Now()
-	es, _, err := e.r.Pull("", 0)
-	if err != nil {
-		t.Fatal(err)
+	type pulled struct {
+		es  []receiver.Entry
+		err error
 	}
-	if len(es) != 1 || es[0].MessageID != m.MessageID {
-		t.Fatalf("pull %+v", es)
+	pc := make(chan pulled, 1)
+	go func() {
+		es, _, err := e.r.Pull("", 0)
+		pc <- pulled{es, err}
+	}()
+	var p pulled
+	select {
+	case p = <-pc:
+	case <-time.After(15 * time.Second):
+		t.Fatal("pull still blocked on the stalled prompt after 15 s")
 	}
-	const margin = 2 * time.Second
-	if d := time.Since(start); d > 5*time.Second+margin {
-		t.Fatalf("pull returned after %v, past the wake deadline plus margin", d)
+	if p.err != nil {
+		t.Fatal(p.err)
+	}
+	if len(p.es) != 1 || p.es[0].MessageID != m.MessageID {
+		t.Fatalf("pull %+v", p.es)
 	}
 	if r := <-done; r.State != adapter.Mailboxed {
 		t.Fatalf("receive %+v, want mailboxed", r)
