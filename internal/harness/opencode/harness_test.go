@@ -397,7 +397,6 @@ func TestSupersededFalseOnEveryError(t *testing.T) {
 		{"401", func(s *service) { s.Status = 401 }},
 		{"500", func(s *service) { s.Status = 500 }},
 		{"503", func(s *service) { s.Status = 503 }},
-		{"truncated list", func(s *service) { s.ListExtra = map[string]any{"next": "cursor_2"} }},
 		{"null data", func(s *service) { s.ListRaw = `{"data":null}` }},
 		{"no data", func(s *service) { s.ListRaw = `{"sessions":[]}` }},
 	}
@@ -452,6 +451,31 @@ func TestSupersededServiceReplaced(t *testing.T) {
 	}
 	if !r.h.Superseded(sess("ses_deleted", 5151)) {
 		t.Error("404 from the descriptor's own service not superseded")
+	}
+}
+
+func TestSupersededPagedList(t *testing.T) {
+	r := newRig(t, "2.4.0", nil,
+		fakeSession{ID: "ses_p1", Updated: t0},
+		fakeSession{ID: "ses_p2", Updated: t0},
+		fakeSession{ID: "ses_p3", Updated: t0},
+		fakeSession{ID: "ses_p4", Updated: t0},
+		fakeSession{ID: "ses_p5", Updated: t0, Archived: true})
+	r.svc.Set(func(s *service) { s.PageSize = 2 })
+	if r.h.Superseded(sess("ses_p4", 4242)) {
+		t.Error("live session off the first page superseded")
+	}
+	if !r.h.Superseded(sess("ses_p5", 4242)) {
+		t.Error("archived session off the first page not superseded")
+	}
+	if !r.h.Superseded(sess("ses_deleted", 4242)) {
+		t.Error("deleted session not superseded")
+	}
+	if r.h.Superseded(sess("ses_p1", 4242)) {
+		t.Error("live session on the first page superseded")
+	}
+	if n := r.count("/api/session"); n != 1 {
+		t.Errorf("%d list requests, want 1", n)
 	}
 }
 
