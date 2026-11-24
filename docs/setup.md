@@ -6,7 +6,7 @@ CrossTalk lets Claude Code and Codex sessions on one machine message each other 
 
 1. **Download and verify the binary.** The release asset for macOS is a universal binary (one file that runs on Apple silicon and Intel Macs) that is signed and notarized, so you do not need Go. Replace `v0.1.3` with the release you want. Run this in a scratch directory:
    ```sh
-   TAG=v0.1.3
+   TAG=v0.3.0
    curl -fLO "https://github.com/GoodOlClint/CrossTalk/releases/download/$TAG/crosstalk-$TAG-macos-universal.zip" &&
    curl -fLO "https://github.com/GoodOlClint/CrossTalk/releases/download/$TAG/crosstalk-$TAG-macos-universal.zip.sha256" &&
    shasum -a 256 -c "crosstalk-$TAG-macos-universal.zip.sha256" &&
@@ -129,7 +129,7 @@ Homebrew is a package manager for macOS and Linux; a *formula* is its recipe for
 Release assets: `crosstalk-<tag>-linux-amd64.tar.gz` and `crosstalk-<tag>-linux-arm64.tar.gz`, each with a `.sha256` beside it. They are not signed (no Gatekeeper on Linux) and need no Go and no `brew`. The arm64 binary is built but has never been run before a release. Install on an x86-64 machine:
 
 ```sh
-TAG=v0.1.3
+TAG=v0.3.0
 curl -fLO "https://github.com/GoodOlClint/CrossTalk/releases/download/$TAG/crosstalk-$TAG-linux-amd64.tar.gz" &&
 curl -fLO "https://github.com/GoodOlClint/CrossTalk/releases/download/$TAG/crosstalk-$TAG-linux-amd64.tar.gz.sha256" &&
 sha256sum -c "crosstalk-$TAG-linux-amd64.tar.gz.sha256" &&
