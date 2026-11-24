@@ -495,8 +495,8 @@ func TestSupersededCache(t *testing.T) {
 	if n := r.count("/api/session"); n != 2 {
 		t.Fatalf("%d list requests after the TTL, want 2", n)
 	}
-	if n := len(r.f.requests()); n != 3 {
-		t.Errorf("%d requests in all, want 3: two lists and one GET confirming the archived session", n)
+	if n := len(r.f.requests()); n != 4 {
+		t.Errorf("%d requests in all, want 4: two lists and a GET for each of the two checks of the archived session", n)
 	}
 }
 
@@ -582,5 +582,49 @@ func TestSupersededKeepsOneSnapshot(t *testing.T) {
 	r.h.Superseded(sess(sid, 5151))
 	if r.h.list.pid != 5151 {
 		t.Errorf("snapshot pid %d, want the current service's", r.h.list.pid)
+	}
+}
+
+func TestSupersededUnarchiveWithinTTL(t *testing.T) {
+	r := newRig(t, "2.4.0", nil, fakeSession{ID: sid, Updated: t0, Archived: true})
+	if !r.h.Superseded(sess(sid, 4242)) {
+		t.Fatal("archived session not superseded")
+	}
+	r.svc.Set(func(s *service) { s.Sessions[0].Archived = false })
+	r.clk.add(time.Second)
+	if r.h.Superseded(sess(sid, 4242)) {
+		t.Error("unarchived within the TTL: still superseded")
+	}
+}
+
+func TestSupersededBare404IsNotDeleted(t *testing.T) {
+	r := newRig(t, "2.4.0", nil)
+	r.svc.Set(func(s *service) { s.BareNotFound = true })
+	if r.h.Superseded(sess("ses_deleted", 4242)) {
+		t.Error("404 without SessionNotFoundError: superseded")
+	}
+	st, err := r.h.Status(context.Background(), "ses_deleted")
+	if err != nil || st.Reachable || st.Loaded {
+		t.Errorf("status on a bare 404: %+v %v", st, err)
+	}
+}
+
+func TestSupersededNotFoundForAnotherSession(t *testing.T) {
+	r := newRig(t, "2.4.0", nil, fakeSession{ID: sid, Updated: t0, ListArchived: true})
+	r.svc.Set(func(s *service) { s.NotFoundID = "ses_other"; s.Sessions = nil })
+	if r.h.Superseded(sess(sid, 4242)) {
+		t.Error("404 naming another session: superseded")
+	}
+}
+
+func TestSupersededDeletionStaysConfirmedInWindow(t *testing.T) {
+	r := newRig(t, "2.4.0", nil)
+	if !r.h.Superseded(sess("ses_deleted", 4242)) {
+		t.Fatal("deleted session not superseded")
+	}
+	r.svc.Set(func(s *service) { s.Status = 500 })
+	r.clk.add(2 * time.Second)
+	if !r.h.Superseded(sess("ses_deleted", 4242)) {
+		t.Error("confirmed deletion lost inside the TTL window")
 	}
 }

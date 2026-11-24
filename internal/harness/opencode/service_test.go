@@ -58,6 +58,15 @@ func TestReadServiceRefusals(t *testing.T) {
 		{"mode 0660", func(t *testing.T, dir string) string {
 			return writeService(t, dir, "http://127.0.0.1:1", testPassword, 0o660)
 		}, ReasonMode},
+		{"mode setuid 04600", func(t *testing.T, dir string) string {
+			return writeService(t, dir, "http://127.0.0.1:1", testPassword, 0o600|os.ModeSetuid)
+		}, ReasonMode},
+		{"mode setgid 02600", func(t *testing.T, dir string) string {
+			return writeService(t, dir, "http://127.0.0.1:1", testPassword, 0o600|os.ModeSetgid)
+		}, ReasonMode},
+		{"mode sticky 01600", func(t *testing.T, dir string) string {
+			return writeService(t, dir, "http://127.0.0.1:1", testPassword, 0o600|os.ModeSticky)
+		}, ReasonMode},
 		{"symlink", func(t *testing.T, dir string) string {
 			real := writeService(t, dir, "http://127.0.0.1:1", testPassword, 0o600)
 			link := filepath.Join(dir, "link.json")

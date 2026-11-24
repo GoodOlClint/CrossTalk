@@ -266,8 +266,10 @@ func (h *Harness) Status(ctx context.Context, id string) (adapter.SessionStatus,
 	d, err := getSession(ctx, c, id)
 	var e *Error
 	switch {
-	case errors.As(err, &e) && e.Kind == KindNotFound:
+	case errors.As(err, &e) && e.Kind == KindNotFound && e.NotFoundID == id:
 		return adapter.SessionStatus{Reachable: true}, nil
+	case errors.As(err, &e) && e.Kind == KindNotFound:
+		return adapter.SessionStatus{}, nil
 	case errors.As(err, &e) && e.Kind == KindUnreachable:
 		return adapter.SessionStatus{}, nil
 	case err != nil:
@@ -306,16 +308,22 @@ func (h *Harness) Superseded(s harness.Session) bool {
 	if d, listed := l.sessions[s.SessionRef]; listed && !d.isArchived() {
 		return false
 	}
-	if v, done := l.confirmed[s.SessionRef]; done {
-		return v
+	if l.deleted[s.SessionRef] {
+		return true
+	}
+	if l.confirmed[s.SessionRef] {
+		return false
 	}
 	ctx, cancel := context.WithDeadline(context.Background(), l.budget)
 	defer cancel()
 	d, err := getSession(ctx, c, s.SessionRef)
 	var e *Error
-	v := err == nil && d.isArchived() || errors.As(err, &e) && e.Kind == KindNotFound
-	if err == nil || v {
-		l.confirmed[s.SessionRef] = v
+	v := err == nil && d.isArchived() || errors.As(err, &e) && e.Kind == KindNotFound && e.NotFoundID == s.SessionRef
+	switch {
+	case err == nil && !v:
+		l.confirmed[s.SessionRef] = true
+	case err != nil && v:
+		l.deleted[s.SessionRef] = true
 	}
 	return v
 }
@@ -329,12 +337,13 @@ type sessionList struct {
 	ok        bool
 	sessions  map[string]sessionDoc
 	confirmed map[string]bool
+	deleted   map[string]bool
 }
 
 // ponytail: Superseded holds one lock across its requests; callers queue for
 // at most supersedeDeadline per TTL window. Per-pid locks if several services matter.
 func (h *Harness) fetchList(c *Client, pid int) sessionList {
-	l := sessionList{pid: pid, at: h.now(), budget: time.Now().Add(supersedeDeadline), confirmed: map[string]bool{}}
+	l := sessionList{pid: pid, at: h.now(), budget: time.Now().Add(supersedeDeadline), confirmed: map[string]bool{}, deleted: map[string]bool{}}
 	ctx, cancel := context.WithDeadline(context.Background(), l.budget)
 	defer cancel()
 	if docs, err := listSessions(ctx, c); err == nil {
