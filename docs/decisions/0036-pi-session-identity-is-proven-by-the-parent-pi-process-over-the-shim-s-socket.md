@@ -33,7 +33,7 @@ AGENTS.md says identity is per request, never per process: Claude from the paren
 ## Consequences
 
 - Registration gives the local-teammate notice class, so the host check and the token are what keep an arbitrary launcher out of it; a same-user process can still fake both (a process titled `pi`, an env it chooses). A same-user process can also create a socket at the path before the shim does and feed the extension text. Both are inside ADR 0004's same-user model (any same-user process can already type into the TUI or edit the session file). The 0700 directory excludes other users.
-- Two Pi processes that open the same session file make two shims claim one `(pi, session id)`; the plan measures it (M4) and the second registration follows the registry's existing rule for a duplicate binding.
+- Two Pi processes that open the same session file make two shims claim one `(pi, session id)`; measured (spike 24 M4): Pi neither locks nor refuses, so both run, and the registry's live-holder rule keeps the first and refuses the later claimant (`ErrAgentHeld`); no takeover.
 - `crosstalk mcp` started by hand inside a Pi `bash` tool call has the bash process as its parent, so it is never proven and stays unbound.
 
 ## Trial record
