@@ -93,6 +93,7 @@ async function shim() {
 	await new Promise((r) => server.listen(path, r));
 	srv.send = (v) => srv.conns.at(-1).write(typeof v === "string" ? v : JSON.stringify(v) + "\n");
 	srv.acks = () => srv.lines.filter((l) => "ok" in l);
+	srv.hellos = () => srv.lines.filter((l) => "proto" in l);
 	cleanup.push(() => {
 		for (const c of srv.conns) c.destroy();
 		server.close();
@@ -104,7 +105,7 @@ async function connected(opts) {
 	const srv = await shim();
 	const s = load(opts);
 	await s.emit("session_start", { reason: "startup" });
-	await until(() => srv.lines.length > 0, "hello");
+	await until(() => srv.lines.length === 2, "hello and status");
 	return { s, srv };
 }
 
@@ -151,8 +152,8 @@ test("sends name changes and busy or idle lines", async () => {
 	s.emit("session_info_changed", { name: "other" });
 	s.emit("agent_start");
 	s.emit("agent_settled");
-	await until(() => srv.lines.length === 4, "three lines");
-	assert.deepEqual(srv.lines.slice(1), [{ name: "other" }, { status: "busy" }, { status: "idle" }]);
+	await until(() => srv.lines.length === 5, "three more lines");
+	assert.deepEqual(srv.lines.slice(2), [{ name: "other" }, { status: "busy" }, { status: "idle" }]);
 });
 
 test("an immediate frame becomes sendMessage and is answered only on the admission event", async () => {
@@ -165,6 +166,8 @@ test("an immediate frame becomes sendMessage and is answered only on the admissi
 			options: { deliverAs: "steer", triggerTurn: true },
 		});
 		s.emit(event, admitted("someone-else"));
+		s.emit(event, { message: { ...admitted("m1").message, customType: "another-extension" } });
+		s.emit(event, { message: { ...admitted("m1").message, role: "toolResult" } });
 		await settle();
 		assert.deepEqual(srv.acks(), []);
 		s.emit(event, admitted("m1"));
@@ -187,7 +190,8 @@ for (const idle of [true, false]) {
 
 	test(`a next_turn frame with no entry is not answered (isIdle ${idle})`, async () => {
 		const { s, srv } = await connected({ idle });
-		s.entries.push({ type: "custom_message", details: { crosstalk_id: "older" } });
+		s.entries.push({ type: "custom_message", customType: "crosstalk", details: { crosstalk_id: "older" } });
+		s.entries.push({ type: "custom_message", customType: "another-extension", details: { crosstalk_id: "n2" } });
 		srv.send(frame("n2", false));
 		await until(() => s.sent.length === 1, "delivery");
 		await settle();
@@ -212,11 +216,19 @@ test("a rejected send gets no answer", async () => {
 test("a malformed line is dropped and the valid frame after it is processed", async () => {
 	const log = mock.method(console, "error", () => {});
 	const { s, srv } = await connected({ send: appendEntry });
-	srv.send('{"id":"bad\nnull\n{"id":7,"text":"x"}\n' + JSON.stringify(frame("ok1", false)) + "\n");
+	const bad = [
+		'{"id":"bad',
+		"null",
+		JSON.stringify({ ...frame("x", false), id: 7 }),
+		JSON.stringify({ ...frame("x", false), trigger: "false" }),
+		JSON.stringify({ ...frame("x", false), deliver: "followUp" }),
+		JSON.stringify({ id: "x", trigger: true, text: "no deliver" }),
+	];
+	srv.send([...bad, JSON.stringify(frame("ok1", false))].join("\n") + "\n");
 	await until(() => srv.acks().length === 1, "ack of the valid frame");
 	assert.equal(s.sent.length, 1);
 	assert.deepEqual(srv.acks(), [{ id: "ok1", ok: true }]);
-	assert.equal(log.mock.callCount(), 3);
+	assert.equal(log.mock.callCount(), bad.length);
 });
 
 test("a line split across two data callbacks is delivered and answered once", async () => {
@@ -234,15 +246,37 @@ test("a line split across two data callbacks is delivered and answered once", as
 	assert.equal(srv.acks().length, 1);
 });
 
-test("an error in the connect handler is caught, not thrown", async () => {
+test("a hello that cannot be built closes the connection, retries and still warns", async () => {
 	const log = mock.method(console, "error", () => {});
-	await shim();
+	mock.timers.enable({ apis: ["setTimeout"] });
+	const srv = await shim();
 	const s = load();
 	s.ctx.sessionManager.getSessionId = () => {
 		throw new Error("stale context");
 	};
 	s.emit("session_start", { reason: "startup" });
 	await until(() => log.mock.callCount() === 1, "logged error");
+	await advance(31000);
+	assert.ok(srv.conns.length > 1, "no retry");
+	assert.deepEqual(s.status, [["crosstalk", "crosstalk: no shim"]]);
+});
+
+test("a shutdown before the connect completes sends no hello", async () => {
+	const srv = await shim();
+	const s = load();
+	s.emit("session_start", { reason: "startup" });
+	s.emit("session_shutdown", { reason: "new" });
+	await settle();
+	assert.deepEqual(srv.lines, []);
+});
+
+test("the status follows every hello, so a reconnect during a run reports busy", async () => {
+	const { s, srv } = await connected();
+	assert.deepEqual(srv.lines[1], { status: "idle" });
+	srv.conns[0].end();
+	s.emit("agent_start");
+	await until(() => srv.hellos().length === 2 && srv.lines.at(-1).status, "second hello and status");
+	assert.deepEqual(srv.lines.at(-1), { status: "busy" });
 });
 
 test("reconnects after close with a new hello and discards the unfinished tail", async () => {
@@ -252,8 +286,8 @@ test("reconnects after close with a new hello and discards the unfinished tail",
 	srv.conns[0].write(line.slice(0, 10));
 	await settle();
 	srv.conns[0].end();
-	await until(() => srv.lines.length === 2, "second hello");
-	assert.equal(srv.lines[1].token, srv.lines[0].token);
+	await until(() => srv.hellos().length === 2, "second hello");
+	assert.equal(srv.hellos()[1].token, srv.lines[0].token);
 	srv.send(line + "\n");
 	await until(() => srv.acks().length === 1, "ack on the new connection");
 	assert.equal(s.sent.length, 1);
@@ -264,7 +298,7 @@ test("an admission seen after a reconnect is not answered on the new connection"
 	srv.send(frame("late", true));
 	await until(() => s.sent.length === 1, "delivery");
 	srv.conns[0].end();
-	await until(() => srv.lines.length === 2, "second hello");
+	await until(() => srv.hellos().length === 2, "second hello");
 	s.emit("message_start", admitted("late"));
 	await settle();
 	assert.deepEqual(srv.acks(), []);
@@ -314,7 +348,7 @@ test("keeps retrying after the footer status and clears it on connect", async ()
 	await advance(31000);
 	const srv = await shim();
 	await advance(4000);
-	await until(() => srv.lines.length === 1, "hello");
+	await until(() => srv.hellos().length === 1, "hello");
 	assert.deepEqual(s.status.at(-1), ["crosstalk", undefined]);
 });
 
