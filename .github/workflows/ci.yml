@@ -40,6 +40,12 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
+      # The Pi extension test needs Node's TypeScript type stripping.
+      - uses: actions/setup-node@v7
+        if: steps.scope.outputs.scope != 'docs'
+        with:
+          node-version: 24
+          package-manager-cache: false
       - name: Fast tests (docs and marketplace changes only)
         if: steps.scope.outputs.scope == 'docs'
         run: go test ./cmd/crosstalk -run 'TestSetupDocCoversGaps|TestUpgradeFromBundledServerDocumented|TestManifestsMatchBinary|TestMarketplacesPinToReleaseTag|TestVersionIs015AndManifestsMatch|TestSiteConfig|TestSiteLinks|TestSiteNamesEveryTool|TestSkillCoversStatesAndCodes|TestEvalFixtureNoticesMatchConst|TestPluginShipsNoServer'
