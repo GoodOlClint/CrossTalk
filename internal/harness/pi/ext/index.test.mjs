@@ -74,7 +74,9 @@ function load({ idle = true, send } = {}) {
 	return s;
 }
 
-async function shim() {
+const ack = (c) => c.write(JSON.stringify({ hello: "ok" }) + "\n");
+
+async function shim({ onHello = ack } = {}) {
 	const dir = join(home, ".local", "state", "crosstalk", "sock", "pi");
 	mkdirSync(dir, { recursive: true });
 	const path = join(dir, process.pid + ".sock");
@@ -87,7 +89,11 @@ async function shim() {
 		c.on("data", (d) => {
 			const parts = (buf + d).split("\n");
 			buf = parts.pop();
-			for (const p of parts) srv.lines.push(JSON.parse(p));
+			for (const p of parts) {
+				const line = JSON.parse(p);
+				srv.lines.push(line);
+				if ("proto" in line) onHello(c);
+			}
 		});
 	});
 	await new Promise((r) => server.listen(path, r));
@@ -341,7 +347,7 @@ for (const [what, prefix] of [
 	});
 }
 
-test("keeps retrying after the footer status and clears it on connect", async () => {
+test("keeps retrying after the footer status and clears it on the hello ack", async () => {
 	mock.timers.enable({ apis: ["setTimeout"] });
 	const s = load();
 	s.emit("session_start", { reason: "startup" });
@@ -359,4 +365,46 @@ test("shows a refusal reason once", async () => {
 	await settle();
 	assert.deepEqual(s.status, [["crosstalk", "crosstalk: protocol 2 wanted"]]);
 	assert.equal(s.sent.length, 0);
+});
+
+// Counts hellos over 6 s of mocked time against a shim that closes every
+// connection after its hello, answering it with an ack, an error or nothing.
+async function hellosOver6s(onHello) {
+	mock.timers.enable({ apis: ["setTimeout"] });
+	const srv = await shim({ onHello });
+	const s = load();
+	s.emit("session_start", { reason: "startup" });
+	for (let t = 0; t < 6000; t += 100) {
+		mock.timers.tick(100);
+		await settle();
+	}
+	return { s, n: srv.hellos().length };
+}
+
+test("resets the reconnect backoff only on the hello ack", async () => {
+	const { n } = await hellosOver6s((c) => {
+		ack(c);
+		c.end();
+	});
+	assert.ok(n >= 15, `${n} hellos with an ack each time, want the 200 ms delay kept`);
+});
+
+for (const [what, onHello] of [
+	["an error", (c) => c.end(JSON.stringify({ error: "token mismatch" }) + "\n")],
+	["no ack", (c) => c.end()],
+]) {
+	test(`backs off when a hello gets ${what}`, async () => {
+		const { s, n } = await hellosOver6s(onHello);
+		assert.ok(n >= 2 && n <= 8, `${n} hellos in 6 s, want the backoff to grow toward 2 s`);
+		if (what === "an error") assert.deepEqual(s.status, [["crosstalk", "crosstalk: token mismatch"]]);
+	});
+}
+
+test("a refusal reason is not replaced by the no-shim status", async () => {
+	mock.timers.enable({ apis: ["setTimeout"] });
+	await shim({ onHello: (c) => c.end(JSON.stringify({ error: "token mismatch" }) + "\n") });
+	const s = load();
+	s.emit("session_start", { reason: "startup" });
+	await advance(31000);
+	assert.deepEqual(s.status, [["crosstalk", "crosstalk: token mismatch"]]);
 });
