@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -61,6 +62,8 @@ func startShim(t *testing.T, stateDir, sockDir string, opts ...shimOpt) *shim {
 	srv := mcpserver.New(mcpserver.Options{Backend: fb.AsBackend(), Registry: reg, Harnesses: []harness.Harness{h}, PPID: o.PPID})
 	st, ct := mcp.NewInMemoryTransports()
 	ctx, cancel := context.WithCancel(context.Background())
+	s := &shim{h: h, reg: reg, srv: srv, done: make(chan error, 1)}
+	go func() { s.done <- h.ServeClaims(ctx, srv) }()
 	if _, err := srv.MCP().Connect(ctx, st, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -68,8 +71,7 @@ func startShim(t *testing.T, stateDir, sockDir string, opts ...shimOpt) *shim {
 	if err != nil {
 		t.Fatal(err)
 	}
-	s := &shim{h: h, reg: reg, srv: srv, cs: cs, done: make(chan error, 1)}
-	go func() { s.done <- h.ServeClaims(ctx, srv) }()
+	s.cs = cs
 	var once bool
 	s.stop = func() {
 		if once {
@@ -280,9 +282,17 @@ func TestHelloRefusals(t *testing.T) {
 	_, m = greet(t, s, bad)
 	mustRefuse(t, m, "major 2")
 
-	bad = helloFor("../x", "")
-	_, m = greet(t, s, bad)
-	mustRefuse(t, m, "session id")
+	for _, id := range []string{"../x", "-x", "x-", ".x", "a/b", ""} {
+		_, m = greet(t, s, helloFor(id, ""))
+		mustRefuse(t, m, "session id")
+	}
+
+	b, _ := json.Marshal(helloFor("s1", ""))
+	c0 := dial(t, s.sock())
+	c0.c.Write(b)
+	c0.c.(*net.UnixConn).CloseWrite()
+	m, _ = c0.read()
+	mustRefuse(t, m, "hello")
 
 	c := dial(t, s.sock())
 	c.c.Write([]byte("{not json\n"))
@@ -350,6 +360,9 @@ func TestSecondSessionIDRefused(t *testing.T) {
 		t.Fatal(err)
 	}
 	mustRefuse(t, m, "second")
+	if m, err := c.read(); !errors.Is(err, io.EOF) {
+		t.Fatalf("read %v %v, want the conflicting connection closed", m, err)
+	}
 
 	c.c.Close()
 	_, m = greet(t, s, helloFor("second", "/a/second.jsonl"))
@@ -371,6 +384,10 @@ func TestSessionRef(t *testing.T) {
 	b := helloFor("review-1", "/p/two/.pi/sessions/review-1.jsonl").ref()
 	if a == b || !strings.HasPrefix(a, "review-1@") || !strings.HasPrefix(b, "review-1@") {
 		t.Fatalf("refs %q %q, want two distinct refs for one id in two directories", a, b)
+	}
+	long := strings.Repeat("a", 300)
+	if !sessionID.MatchString(long) || !sessionID.MatchString("review-1") || !sessionID.MatchString("x") {
+		t.Fatal("an id Pi accepts was refused")
 	}
 	if r := helloFor("review-1", "").ref(); r != "review-1" {
 		t.Fatalf("no session file: ref %q, want the bare id", r)
@@ -441,7 +458,7 @@ func TestSecondShimListsSession(t *testing.T) {
 	}
 	c.send(t, map[string]string{"status": "idle"})
 	eventually(t, "idle", func() bool { ss := discover(t, other); return len(ss) == 1 && ss[0].Status == "idle" })
-	fi, err := os.Stat(s.h.statusPath(os.Getpid()))
+	fi, err := os.Stat(s.h.statusPath(os.Getpid(), os.Getpid()))
 	if err != nil || fi.Mode().Perm() != 0o600 {
 		t.Fatalf("status file %v %v, want 0600", fi, err)
 	}
@@ -545,5 +562,84 @@ func TestSocketDirIsPrivate(t *testing.T) {
 	fi, err := os.Stat(sockDir)
 	if err != nil || fi.Mode().Perm() != 0o700 {
 		t.Fatalf("socket dir %v %v, want 0700", fi, err)
+	}
+}
+
+// A second shim under the same live Pi process waits for the first to stop
+// listening rather than displace it, and never removes a file that is not a
+// socket.
+func TestListenerNotDisplaced(t *testing.T) {
+	old := listenRetry
+	listenRetry = 20 * time.Millisecond
+	t.Cleanup(func() { listenRetry = old })
+	sockDir := shortDir(t)
+	a := startShim(t, t.TempDir(), sockDir)
+	dial(t, a.sock())
+	b := startShim(t, t.TempDir(), sockDir)
+	time.Sleep(100 * time.Millisecond)
+	_, m := greet(t, a, helloFor("s1", ""))
+	mustAck(t, m)
+	if _, ok := identify(a, os.Getpid()); !ok {
+		t.Fatal("the first shim lost its connection")
+	}
+	if _, ok := identify(b, os.Getpid()); ok {
+		t.Fatal("the waiting shim took the hello")
+	}
+	a.stop()
+	_, m = greet(t, b, helloFor("s1", ""))
+	mustAck(t, m)
+
+	foreign := shortDir(t)
+	path := filepath.Join(foreign, strconv.Itoa(os.Getpid())+".sock")
+	if err := os.WriteFile(path, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := NewHarness(Options{PPID: os.Getpid(), Token: testToken, SockDir: foreign, Host: func(int) bool { return true }})
+	if err := h.ServeClaims(context.Background(), nil); err == nil {
+		t.Fatal("served over a file that is not a socket")
+	}
+	if b, err := os.ReadFile(path); err != nil || string(b) != "keep" {
+		t.Fatalf("foreign file %q %v", b, err)
+	}
+}
+
+// lateRegistrar finishes a registration only after the shim is told to stop.
+type lateRegistrar struct{ entered chan struct{} }
+
+func (r lateRegistrar) RegisterSession(ctx context.Context, _ harness.RequestContext, _ string) error {
+	close(r.entered)
+	<-ctx.Done()
+	return nil
+}
+
+func (lateRegistrar) RetireSession(context.Context, harness.RequestContext) (bool, error) {
+	return false, nil
+}
+
+func TestStopDuringRegistrationReturns(t *testing.T) {
+	h := NewHarness(Options{PPID: os.Getpid(), Token: testToken, SockDir: shortDir(t), Host: func(int) bool { return true }})
+	ctx, cancel := context.WithCancel(context.Background())
+	r := lateRegistrar{entered: make(chan struct{})}
+	done := make(chan error, 1)
+	go func() { done <- h.ServeClaims(ctx, r) }()
+	c := dial(t, h.sockPath())
+	c.send(t, helloFor("s1", ""))
+	<-r.entered
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("ServeClaims did not return after a registration finished during shutdown")
+	}
+}
+
+type failingDir struct{}
+
+func (failingDir) List() ([]registry.Descriptor, error) { return nil, errors.New("unreadable") }
+
+func TestDiscoverReportsRegistryError(t *testing.T) {
+	h := NewHarness(Options{PPID: 1, SockDir: shortDir(t), Directory: failingDir{}})
+	if _, err := h.Discover(context.Background()); err == nil {
+		t.Fatal("registry error hidden")
 	}
 }

@@ -180,7 +180,7 @@ func (h *Harness) Discover(context.Context) ([]harness.Session, error) {
 	}
 	ds, err := h.dir.List()
 	if err != nil {
-		return nil, nil
+		return nil, err
 	}
 	var out []harness.Session
 	for _, d := range ds {
@@ -191,7 +191,7 @@ func (h *Harness) Discover(context.Context) ([]harness.Session, error) {
 		if d.HarnessEndpoint != nil {
 			s.Endpoint = *d.HarnessEndpoint
 		}
-		if st, ok := readStatus(h.statusPath(*d.HarnessPID)); ok && st.PID == d.PID {
+		if st, ok := readStatus(h.statusPath(*d.HarnessPID, d.PID)); ok {
 			s.Reachable = true
 			if st.Status == "busy" || st.Status == "idle" {
 				s.Status = st.Status

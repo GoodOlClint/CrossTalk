@@ -112,6 +112,8 @@ async function connected(opts) {
 	const s = load(opts);
 	await s.emit("session_start", { reason: "startup" });
 	await until(() => srv.lines.length === 2, "hello and status");
+	// Lets the extension read the ack, which clears its real no-shim timer.
+	await settle();
 	return { s, srv };
 }
 

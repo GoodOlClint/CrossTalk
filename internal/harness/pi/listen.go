@@ -2,6 +2,7 @@ package pi
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -15,10 +16,12 @@ import (
 	"regexp"
 	"strconv"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/GoodOlClint/crosstalk/internal/harness"
 	"github.com/GoodOlClint/crosstalk/internal/peercred"
+	"github.com/GoodOlClint/crosstalk/internal/quiesce"
 )
 
 // Proto is the line protocol version the extension and the shim speak.
@@ -31,10 +34,13 @@ const (
 	writeTimeout = 5 * time.Second
 )
 
-var helloTimeout = 5 * time.Second
+var (
+	helloTimeout = 5 * time.Second
+	listenRetry  = 200 * time.Millisecond
+)
 
-// Pi's own session id rule (session-manager.js): alphanumerics, '.', '_', '-'.
-var sessionID = regexp.MustCompile(`^[A-Za-z0-9._-]{1,256}$`)
+// Pi's own session id rule (assertValidSessionId in session-manager.js).
+var sessionID = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$`)
 
 type hello struct {
 	Proto       int    `json:"proto"`
@@ -79,8 +85,10 @@ func (h *Harness) check(p hello) error {
 	return nil
 }
 
-func (h *Harness) statusPath(pid int) string {
-	return filepath.Join(h.sockDir, strconv.Itoa(pid)+".status")
+// statusPath is per shim as well as per Pi process, so a shim never removes
+// a successor's file.
+func (h *Harness) statusPath(piPID, shimPID int) string {
+	return filepath.Join(h.sockDir, strconv.Itoa(piPID)+"."+strconv.Itoa(shimPID)+".status")
 }
 
 type statusDoc struct {
@@ -100,9 +108,9 @@ func readStatus(path string) (statusDoc, bool) {
 // writeStatus records the connection state for other shims' Discover; the
 // caller holds h.mu.
 func (h *Harness) writeStatus() {
-	path := h.statusPath(h.ppid)
+	path := h.statusPath(h.ppid, os.Getpid())
 	if h.conn == nil {
-		removeOwnStatus(path)
+		os.Remove(path)
 		return
 	}
 	st := h.status
@@ -110,7 +118,7 @@ func (h *Harness) writeStatus() {
 		st = "connected"
 	}
 	b, _ := json.Marshal(statusDoc{PID: os.Getpid(), Status: st})
-	tmp := path + ".tmp" + strconv.Itoa(os.Getpid())
+	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, b, 0o600); err != nil {
 		h.logger.Warn("pi: writing status file", "err", err)
 		return
@@ -118,14 +126,6 @@ func (h *Harness) writeStatus() {
 	if err := os.Rename(tmp, path); err != nil {
 		os.Remove(tmp)
 		h.logger.Warn("pi: writing status file", "err", err)
-	}
-}
-
-// removeOwnStatus removes the status file only while it names this shim: a
-// newer shim for the same Pi process may have written it.
-func removeOwnStatus(path string) {
-	if st, ok := readStatus(path); ok && st.PID == os.Getpid() {
-		os.Remove(path)
 	}
 }
 
@@ -142,28 +142,23 @@ func (h *Harness) ServeClaims(ctx context.Context, r harness.SessionRegistrar) e
 		return err
 	}
 	path := h.sockPath()
-	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+	ln, err := h.listen(ctx, path)
+	if ln == nil {
 		return err
 	}
-	ln, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
-	if err != nil {
-		return err
-	}
-	ln.SetUnlinkOnClose(false)
 	own, _ := os.Stat(path)
 	var wg sync.WaitGroup
 	defer func() {
-		ln.Close()
-		h.mu.Lock()
-		if h.conn != nil {
-			h.conn.Close()
-		}
-		h.mu.Unlock()
-		wg.Wait()
+		// Unlinked while still listening: a successor waits for this listener
+		// to stop answering before it replaces the path (listen).
 		if fi, err := os.Stat(path); err == nil && own != nil && os.SameFile(fi, own) {
 			os.Remove(path)
 		}
-		removeOwnStatus(h.statusPath(h.ppid))
+		ln.Close()
+		wg.Wait()
+		h.mu.Lock()
+		os.Remove(h.statusPath(h.ppid, os.Getpid()))
+		h.mu.Unlock()
 	}()
 	stop := context.AfterFunc(ctx, func() { ln.Close() })
 	defer stop()
@@ -177,6 +172,61 @@ func (h *Harness) ServeClaims(ctx context.Context, r harness.SessionRegistrar) e
 		}
 		wg.Go(func() { h.serve(ctx, c, r) })
 	}
+}
+
+// listen takes the socket path once no listener answers on it. One that
+// answers is a shim still running for this Pi process, as the old session's
+// shim is for a moment after /new, so this one waits rather than displace it.
+// A path that is not a socket is never removed. A nil listener with a nil
+// error means ctx ended.
+func (h *Harness) listen(ctx context.Context, path string) (*net.UnixListener, error) {
+	for {
+		busy := false
+		fi, err := os.Lstat(path)
+		switch {
+		case errors.Is(err, os.ErrNotExist):
+		case err != nil:
+			return nil, err
+		case fi.Mode()&os.ModeSocket == 0:
+			return nil, fmt.Errorf("pi: %s exists and is not a socket", path)
+		default:
+			if c, err := net.DialTimeout("unix", path, time.Second); err == nil {
+				c.Close()
+				busy = true
+			} else if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return nil, err
+			}
+		}
+		if !busy {
+			ln, err := net.ListenUnix("unix", &net.UnixAddr{Name: path, Net: "unix"})
+			if err == nil {
+				ln.SetUnlinkOnClose(false)
+				return ln, nil
+			}
+			if !errors.Is(err, syscall.EADDRINUSE) {
+				return nil, err
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return nil, nil
+		case <-time.After(listenRetry):
+		}
+	}
+}
+
+var errUnterminated = errors.New("line not terminated")
+
+// lines splits on '\n' only: an unterminated tail at EOF or at the read
+// deadline is an error, never a line.
+func lines(data []byte, atEOF bool) (int, []byte, error) {
+	if i := bytes.IndexByte(data, '\n'); i >= 0 {
+		return i + 1, data[:i], nil
+	}
+	if atEOF && len(data) > 0 {
+		return 0, nil, errUnterminated
+	}
+	return 0, nil, nil
 }
 
 func reply(c net.Conn, v any) {
@@ -193,12 +243,15 @@ func refuse(c net.Conn, reason string) {
 // status and name lines until it drops.
 func (h *Harness) serve(ctx context.Context, c *net.UnixConn, r harness.SessionRegistrar) {
 	defer c.Close()
+	stop := context.AfterFunc(ctx, func() { c.Close() })
+	defer stop()
 	if pid, err := peercred.PeerPID(c); err != nil || pid != h.ppid {
 		h.logger.Warn("pi: closed a connection from a process other than the parent", "peer_pid", pid, "ppid", h.ppid, "err", err)
 		return
 	}
 	sc := bufio.NewScanner(c)
 	sc.Buffer(make([]byte, 0, 4096), MaxLine)
+	sc.Split(lines)
 	c.SetReadDeadline(time.Now().Add(helloTimeout))
 	if !sc.Scan() {
 		h.logger.Warn("pi: no hello", "err", sc.Err())
@@ -222,8 +275,7 @@ func (h *Harness) serve(ctx context.Context, c *net.UnixConn, r harness.SessionR
 	}
 	c.SetReadDeadline(time.Time{})
 	defer h.drop(c)
-	for sc.Scan() {
-		h.line(ctx, c, sc.Bytes(), r)
+	for sc.Scan() && h.line(ctx, c, sc.Bytes(), r) {
 	}
 }
 
@@ -239,7 +291,7 @@ func (h *Harness) accept(ctx context.Context, c net.Conn, p hello, r harness.Ses
 	}
 	h.proven = &p
 	h.mu.Unlock()
-	if err := r.RegisterSession(ctx, harness.RequestContext{ParentPID: h.ppid}, p.Cwd); err != nil {
+	if err := register(ctx, r, h.ppid, p.Cwd); err != nil {
 		h.mu.Lock()
 		if h.proven == &p {
 			h.proven = prev
@@ -258,6 +310,17 @@ func (h *Harness) accept(ctx context.Context, c net.Conn, p hello, r harness.Ses
 	return nil
 }
 
+// register runs inside the refresh gate, so no descriptor changes while a
+// refreshing shim takes its handoff.
+func register(ctx context.Context, r harness.SessionRegistrar, ppid int, cwd string) error {
+	done, ok := quiesce.Hold(ctx)
+	if !ok {
+		return ctx.Err()
+	}
+	defer done()
+	return r.RegisterSession(ctx, harness.RequestContext{ParentPID: ppid}, cwd)
+}
+
 func (h *Harness) drop(c net.Conn) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -268,54 +331,54 @@ func (h *Harness) drop(c net.Conn) {
 }
 
 // line handles one extension line after the hello: a status, a session name,
-// or a repeated hello. Anything else is ignored here.
-func (h *Harness) line(ctx context.Context, c net.Conn, b []byte, r harness.SessionRegistrar) {
+// or a repeated hello. Lines from a connection the session no longer uses are
+// dropped. It returns false when the connection must close: a hello naming
+// another session.
+func (h *Harness) line(ctx context.Context, c net.Conn, b []byte, r harness.SessionRegistrar) bool {
 	var f map[string]json.RawMessage
 	if json.Unmarshal(b, &f) != nil {
 		h.logger.Warn("pi: malformed line from the extension")
-		return
+		return true
 	}
 	if _, ok := f["session_id"]; ok {
 		var p hello
-		if json.Unmarshal(b, &p) != nil {
-			refuse(c, "malformed hello")
-			return
-		}
 		cur, _ := h.session()
-		if p.ref() != cur.ref() {
+		if json.Unmarshal(b, &p) != nil || p.ref() != cur.ref() {
 			h.logger.Warn("pi: hello for another session refused", "session", p.SessionID, "bound", cur.SessionID)
 			refuse(c, fmt.Sprintf("session %s is not the session this shim serves", p.SessionID))
+			return false
 		}
-		return
+		return true
 	}
 	if raw, ok := f["status"]; ok {
 		var st string
 		if json.Unmarshal(raw, &st) == nil && (st == "busy" || st == "idle") {
 			h.mu.Lock()
-			h.status = st
 			if h.conn == c {
+				h.status = st
 				h.writeStatus()
 			}
 			h.mu.Unlock()
 		}
-		return
+		return true
 	}
 	if raw, ok := f["name"]; ok {
 		var name string
 		if json.Unmarshal(raw, &name) != nil {
-			return
+			return true
 		}
 		h.mu.Lock()
-		if h.proven == nil {
+		if h.proven == nil || h.conn != c {
 			h.mu.Unlock()
-			return
+			return true
 		}
 		p := *h.proven
 		p.Name = name
 		h.proven = &p
 		h.mu.Unlock()
-		if err := r.RegisterSession(ctx, harness.RequestContext{ParentPID: h.ppid}, p.Cwd); err != nil {
+		if err := register(ctx, r, h.ppid, p.Cwd); err != nil {
 			h.logger.Warn("pi: applying session name", "err", err)
 		}
 	}
+	return true
 }
