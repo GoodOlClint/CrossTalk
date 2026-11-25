@@ -63,6 +63,7 @@ Differences from the first sketch: binding is two calls, because the MCP server 
 - Binding, discovery, rendering and the native-reply address live in the two harness packages, not in `internal/shim`, `internal/mcpserver` or `internal/wire`.
 - Design §2 "Components" and §6 "Injector per harness" are the contract and name the interface; a new harness is one package plus one line in `cmd/crosstalk`.
 - OpenCode (#273, ADR 0032) adds a fourth install-adjacent step outside the harness packages, the K11 parent classification in `cmd/crosstalk/install_shims.go` (built in slice 5 of `docs/plans/opencode-harness.md`: `classifyShimParent` knows an `opencode serve --service` parent as its own kind), and one core allow-list: `a2a.ValidateAttested` accepts the harness names `claude`, `codex` and `opencode` (the `adapter` constants), so a paired host's agent of any other harness fails attestation until it is added there; `msg.PeerNotice` also names OpenCode.
+- Pi (#275, ADR 0035 to 0037, slice 1 of `docs/plans/pi-harness.md`) adds its core edits: the `adapter.Pi` constant, `msg.PeerNotice` naming Pi, `a2a.ValidateAttested` accepting the harness name `pi`, and a K11 parent kind for a Pi parent (built with the Pi package, not in slice 1).
 - Codex's toolOutput work (ADR 0007) implements `Render` and `Inject` for Codex and must not add Codex knowledge to the shim.
 
 ## Council review 2026-11-06
