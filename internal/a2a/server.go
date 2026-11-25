@@ -734,7 +734,7 @@ func ValidateAttested(agentID, encName, harness, role string) (string, bool) {
 	if err != nil || len(raw) == 0 || len(raw) > maxRemoteNameBytes || !utf8.Valid(raw) || strings.IndexFunc(string(raw), func(r rune) bool { return unicode.IsControl(r) || unicode.Is(unicode.Cf, r) }) >= 0 {
 		return "", false
 	}
-	if h := adapter.Harness(harness); h != adapter.Claude && h != adapter.Codex && h != adapter.OpenCode {
+	if h := adapter.Harness(harness); h != adapter.Claude && h != adapter.Codex && h != adapter.OpenCode && h != adapter.Pi {
 		return "", false
 	}
 	if role != registry.RolePrimary && role != registry.RoleSubagent {

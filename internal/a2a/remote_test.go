@@ -564,6 +564,8 @@ func TestValidateAttestedHarnessAllowList(t *testing.T) {
 		"claude":   true,
 		"codex":    true,
 		"opencode": true,
+		"pi":       true,
+		"Pi":       false,
 		"gemini":   false,
 		"OpenCode": false,
 		"":         false,

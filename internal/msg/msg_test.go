@@ -214,6 +214,7 @@ func TestPeerNoticeNamesHarness(t *testing.T) {
 		"claude":   "Claude Code",
 		"codex":    "Codex",
 		"opencode": "OpenCode",
+		"pi":       "Pi",
 		"":         "agent",
 		"gemini":   "agent",
 	} {

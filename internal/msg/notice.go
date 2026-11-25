@@ -22,7 +22,7 @@ const (
 )
 
 // PeerNotice is the notice for class c. fromHarness names the sender's
-// harness ("claude", "codex", "opencode"); any other value, including "", reads as
+// harness ("claude", "codex", "opencode", "pi"); any other value, including "", reads as
 // "agent". The text holds none of the characters " < > &, so it can be an
 // envelope attribute value unescaped. An unknown class gets the info text.
 func PeerNotice(c NoticeClass, fromHarness string) string {
@@ -36,6 +36,8 @@ func PeerNotice(c NoticeClass, fromHarness string) string {
 			name = "Codex"
 		case "opencode":
 			name = "OpenCode"
+		case "pi":
+			name = "Pi"
 		}
 		n := noticeTeammateHead + name + noticeTeammateTail
 		if c == NoticeTeammateAgain {

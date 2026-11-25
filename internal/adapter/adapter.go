@@ -40,6 +40,7 @@ const (
 	Claude   Harness = "claude"
 	Codex    Harness = "codex"
 	OpenCode Harness = "opencode"
+	Pi       Harness = "pi"
 )
 
 type Binding struct {
