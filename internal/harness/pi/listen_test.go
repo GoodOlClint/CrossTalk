@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -211,7 +212,8 @@ func TestPeerOtherThanParentClosedUnread(t *testing.T) {
 	s := startShim(t, t.TempDir(), shortDir(t), func(o *Options) { o.PPID = os.Getppid() })
 	c := dial(t, s.sock())
 	c.send(t, helloFor("s1", ""))
-	if m, err := c.read(); !errors.Is(err, io.EOF) {
+	// Linux resets a connection closed with unread data; macOS gives EOF.
+	if m, err := c.read(); !errors.Is(err, io.EOF) && !errors.Is(err, syscall.ECONNRESET) {
 		t.Fatalf("read %v %v, want the connection closed with no reply", m, err)
 	}
 	if _, ok := identify(s, os.Getppid()); ok {
