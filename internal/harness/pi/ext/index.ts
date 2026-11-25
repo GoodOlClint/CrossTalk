@@ -53,6 +53,11 @@ export default function crosstalk(pi: ExtensionAPI) {
 	const receive = safe((line: string) => {
 		const frame = JSON.parse(line);
 		if (typeof frame.error === "string") return setFooter("crosstalk: " + frame.error);
+		if (frame.hello === "ok") {
+			delay = 200;
+			clearTimeout(noShim);
+			return setFooter(undefined);
+		}
 		const { id, deliver, trigger, text } = frame;
 		const wellFormed = typeof id === "string" && typeof text === "string" && typeof trigger === "boolean";
 		if (!wellFormed || deliver !== "steer") throw new Error("not a delivery frame");
@@ -81,10 +86,6 @@ export default function crosstalk(pi: ExtensionAPI) {
 				name: pi.getSessionName() ?? "",
 			});
 			write({ status });
-			delay = 200;
-			clearTimeout(noShim);
-			// A refusal reason stays up across the reconnects that follow it.
-			if (footer === "crosstalk: no shim") setFooter(undefined);
 		};
 		s.on("connect", safe(() => {
 			try {
@@ -125,7 +126,7 @@ export default function crosstalk(pi: ExtensionAPI) {
 	// Returns at once: Pi starts MCP servers, the shim included, after this handler.
 	pi.on("session_start", (_event, context) => {
 		ctx = context;
-		noShim = setTimeout(safe(() => setFooter("crosstalk: no shim")), 30000);
+		noShim = setTimeout(safe(() => footer ?? setFooter("crosstalk: no shim")), 30000);
 		open();
 	});
 	pi.on("session_shutdown", () => {
