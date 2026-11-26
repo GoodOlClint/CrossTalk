@@ -8,6 +8,7 @@ import (
 	"github.com/GoodOlClint/crosstalk/internal/harness"
 	"github.com/GoodOlClint/crosstalk/internal/harness/claude"
 	"github.com/GoodOlClint/crosstalk/internal/harness/codex"
+	"github.com/GoodOlClint/crosstalk/internal/harness/pi"
 	"github.com/GoodOlClint/crosstalk/internal/msg"
 	"github.com/GoodOlClint/crosstalk/internal/receiver"
 )
@@ -55,7 +56,7 @@ func TestPulledEntryNoticeClassByProvenance(t *testing.T) {
 			return e
 		}(), msg.NoticeInfo},
 	}
-	for _, h := range []harness.Noticer{&claude.Harness{}, &codex.Harness{}} {
+	for _, h := range []harness.Noticer{&claude.Harness{}, &codex.Harness{}, &pi.Harness{}} {
 		for _, tc := range cases {
 			if got := entryNoticeClass(tc.e); got != tc.class {
 				t.Errorf("%s: class %q, want %q", tc.name, got, tc.class)

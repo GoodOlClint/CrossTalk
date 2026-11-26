@@ -105,6 +105,9 @@ func DefaultSockDir() string {
 	return filepath.Join(home, ".local", "state", "crosstalk", "sock", "pi")
 }
 
+// IsPiCommand reports that cmd, a process's whole command, is Pi's title.
+func IsPiCommand(cmd string) bool { return cmd == "pi" }
+
 // IsPiHost reports that this shim runs under Pi's environment and that pid's
 // whole command is exactly "pi", the process.title Pi sets.
 func IsPiHost(pid int) bool {
@@ -112,7 +115,7 @@ func IsPiHost(pid int) bool {
 		return false
 	}
 	out, err := exec.Command("ps", "-o", "command=", "-p", strconv.Itoa(pid)).Output()
-	return err == nil && strings.TrimSpace(string(out)) == "pi"
+	return err == nil && IsPiCommand(strings.TrimSpace(string(out)))
 }
 
 func alive(pid int) bool {

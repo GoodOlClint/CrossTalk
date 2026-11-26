@@ -623,13 +623,38 @@ func TestInstructionsSayReadHintEverywhereAndSilenceIsAllowed(t *testing.T) {
 	if strings.Contains(strings.ToLower(Instructions), "teammate") {
 		t.Errorf("instructions tell the model to act on every peer message: %q", Instructions)
 	}
-	for _, name := range []string{"Claude", "Codex", "OpenCode"} {
+	for _, name := range []string{"Claude", "Codex", "OpenCode", "Pi"} {
 		if strings.Contains(Instructions, name) {
 			t.Errorf("instructions name a harness: %q", name)
 		}
 	}
 	if strings.Contains(Instructions, "On failure") {
 		t.Error("instructions still limit hint to failures")
+	}
+}
+
+func TestDeliverySchemaNamesSchedulingHarnesses(t *testing.T) {
+	e := newEnv(t, 4242, NewFakeBackend())
+	res, err := e.cs.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found int
+	for _, tool := range res.Tools {
+		b, err := json.Marshal(tool.InputSchema)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(b), `"delivery"`) {
+			continue
+		}
+		found++
+		if !strings.Contains(string(b), "Codex, OpenCode and Pi scheduling; no-op for Claude") {
+			t.Errorf("%s delivery schema: %s", tool.Name, b)
+		}
+	}
+	if found == 0 {
+		t.Fatal("no tool takes delivery")
 	}
 }
 

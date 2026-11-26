@@ -26,6 +26,7 @@ func TestRun(t *testing.T) {
 	}{
 		{nil, 2, "", "usage: crosstalk"},
 		{[]string{"help"}, 0, "usage: crosstalk", ""},
+		{[]string{"help"}, 0, "set up the detected harnesses", ""},
 		{[]string{"capture"}, 2, "", "usage: crosstalk capture"},
 		{[]string{"bogus"}, 2, "", "unknown command"},
 	}
@@ -42,6 +43,7 @@ func TestRun(t *testing.T) {
 
 func TestMain(m *testing.M) {
 	if os.Getenv("CROSSTALK_TEST_MAIN") == "1" {
+		fakePiHost(os.Getenv("CROSSTALK_TEST_PI_HOST"))
 		os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 	}
 	os.Setenv("GORACE", strings.TrimSpace(os.Getenv("GORACE")+" atexit_sleep_ms=0"))

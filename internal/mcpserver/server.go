@@ -931,7 +931,7 @@ type sendIn struct {
 	To       string `json:"to" jsonschema:"agent name or agent_id"`
 	Text     string `json:"text"`
 	Kind     string `json:"kind,omitempty" jsonschema:"routing hint; not a trust boundary"`
-	Delivery string `json:"delivery,omitempty" jsonschema:"Codex scheduling; no-op for Claude"`
+	Delivery string `json:"delivery,omitempty" jsonschema:"Codex, OpenCode and Pi scheduling; no-op for Claude"`
 }
 
 type replyIn struct {
