@@ -32,7 +32,7 @@ import (
 const usage = `usage: crosstalk <command>
 
 commands:
-  install    install the binary and set up Claude Code and Codex
+  install    install the binary and set up the detected harnesses
   uninstall  undo install
   reinstall  re-apply every install step
   mcp        run the shim as an MCP server over stdio
