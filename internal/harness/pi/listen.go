@@ -31,11 +31,11 @@ const Proto = 1
 // MaxLine bounds every extension line; a hello slower than helloTimeout is
 // refused.
 const (
-	MaxLine      = 64 << 10
-	writeTimeout = 5 * time.Second
+	MaxLine = 64 << 10
 )
 
 var (
+	writeTimeout = 5 * time.Second
 	helloTimeout = 5 * time.Second
 	listenRetry  = 200 * time.Millisecond
 )
@@ -230,14 +230,35 @@ func lines(data []byte, atEOF bool) (int, []byte, error) {
 	return 0, nil, nil
 }
 
-func reply(c net.Conn, v any) {
-	b, _ := json.Marshal(v)
+var errWriteBusy = errors.New("another write to the extension did not finish")
+
+// write is the only writer on an extension connection: one line waits at
+// most writeTimeout to start and writeTimeout to finish. A failed write
+// closes c, because a partial line would join the next one.
+func (h *Harness) write(c net.Conn, line []byte) error {
+	t := time.NewTimer(writeTimeout)
+	defer t.Stop()
+	select {
+	case h.wsem <- struct{}{}:
+	case <-t.C:
+		return errWriteBusy
+	}
+	defer func() { <-h.wsem }()
 	c.SetWriteDeadline(time.Now().Add(writeTimeout))
-	c.Write(append(b, '\n'))
+	if _, err := c.Write(line); err != nil {
+		c.Close()
+		return err
+	}
+	return nil
 }
 
-func refuse(c net.Conn, reason string) {
-	reply(c, map[string]string{"error": reason})
+func (h *Harness) reply(c net.Conn, v any) {
+	b, _ := json.Marshal(v)
+	h.write(c, append(b, '\n'))
+}
+
+func (h *Harness) refuse(c net.Conn, reason string) {
+	h.reply(c, map[string]string{"error": reason})
 }
 
 // serve runs one connection: the peer check before any read, the hello, then
@@ -256,22 +277,22 @@ func (h *Harness) serve(ctx context.Context, c *net.UnixConn, r harness.SessionR
 	c.SetReadDeadline(time.Now().Add(helloTimeout))
 	if !sc.Scan() {
 		h.logger.Warn("pi: no hello", "err", sc.Err())
-		refuse(c, "no complete hello line within the limits")
+		h.refuse(c, "no complete hello line within the limits")
 		return
 	}
 	var p hello
 	if err := json.Unmarshal(sc.Bytes(), &p); err != nil {
-		refuse(c, "malformed hello")
+		h.refuse(c, "malformed hello")
 		return
 	}
 	if err := h.check(p); err != nil {
 		h.logger.Warn("pi: hello refused", "err", err)
-		refuse(c, err.Error())
+		h.refuse(c, err.Error())
 		return
 	}
 	if err := h.accept(ctx, c, p, r); err != nil {
 		h.logger.Warn("pi: hello refused", "session", p.SessionID, "err", err)
-		refuse(c, err.Error())
+		h.refuse(c, err.Error())
 		return
 	}
 	c.SetReadDeadline(time.Time{})
@@ -302,16 +323,14 @@ func (h *Harness) accept(ctx context.Context, c net.Conn, p hello, r harness.Ses
 		h.mu.Unlock()
 		return fmt.Errorf("session not registered: %v", err)
 	}
-	if h.proven == nil || h.proven.ref() != p.ref() {
-		h.proven = &p
-	}
+	h.proven = &p
 	if h.conn != nil && h.conn != c {
 		h.conn.Close()
 	}
 	h.conn = c
 	h.writeStatus()
 	h.mu.Unlock()
-	reply(c, map[string]string{"hello": "ok"})
+	h.reply(c, map[string]string{"hello": "ok"})
 	return nil
 }
 
@@ -355,18 +374,18 @@ func (h *Harness) line(ctx context.Context, c net.Conn, b []byte, r harness.Sess
 		h.logger.Warn("pi: malformed line from the extension")
 		return true
 	}
-	if _, ok := f["id"]; ok {
-		h.answer(c, f)
-		return true
-	}
 	if _, ok := f["session_id"]; ok {
 		var p hello
 		cur, _ := h.session()
 		if json.Unmarshal(b, &p) != nil || p.ref() != cur.ref() {
 			h.logger.Warn("pi: hello for another session refused", "session", p.SessionID, "bound", cur.SessionID)
-			refuse(c, fmt.Sprintf("session %s is not the session this shim serves", p.SessionID))
+			h.refuse(c, fmt.Sprintf("session %s is not the session this shim serves", p.SessionID))
 			return false
 		}
+		return true
+	}
+	if _, ok := f["id"]; ok {
+		h.answer(c, f)
 		return true
 	}
 	if raw, ok := f["status"]; ok {

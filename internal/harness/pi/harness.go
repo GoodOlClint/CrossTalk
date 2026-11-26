@@ -65,6 +65,8 @@ type Harness struct {
 	conn    net.Conn
 	status  string
 	waiters map[string]waiter
+	// wsem makes write the one writer on the extension's connections.
+	wsem chan struct{}
 }
 
 var (
@@ -74,7 +76,7 @@ var (
 )
 
 func NewHarness(opt Options) *Harness {
-	h := &Harness{ppid: opt.PPID, token: opt.Token, sockDir: opt.SockDir, host: opt.Host, dir: opt.Directory, alive: opt.Alive, logger: opt.Logger, waiters: map[string]waiter{}}
+	h := &Harness{ppid: opt.PPID, token: opt.Token, sockDir: opt.SockDir, host: opt.Host, dir: opt.Directory, alive: opt.Alive, logger: opt.Logger, waiters: map[string]waiter{}, wsem: make(chan struct{}, 1)}
 	if h.ppid == 0 {
 		h.ppid = os.Getppid()
 	}
@@ -146,16 +148,16 @@ func (h *Harness) session() (hello, bool) {
 	return *h.proven, true
 }
 
-// sessionFor is the proven session, or the session a hello is registering
-// when req is that registration's own call (it carries the claim nonce).
+// sessionFor is the session a hello is registering when req is that
+// registration's own call (it carries the claim nonce), else the proven one.
 func (h *Harness) sessionFor(req harness.RequestContext) (hello, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if h.proven != nil {
-		return *h.proven, true
-	}
 	if h.claim != nil && req.Meta != nil && req.Meta[claimMeta] == h.nonce {
 		return *h.claim, true
+	}
+	if h.proven != nil {
+		return *h.proven, true
 	}
 	return hello{}, false
 }

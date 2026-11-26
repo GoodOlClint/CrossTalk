@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"os"
 	"strings"
 	"testing"
@@ -114,7 +115,10 @@ func TestInjectD6ClassRule(t *testing.T) {
 		{"remote sender", func(d adapter.Delivery) adapter.Delivery { d.SenderRemote, d.Notice = true, msg.NoticeInfo; return d }, false},
 		{"remote sender with teammate notice", func(d adapter.Delivery) adapter.Delivery { d.SenderRemote = true; return d }, false},
 		{"script sender", func(d adapter.Delivery) adapter.Delivery { d.SenderHarness, d.Notice = "", msg.NoticeInfo; return d }, false},
-		{"unverified sender", func(d adapter.Delivery) adapter.Delivery { d.VerifiedSender, d.Notice = false, msg.NoticeInfo; return d }, false},
+		{"unverified sender", func(d adapter.Delivery) adapter.Delivery {
+			d.VerifiedSender, d.Notice = false, msg.NoticeInfo
+			return d
+		}, false},
 		{"unverified with teammate notice", func(d adapter.Delivery) adapter.Delivery { d.VerifiedSender = false; return d }, false},
 		{"inbox copy", func(d adapter.Delivery) adapter.Delivery {
 			d.InboxCopy, d.Inbox, d.Notice = true, "builders", msg.NoticeCopy
@@ -327,4 +331,89 @@ func TestInjectCanceledBeforeSend(t *testing.T) {
 		t.Fatalf("%v %v", st, err)
 	}
 	c.noLine(t, 100*time.Millisecond)
+}
+
+// A write that does not finish retires the connection, so a partial frame
+// never joins the next one, and a write queued behind it waits a bounded time.
+func TestBlockedWriteRetiresConnection(t *testing.T) {
+	old := writeTimeout
+	writeTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { writeTimeout = old })
+	s, _, b := connected(t)
+	big := peerMsg(msg.Immediate)
+	big.Parts = []msg.Part{{Type: "text", Text: strings.Repeat("x", 8<<20)}}
+	ch := injectAsync(s, big, teammate(b))
+	start := time.Now()
+	eventually(t, "the blocked write", func() bool { return len(s.h.wsem) == 1 })
+	wake := make(chan error, 1)
+	go func() { wake <- s.h.MailSignal(context.Background(), peerMsg(msg.Immediate), teammate(b)) }()
+	if r := wait(t, ch); r.st != adapter.Unknown || r.err == nil {
+		t.Fatalf("blocked write: %v %v, want unknown", r.st, r.err)
+	}
+	if err := <-wake; err == nil {
+		t.Fatal("wake behind a blocked write reported no error")
+	}
+	if el := time.Since(start); el > 3*time.Second {
+		t.Fatalf("writes took %v", el)
+	}
+	eventually(t, "the retired connection", func() bool { s.h.mu.Lock(); defer s.h.mu.Unlock(); return s.h.conn == nil })
+	if st, _ := s.h.Inject(context.Background(), peerMsg(msg.Immediate), teammate(b)); st != adapter.Unreachable {
+		t.Fatalf("after the retired connection: %v", st)
+	}
+}
+
+// An answer after the deadline never settles the waiter, even when the
+// delivery goroutine has not yet seen its timer.
+func TestAnswerAfterDeadlineDropped(t *testing.T) {
+	h := NewHarness(Options{})
+	c1, c2 := net.Pipe()
+	t.Cleanup(func() { c1.Close(); c2.Close() })
+	ch := make(chan bool, 1)
+	h.waiters["late"] = waiter{conn: c1, ch: ch, deadline: time.Now().Add(-time.Millisecond)}
+	h.waiters["early"] = waiter{conn: c1, ch: make(chan bool, 1), deadline: time.Now().Add(time.Minute)}
+	h.answer(c1, map[string]json.RawMessage{"id": json.RawMessage(`"late"`), "ok": json.RawMessage(`true`)})
+	if len(ch) != 0 {
+		t.Fatal("an answer after the deadline settled the delivery")
+	}
+	h.answer(c2, map[string]json.RawMessage{"id": json.RawMessage(`"early"`), "ok": json.RawMessage(`true`)})
+	if len(h.waiters["early"].ch) != 0 {
+		t.Fatal("an answer from another connection settled the delivery")
+	}
+}
+
+// A line that is both an answer and a hello for another session is refused
+// as a hello, and its connection closed.
+func TestAnswerWithOtherSessionRefused(t *testing.T) {
+	_, c, _ := connected(t)
+	b, _ := json.Marshal(helloFor("other", "/a/other.jsonl"))
+	var f map[string]any
+	json.Unmarshal(b, &f)
+	f["id"], f["ok"] = "x", true
+	c.send(t, f)
+	m, err := c.read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustRefuse(t, m, "other")
+	if _, err := c.read(); err == nil {
+		t.Fatal("connection left open")
+	}
+}
+
+// A reconnect hello carries the session's current name, and the session
+// takes it.
+func TestReconnectHelloRenames(t *testing.T) {
+	s, c, _ := connected(t)
+	c.c.Close()
+	p := helloFor("s1", "/a/sessions/s1.jsonl")
+	p.Name = "renamed-while-away"
+	_, m := greet(t, s, p)
+	mustAck(t, m)
+	if ss, ok := identify(s, os.Getpid()); !ok || ss.Name != "renamed-while-away" {
+		t.Fatalf("identify %+v %v", ss, ok)
+	}
+	eventually(t, "the descriptor name", func() bool {
+		ds := piDescriptors(t, s.reg)
+		return len(ds) == 1 && ds[0].Name == "renamed-while-away"
+	})
 }

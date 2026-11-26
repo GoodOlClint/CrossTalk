@@ -25,10 +25,12 @@ type frame struct {
 }
 
 // waiter receives true for {ok:true}, false for any other answer, and is
-// closed when its connection drops.
+// closed when its connection drops. An answer at or after deadline (zero
+// until the frame is written) is dropped.
 type waiter struct {
-	conn net.Conn
-	ch   chan bool
+	conn     net.Conn
+	ch       chan bool
+	deadline time.Time
 }
 
 // rawSender is D6 (ADR 0037 point 4): only a verified registered agent of
@@ -81,15 +83,24 @@ func (h *Harness) deliver(ctx context.Context, text string, trigger, wait bool) 
 		return adapter.Unreachable, errors.New("pi: deliver: canceled before send; nothing sent")
 	}
 	b, _ := json.Marshal(frame{ID: id, Deliver: "steer", Trigger: trigger, Text: text})
-	c.SetWriteDeadline(time.Now().Add(writeTimeout))
-	if _, err := c.Write(append(b, '\n')); err != nil {
+	if err := h.write(c, append(b, '\n')); err != nil {
 		h.unwait(id)
+		if errors.Is(err, errWriteBusy) {
+			return adapter.Unreachable, fmt.Errorf("pi: deliver: %w; nothing sent", err)
+		}
 		return adapter.Unknown, fmt.Errorf("pi: deliver: write: %w", err)
 	}
 	if !wait {
 		return adapter.Accepted, nil
 	}
-	t := time.NewTimer(answerTimeout)
+	deadline := time.Now().Add(answerTimeout)
+	h.mu.Lock()
+	if w, ok := h.waiters[id]; ok {
+		w.deadline = deadline
+		h.waiters[id] = w
+	}
+	h.mu.Unlock()
+	t := time.NewTimer(time.Until(deadline))
 	defer t.Stop()
 	select {
 	case ok, open := <-ch:
@@ -129,11 +140,12 @@ func (h *Harness) answer(c net.Conn, f map[string]json.RawMessage) {
 	good := json.Unmarshal(f["ok"], &ok) == nil
 	h.mu.Lock()
 	w, found := h.waiters[id]
-	if found && w.conn == c {
+	found = found && w.conn == c && (w.deadline.IsZero() || time.Now().Before(w.deadline))
+	if found {
 		delete(h.waiters, id)
 	}
 	h.mu.Unlock()
-	if !found || w.conn != c {
+	if !found {
 		h.logger.Debug("pi: answer with no waiting delivery dropped", "id", id)
 		return
 	}
