@@ -376,7 +376,9 @@ func TestPiCheckK5(t *testing.T) {
 	if r := s.check(t, "K5"); !r.OK {
 		t.Fatalf("K5: %+v", r)
 	}
-	write(t, s.ext(), string(Fill(filepath.Join(s.root, "bin", "other"), sbVersion, false, nil)), 0o600)
+	other := filepath.Join(s.root, "bin", "other")
+	write(t, other, "#!/bin/sh\n", 0o755)
+	write(t, s.ext(), string(Fill(other, sbVersion, false, nil)), 0o600)
 	if r := s.check(t, "K5"); r.OK {
 		t.Errorf("K5 with another binary path: %+v", r)
 	}
