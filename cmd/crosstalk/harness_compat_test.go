@@ -2517,7 +2517,7 @@ func TestHarnessCompatPiLegShape(t *testing.T) {
 			t.Errorf("live leg lacks %q", want)
 		}
 	}
-	printMode := regexp.MustCompile(`(^|[;&|( ])pi +([^|;]* )?(-p|--print)( |$)`)
+	printMode := regexp.MustCompile(`(^|[;&|(\s])pi\s+([^|;]*\s)?(-p|--print)(\s|$)`)
 	for _, src := range []string{sc, live} {
 		for n, line := range strings.Split(src, "\n") {
 			if printMode.MatchString(line) && !strings.Contains(line, "</dev/null") {
@@ -2704,12 +2704,12 @@ func TestHarnessCompatComparePiFailsClosed(t *testing.T) {
 		{"register", "did not register"},
 		{"parent", "parent"},
 		{"reachable", "reachable"},
-		{"new", "/new"},
+		{"new", "did not register a new session"},
 		{"old-shim", "old shim"},
-		{"state", "mailboxed"},
+		{"state", "did not answer mailboxed"},
 		{"journal", "journal"},
 		{"leak", "body"},
-		{"quit", "after pi quit"},
+		{"quit", "still registered after pi quit"},
 	} {
 		t.Run("break="+c.brk, func(t *testing.T) {
 			t.Parallel()
