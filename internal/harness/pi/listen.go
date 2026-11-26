@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
@@ -281,25 +282,29 @@ func (h *Harness) serve(ctx context.Context, c *net.UnixConn, r harness.SessionR
 
 // accept binds the hello's session to this shim and registers it. A shim
 // serves one session for its life (ADR 0036 point 5): a hello for another
-// session is refused and the bound one stays.
+// session is refused and the bound one stays. Until register succeeds only
+// the registration's own calls see the session (sessionFor).
 func (h *Harness) accept(ctx context.Context, c net.Conn, p hello, r harness.SessionRegistrar) error {
+	h.acceptMu.Lock()
+	defer h.acceptMu.Unlock()
+	nonce := rand.Text()
 	h.mu.Lock()
-	prev := h.proven
-	if prev != nil && prev.ref() != p.ref() {
+	if h.proven != nil && h.proven.ref() != p.ref() {
 		h.mu.Unlock()
 		return fmt.Errorf("session %s is not the session this shim serves", p.SessionID)
 	}
-	h.proven = &p
+	h.claim, h.nonce = &p, nonce
 	h.mu.Unlock()
-	if err := register(ctx, r, h.ppid, p.Cwd); err != nil {
-		h.mu.Lock()
-		if h.proven == &p {
-			h.proven = prev
-		}
+	err := register(ctx, r, harness.RequestContext{ParentPID: h.ppid, Meta: map[string]any{claimMeta: nonce}}, p.Cwd)
+	h.mu.Lock()
+	h.claim, h.nonce = nil, ""
+	if err != nil {
 		h.mu.Unlock()
 		return fmt.Errorf("session not registered: %v", err)
 	}
-	h.mu.Lock()
+	if h.proven == nil || h.proven.ref() != p.ref() {
+		h.proven = &p
+	}
 	if h.conn != nil && h.conn != c {
 		h.conn.Close()
 	}
@@ -310,15 +315,19 @@ func (h *Harness) accept(ctx context.Context, c net.Conn, p hello, r harness.Ses
 	return nil
 }
 
+// claimMeta is the RequestContext.Meta key that marks a hello's own
+// registration calls.
+const claimMeta = "crosstalk.pi/claim"
+
 // register runs inside the refresh gate, so no descriptor changes while a
 // refreshing shim takes its handoff.
-func register(ctx context.Context, r harness.SessionRegistrar, ppid int, cwd string) error {
+func register(ctx context.Context, r harness.SessionRegistrar, req harness.RequestContext, cwd string) error {
 	done, ok := quiesce.Hold(ctx)
 	if !ok {
 		return ctx.Err()
 	}
 	defer done()
-	return r.RegisterSession(ctx, harness.RequestContext{ParentPID: ppid}, cwd)
+	return r.RegisterSession(ctx, req, cwd)
 }
 
 func (h *Harness) drop(c net.Conn) {
@@ -328,16 +337,26 @@ func (h *Harness) drop(c net.Conn) {
 		h.conn = nil
 		h.writeStatus()
 	}
+	for id, w := range h.waiters {
+		if w.conn == c {
+			delete(h.waiters, id)
+			close(w.ch)
+		}
+	}
 }
 
-// line handles one extension line after the hello: a status, a session name,
-// or a repeated hello. Lines from a connection the session no longer uses are
+// line handles one extension line after the hello: a delivery answer, a
+// status, a session name, or a repeated hello. Lines from a connection the session no longer uses are
 // dropped. It returns false when the connection must close: a hello naming
 // another session.
 func (h *Harness) line(ctx context.Context, c net.Conn, b []byte, r harness.SessionRegistrar) bool {
 	var f map[string]json.RawMessage
 	if json.Unmarshal(b, &f) != nil {
 		h.logger.Warn("pi: malformed line from the extension")
+		return true
+	}
+	if _, ok := f["id"]; ok {
+		h.answer(c, f)
 		return true
 	}
 	if _, ok := f["session_id"]; ok {
@@ -376,7 +395,7 @@ func (h *Harness) line(ctx context.Context, c net.Conn, b []byte, r harness.Sess
 		p.Name = name
 		h.proven = &p
 		h.mu.Unlock()
-		if err := register(ctx, r, h.ppid, p.Cwd); err != nil {
+		if err := register(ctx, r, harness.RequestContext{ParentPID: h.ppid}, p.Cwd); err != nil {
 			h.logger.Warn("pi: applying session name", "err", err)
 		}
 	}
