@@ -330,6 +330,28 @@ assert-discovery)
 		exit 1
 	fi
 	;;
+assert-pi-no-turn)
+	usage="usage: harness-compat-live.sh assert-pi-no-turn STATE RECEIVER_ID SESSIONS_DIR SESSION_ID MARKER"
+	state="${2:?$usage}"
+	recv="${3:?$usage}"
+	dir="${4:?$usage}"
+	id="${5:?$usage}"
+	marker="${6:?$usage}"
+	jq -es --arg m "$marker" '([.[] | select(any(.message.parts[]?; .text | contains($m))) | .message_id]) as $ids | any(.[]; .state == "queued" and (.message_id as $i | $ids | index($i)))' "$state/journal/$recv.jsonl" >/dev/null 2>&1 || {
+		echo "FAIL no-turn: no inbound message carrying $marker is queued at $recv"
+		exit 1
+	}
+	f="$(find "$dir" -type f -name "*_$id.jsonl" 2>/dev/null)"
+	[ -n "$f" ] || {
+		echo "FAIL no-turn: no session file for $id"
+		exit 1
+	}
+	jq -es --arg m "$marker" '(map(.type == "custom_message" and (.content | tostring | contains($m))) | index(true)) as $i | $i != null and all(.[$i + 1:][]; .message.role? != "assistant")' "$f" >/dev/null || {
+		echo "FAIL no-turn: the text is not shown in the session, or a turn followed it"
+		exit 1
+	}
+	echo "PASS no-turn: the next_turn text is shown in the receiver's session, queued, with no turn after it"
+	;;
 opencode-service)
 	f="${2:?usage: harness-compat-live.sh opencode-service SERVICE_JSON [LAUNCHED_PID]}"
 	launched="${3-}"
@@ -360,12 +382,13 @@ opencode-service)
 	printf '%s\n' "$url"
 	;;
 leg)
-	leg="${2:?usage: harness-compat-live.sh leg claude-linux|claude-macos|codex-linux|codex-macos|opencode-linux|opencode-macos HOME}"
+	leg="${2:?usage: harness-compat-live.sh leg claude-linux|claude-macos|codex-linux|codex-macos|opencode-linux|opencode-macos|pi-linux|pi-macos HOME}"
 	home="${3:?usage: harness-compat-live.sh leg LEG HOME}"
 	: "${OPENROUTER_API_KEY:?}"
 	case "$leg" in
 	claude-*) : "${CLAUDE_MODEL:?}" ;;
 	opencode-*) : "${OPENCODE_MODEL:?}" ;;
+	pi-*) : "${PI_COMPAT_MODEL:?}" ;;
 	*) : "${CODEX_MODEL:?}" ;;
 	esac
 	if [ "$leg" = codex-macos ]; then
@@ -397,6 +420,9 @@ leg)
 		export XDG_CONFIG_HOME="$home/.config" XDG_STATE_HOME="$home/.local/state" XDG_DATA_HOME="$home/.local/share" XDG_CACHE_HOME="$home/.cache"
 		export OPENCODE_DISABLE_AUTOUPDATE=1 OPENCODE_DISABLE_MODELS_FETCH=1 OPENCODE_DISABLE_CLAUDE_CODE=1
 		;;
+	pi-*)
+		export PI_CODING_AGENT_DIR="$home/.pi/agent" PI_TELEMETRY=0
+		;;
 	esac
 	pids=
 	ok=false
@@ -409,6 +435,7 @@ leg)
 		if [ -f "$home/.local/state/opencode/service.json" ]; then jq '.password = "***"' "$home/.local/state/opencode/service.json" >"$logs/opencode-service.json" 2>/dev/null || true; fi
 		cp "$home/.config/opencode/opencode.json" "$logs/opencode-config.json" 2>/dev/null || true
 		[ -d "$home/.codex/sessions" ] && cp -R "$home/.codex/sessions" "$logs/codex-sessions" 2>/dev/null || true
+		[ -d "$home/.pi/agent/sessions" ] && cp -R "$home/.pi/agent/sessions" "$logs/pi-sessions" 2>/dev/null || true
 		staged=0
 		"$0" stage-logs "$logs" "$out" || staged=1
 		if [ "$ok" = true ] && [ "$leg" = codex-macos ] && [ "$staged" -eq 0 ]; then
@@ -701,6 +728,64 @@ PY
 		await_pair "$asker" "$recv"
 	}
 
+	install_pi() {
+		[ ! -e "$home/.pi" ] || {
+			echo "pi-* needs a scratch home: $home/.pi already exists and is not touched" >&2
+			return 1
+		}
+		"$xt" install pi --yes </dev/null >"$logs/install-pi.log" 2>&1
+	}
+	start_pi() { # label fd prompt: an interactive session in a pty
+		fifo="$home/pi-$1.in"
+		mkfifo "$fifo"
+		eval "exec $2<>\"\$fifo\""
+		(
+			cd "$home/work"
+			exec python3 "${PTYRUN:?}" "$logs/pi-$1.log" "$fifo" pi --model "$PI_COMPAT_MODEL" "$3"
+		) &
+		pids="$pids $!"
+	}
+	await_idle() { # session_id: its last message is a finished assistant turn
+		w=0
+		until f="$(find "$home/.pi/agent/sessions" -type f -name "*_$1.jsonl" 2>/dev/null)" && [ -n "$f" ] &&
+			jq -es '[.[] | select(.type == "message")] | last | .message | .role == "assistant" and .stopReason == "stop"' "$f" >/dev/null 2>&1; do
+			w=$((w + 1))
+			[ "$w" -lt 60 ] || {
+				echo "the Pi session $1 never finished its turn" >&2
+				return 1
+			}
+			sleep 2
+		done
+	}
+	pi_roundtrip() {
+		install_pi
+		start_pi recv 7 "$auth Call the crosstalk list_agents tool once, then reply READY."
+		wait_n pi 1
+		assert_home_resolved pi
+		recv="$(only_id pi)"
+		start_pi ask 9 "$auth Call the crosstalk list_agents tool first and confirm that agent_id $recv appears. Then use the crosstalk ask tool to ask the agent whose agent_id is $recv: compat-F, reply with the single word PONG. Then wait for its reply."
+		wait_n pi 2
+		asker="$(other_id pi "$recv")"
+		await_pair "$asker" "$recv"
+		# A verified local sender's next_turn is shown to an idle session and starts no turn.
+		ref="$(session_of "$recv")"
+		await_idle "${ref%@*}"
+		ask_ref="$(session_of "$asker")"
+		await_idle "${ask_ref%@*}"
+		type_line 9 "Use the crosstalk send_message tool with delivery next_turn to send the agent whose agent_id is $recv the text: compat-NT. Then say SENT."
+		w=0
+		until "$0" assert-pi-no-turn "$state" "$recv" "$home/.pi/agent/sessions" "${ref%@*}" compat-NT >"$logs/assert-no-turn.log" 2>&1; do
+			w=$((w + 1))
+			[ "$w" -lt 45 ] || {
+				cat "$logs/assert-no-turn.log" >&2
+				return 1
+			}
+			sleep 2
+		done
+		sleep 15
+		"$0" assert-pi-no-turn "$state" "$recv" "$home/.pi/agent/sessions" "${ref%@*}" compat-NT
+	}
+
 	codex_roundtrip() {
 		install_codex
 		start_codex recv 7 "$auth Call the crosstalk list_agents tool once, then reply READY and wait."
@@ -734,6 +819,9 @@ PY
 		;;
 	opencode-linux | opencode-macos)
 		opencode_roundtrip
+		;;
+	pi-linux | pi-macos)
+		pi_roundtrip
 		;;
 	codex-macos)
 		codex_roundtrip
@@ -793,7 +881,7 @@ PY
 	ok=true
 	;;
 *)
-	echo "usage: harness-compat-live.sh assert-pair|assert-discovery|assert-home-descriptor|opencode-service|leg ..." >&2
+	echo "usage: harness-compat-live.sh assert-pair|assert-discovery|assert-home-descriptor|assert-pi-no-turn|opencode-service|leg ..." >&2
 	exit 2
 	;;
 esac
