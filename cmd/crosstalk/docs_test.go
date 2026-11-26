@@ -283,6 +283,8 @@ func TestDocsAndPluginNamePi(t *testing.T) {
 			`"harness": "claude|codex|opencode|pi"`, "1.6.0", "ADR 0035", "ADR 0036", "ADR 0037",
 			"TestInjectStateTable", "TestInstallPiEndToEnd", "not yet verified (slice 9)",
 		},
+		"README.md":                       {"Claude Code, Codex, OpenCode and Pi", "not yet in a release"},
+		"docs/setup.md":                   {"restart those: end and restart Claude and Codex sessions, restart the OpenCode service, and run `/reload` in each Pi session", "OpenCode loads its MCP entries when its service starts, so restart"},
 		"docs/faq.md":                     {"Pi", "1.6.0", "crosstalk install pi", "not been run live"},
 		"docs/how-it-works.md":            {"Pi", "1.6.0", "crosstalk install pi", "no approval prompt"},
 		"docs/examples.md":                {"OpenCode", "Pi"},
