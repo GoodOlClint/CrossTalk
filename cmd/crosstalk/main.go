@@ -20,6 +20,7 @@ import (
 	"github.com/GoodOlClint/crosstalk/internal/harness/codex"
 	"github.com/GoodOlClint/crosstalk/internal/harness/codex/appserver"
 	"github.com/GoodOlClint/crosstalk/internal/harness/opencode"
+	"github.com/GoodOlClint/crosstalk/internal/harness/pi"
 	"github.com/GoodOlClint/crosstalk/internal/mcpserver"
 	"github.com/GoodOlClint/crosstalk/internal/registry"
 	"github.com/GoodOlClint/crosstalk/internal/shim"
@@ -103,6 +104,10 @@ func isTerminal(f *os.File) bool {
 	return err != nil || !os.SameFile(fi, null)
 }
 
+// piHost decides whether the parent process is Pi; nil means pi.IsPiHost.
+// Tests replace it because their parent is the test process.
+var piHost func(pid int) bool
+
 // harnesses is every supported harness in trust order: an explicit
 // _meta.threadId outranks the parent pid.
 func harnesses(stateDir string) ([]harness.Harness, error) {
@@ -119,7 +124,8 @@ func harnesses(stateDir string) ([]harness.Harness, error) {
 		Claims:     codex.ClaimsConfig{StateDir: stateDir},
 	})
 	oc := opencode.NewHarness(opencode.Options{Directory: registry.New(stateDir), Logger: slog.Default()})
-	return []harness.Harness{cx, oc, cl}, nil
+	ph := pi.NewHarness(pi.Options{Directory: registry.New(stateDir), Logger: slog.Default(), Host: piHost})
+	return []harness.Harness{cx, oc, ph, cl}, nil
 }
 
 // endpointList splits a comma-separated list; ws:// endpoints contain colons.

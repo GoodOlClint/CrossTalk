@@ -42,6 +42,7 @@ func TestRun(t *testing.T) {
 
 func TestMain(m *testing.M) {
 	if os.Getenv("CROSSTALK_TEST_MAIN") == "1" {
+		fakePiHost(os.Getenv("CROSSTALK_TEST_PI_HOST"))
 		os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 	}
 	os.Setenv("GORACE", strings.TrimSpace(os.Getenv("GORACE")+" atexit_sleep_ms=0"))

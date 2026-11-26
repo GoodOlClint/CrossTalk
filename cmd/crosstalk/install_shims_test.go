@@ -161,6 +161,10 @@ func TestClassifyShimParent(t *testing.T) {
 		{"/opt/homebrew/bin/opencode serve", 88, parentOther},
 		{"opencode run serve --service", 88, parentOther},
 		{"opencode run --service serve", 88, parentOther},
+		{"pi", 88, parentPi},
+		{"pi-foo", 88, parentOther},
+		{"/usr/bin/pi", 88, parentOther},
+		{"pi --mode rpc", 88, parentOther},
 		{"/bin/zsh -l", 1, parentOther},
 		{"", 0, parentOther},
 	} {
@@ -186,6 +190,25 @@ func TestK11GroupsOpenCodeServiceParent(t *testing.T) {
 	}
 	if strings.Contains(d, "other parents") {
 		t.Errorf("OpenCode shims fell into other parents: %q", d)
+	}
+}
+
+func TestK11GroupsPiParent(t *testing.T) {
+	fakeShims(t,
+		shimProc{PID: 31, PPID: 6, ParentCmd: "pi", ParentPPID: 1},
+		shimProc{PID: 32, PPID: 7, ParentCmd: "pi", ParentPPID: 1})
+	rs := installShimChecks("/bin/crosstalk")
+	if len(rs) != 1 || rs[0].OK || !rs[0].WarnOnly {
+		t.Fatalf("got %v", k11Lines(rs))
+	}
+	d := rs[0].Detail
+	for _, want := range []string{"2 crosstalk mcp process(es) under Pi sessions", "pids 31, 32", "restart each Pi session", "/reload"} {
+		if !strings.Contains(d, want) {
+			t.Errorf("detail %q lacks %q", d, want)
+		}
+	}
+	if strings.Contains(d, "other parents") {
+		t.Errorf("Pi shims fell into other parents: %q", d)
 	}
 }
 

@@ -336,7 +336,7 @@ func TestReplyHintSeparatesPreBindFromUnknownID(t *testing.T) {
 	}
 
 	pre := hint(uuidV7At(t0.Add(-time.Hour)))
-	if !strings.Contains(pre, "may predate this session's binding") || !strings.Contains(pre, "check the message_id") || !strings.Contains(pre, "send_message") || !strings.Contains(pre, "from-agent-id") || !strings.Contains(pre, "from_agent_id") {
+	if !strings.Contains(pre, "may predate this session's binding") || !strings.Contains(pre, "check the message_id") || !strings.Contains(pre, "send_message") || !strings.Contains(pre, "from-agent-id") || !strings.Contains(pre, "from_agent_id (Codex, OpenCode or Pi)") {
 		t.Fatalf("pre-bind hint %q", pre)
 	}
 	for name, id := range map[string]string{
