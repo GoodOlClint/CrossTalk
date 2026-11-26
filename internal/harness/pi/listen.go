@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
@@ -30,11 +31,11 @@ const Proto = 1
 // MaxLine bounds every extension line; a hello slower than helloTimeout is
 // refused.
 const (
-	MaxLine      = 64 << 10
-	writeTimeout = 5 * time.Second
+	MaxLine = 64 << 10
 )
 
 var (
+	writeTimeout = 5 * time.Second
 	helloTimeout = 5 * time.Second
 	listenRetry  = 200 * time.Millisecond
 )
@@ -229,14 +230,35 @@ func lines(data []byte, atEOF bool) (int, []byte, error) {
 	return 0, nil, nil
 }
 
-func reply(c net.Conn, v any) {
-	b, _ := json.Marshal(v)
+var errWriteBusy = errors.New("another write to the extension did not finish")
+
+// write is the only writer on an extension connection: one line waits at
+// most writeTimeout to start and writeTimeout to finish. A failed write
+// closes c, because a partial line would join the next one.
+func (h *Harness) write(c net.Conn, line []byte) error {
+	t := time.NewTimer(writeTimeout)
+	defer t.Stop()
+	select {
+	case h.wsem <- struct{}{}:
+	case <-t.C:
+		return errWriteBusy
+	}
+	defer func() { <-h.wsem }()
 	c.SetWriteDeadline(time.Now().Add(writeTimeout))
-	c.Write(append(b, '\n'))
+	if _, err := c.Write(line); err != nil {
+		c.Close()
+		return err
+	}
+	return nil
 }
 
-func refuse(c net.Conn, reason string) {
-	reply(c, map[string]string{"error": reason})
+func (h *Harness) reply(c net.Conn, v any) {
+	b, _ := json.Marshal(v)
+	h.write(c, append(b, '\n'))
+}
+
+func (h *Harness) refuse(c net.Conn, reason string) {
+	h.reply(c, map[string]string{"error": reason})
 }
 
 // serve runs one connection: the peer check before any read, the hello, then
@@ -255,22 +277,22 @@ func (h *Harness) serve(ctx context.Context, c *net.UnixConn, r harness.SessionR
 	c.SetReadDeadline(time.Now().Add(helloTimeout))
 	if !sc.Scan() {
 		h.logger.Warn("pi: no hello", "err", sc.Err())
-		refuse(c, "no complete hello line within the limits")
+		h.refuse(c, "no complete hello line within the limits")
 		return
 	}
 	var p hello
 	if err := json.Unmarshal(sc.Bytes(), &p); err != nil {
-		refuse(c, "malformed hello")
+		h.refuse(c, "malformed hello")
 		return
 	}
 	if err := h.check(p); err != nil {
 		h.logger.Warn("pi: hello refused", "err", err)
-		refuse(c, err.Error())
+		h.refuse(c, err.Error())
 		return
 	}
 	if err := h.accept(ctx, c, p, r); err != nil {
 		h.logger.Warn("pi: hello refused", "session", p.SessionID, "err", err)
-		refuse(c, err.Error())
+		h.refuse(c, err.Error())
 		return
 	}
 	c.SetReadDeadline(time.Time{})
@@ -281,44 +303,50 @@ func (h *Harness) serve(ctx context.Context, c *net.UnixConn, r harness.SessionR
 
 // accept binds the hello's session to this shim and registers it. A shim
 // serves one session for its life (ADR 0036 point 5): a hello for another
-// session is refused and the bound one stays.
+// session is refused and the bound one stays. Until register succeeds only
+// the registration's own calls see the session (sessionFor).
 func (h *Harness) accept(ctx context.Context, c net.Conn, p hello, r harness.SessionRegistrar) error {
+	h.acceptMu.Lock()
+	defer h.acceptMu.Unlock()
+	nonce := rand.Text()
 	h.mu.Lock()
-	prev := h.proven
-	if prev != nil && prev.ref() != p.ref() {
+	if h.proven != nil && h.proven.ref() != p.ref() {
 		h.mu.Unlock()
 		return fmt.Errorf("session %s is not the session this shim serves", p.SessionID)
 	}
-	h.proven = &p
+	h.claim, h.nonce = &p, nonce
 	h.mu.Unlock()
-	if err := register(ctx, r, h.ppid, p.Cwd); err != nil {
-		h.mu.Lock()
-		if h.proven == &p {
-			h.proven = prev
-		}
+	err := register(ctx, r, harness.RequestContext{ParentPID: h.ppid, Meta: map[string]any{claimMeta: nonce}}, p.Cwd)
+	h.mu.Lock()
+	h.claim, h.nonce = nil, ""
+	if err != nil {
 		h.mu.Unlock()
 		return fmt.Errorf("session not registered: %v", err)
 	}
-	h.mu.Lock()
+	h.proven = &p
 	if h.conn != nil && h.conn != c {
 		h.conn.Close()
 	}
 	h.conn = c
 	h.writeStatus()
 	h.mu.Unlock()
-	reply(c, map[string]string{"hello": "ok"})
+	h.reply(c, map[string]string{"hello": "ok"})
 	return nil
 }
 
+// claimMeta is the RequestContext.Meta key that marks a hello's own
+// registration calls.
+const claimMeta = "crosstalk.pi/claim"
+
 // register runs inside the refresh gate, so no descriptor changes while a
 // refreshing shim takes its handoff.
-func register(ctx context.Context, r harness.SessionRegistrar, ppid int, cwd string) error {
+func register(ctx context.Context, r harness.SessionRegistrar, req harness.RequestContext, cwd string) error {
 	done, ok := quiesce.Hold(ctx)
 	if !ok {
 		return ctx.Err()
 	}
 	defer done()
-	return r.RegisterSession(ctx, harness.RequestContext{ParentPID: ppid}, cwd)
+	return r.RegisterSession(ctx, req, cwd)
 }
 
 func (h *Harness) drop(c net.Conn) {
@@ -328,10 +356,16 @@ func (h *Harness) drop(c net.Conn) {
 		h.conn = nil
 		h.writeStatus()
 	}
+	for id, w := range h.waiters {
+		if w.conn == c {
+			delete(h.waiters, id)
+			close(w.ch)
+		}
+	}
 }
 
-// line handles one extension line after the hello: a status, a session name,
-// or a repeated hello. Lines from a connection the session no longer uses are
+// line handles one extension line after the hello: a delivery answer, a
+// status, a session name, or a repeated hello. Lines from a connection the session no longer uses are
 // dropped. It returns false when the connection must close: a hello naming
 // another session.
 func (h *Harness) line(ctx context.Context, c net.Conn, b []byte, r harness.SessionRegistrar) bool {
@@ -345,9 +379,13 @@ func (h *Harness) line(ctx context.Context, c net.Conn, b []byte, r harness.Sess
 		cur, _ := h.session()
 		if json.Unmarshal(b, &p) != nil || p.ref() != cur.ref() {
 			h.logger.Warn("pi: hello for another session refused", "session", p.SessionID, "bound", cur.SessionID)
-			refuse(c, fmt.Sprintf("session %s is not the session this shim serves", p.SessionID))
+			h.refuse(c, fmt.Sprintf("session %s is not the session this shim serves", p.SessionID))
 			return false
 		}
+		return true
+	}
+	if _, ok := f["id"]; ok {
+		h.answer(c, f)
 		return true
 	}
 	if raw, ok := f["status"]; ok {
@@ -376,7 +414,7 @@ func (h *Harness) line(ctx context.Context, c net.Conn, b []byte, r harness.Sess
 		p.Name = name
 		h.proven = &p
 		h.mu.Unlock()
-		if err := register(ctx, r, h.ppid, p.Cwd); err != nil {
+		if err := register(ctx, r, harness.RequestContext{ParentPID: h.ppid}, p.Cwd); err != nil {
 			h.logger.Warn("pi: applying session name", "err", err)
 		}
 	}

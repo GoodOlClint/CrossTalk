@@ -54,10 +54,19 @@ type Harness struct {
 	alive  func(int) bool
 	logger *slog.Logger
 
-	mu     sync.Mutex
-	proven *hello
-	conn   net.Conn
-	status string
+	// acceptMu serializes hellos, so the different-session check and the
+	// publication of proven are one step around register.
+	acceptMu sync.Mutex
+
+	mu      sync.Mutex
+	proven  *hello
+	claim   *hello
+	nonce   string
+	conn    net.Conn
+	status  string
+	waiters map[string]waiter
+	// wsem makes write the one writer on the extension's connections.
+	wsem chan struct{}
 }
 
 var (
@@ -67,7 +76,7 @@ var (
 )
 
 func NewHarness(opt Options) *Harness {
-	h := &Harness{ppid: opt.PPID, token: opt.Token, sockDir: opt.SockDir, host: opt.Host, dir: opt.Directory, alive: opt.Alive, logger: opt.Logger}
+	h := &Harness{ppid: opt.PPID, token: opt.Token, sockDir: opt.SockDir, host: opt.Host, dir: opt.Directory, alive: opt.Alive, logger: opt.Logger, waiters: map[string]waiter{}, wsem: make(chan struct{}, 1)}
 	if h.ppid == 0 {
 		h.ppid = os.Getppid()
 	}
@@ -126,13 +135,6 @@ func (h *Harness) Notice(c msg.NoticeClass, fromHarness string) string {
 
 func (h *Harness) NativeReplyAddress(harness.Self) string { return "" }
 
-// ponytail: placeholder render and inject; render.go and inject.go replace them.
-func (h *Harness) Render(m msg.Message, _ harness.Identity) any { return m.Text() }
-
-func (h *Harness) Inject(context.Context, msg.Message, adapter.Delivery) (adapter.State, error) {
-	return adapter.Unreachable, errors.New("pi: delivery not built")
-}
-
 func (h *Harness) Register(context.Context, string) (adapter.Binding, error) {
 	return adapter.Binding{}, errors.New("pi: a Pi session is reachable only through its own shim")
 }
@@ -146,9 +148,23 @@ func (h *Harness) session() (hello, bool) {
 	return *h.proven, true
 }
 
+// sessionFor is the session a hello is registering when req is that
+// registration's own call (it carries the claim nonce), else the proven one.
+func (h *Harness) sessionFor(req harness.RequestContext) (hello, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.claim != nil && req.Meta != nil && req.Meta[claimMeta] == h.nonce {
+		return *h.claim, true
+	}
+	if h.proven != nil {
+		return *h.proven, true
+	}
+	return hello{}, false
+}
+
 // Identify claims a call only from the proven parent once a hello is held.
 func (h *Harness) Identify(_ context.Context, req harness.RequestContext) (harness.Session, bool, error) {
-	p, ok := h.session()
+	p, ok := h.sessionFor(req)
 	if !ok || req.ParentPID != h.ppid {
 		return harness.Session{}, false, nil
 	}
@@ -156,7 +172,7 @@ func (h *Harness) Identify(_ context.Context, req harness.RequestContext) (harne
 }
 
 func (h *Harness) Bind(_ context.Context, req harness.RequestContext) (adapter.Binding, bool, error) {
-	p, ok := h.session()
+	p, ok := h.sessionFor(req)
 	if !ok || req.ParentPID != h.ppid {
 		return adapter.Binding{}, false, nil
 	}

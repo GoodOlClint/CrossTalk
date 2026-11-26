@@ -645,3 +645,47 @@ func TestDiscoverReportsRegistryError(t *testing.T) {
 		t.Fatal("registry error hidden")
 	}
 }
+
+// probeRegistrar records what Identify reports while a registration runs,
+// for the registration's own call and for any other call, then refuses.
+type probeRegistrar struct {
+	h    *Harness
+	seen chan [2]bool
+}
+
+func (r probeRegistrar) RegisterSession(ctx context.Context, req harness.RequestContext, _ string) error {
+	_, own, _ := r.h.Identify(ctx, req)
+	_, other, _ := r.h.Identify(ctx, harness.RequestContext{ParentPID: r.h.ppid})
+	r.seen <- [2]bool{own, other}
+	return errors.New("registry refused")
+}
+
+func (probeRegistrar) RetireSession(context.Context, harness.RequestContext) (bool, error) {
+	return false, nil
+}
+
+func TestRefusedRegistrationNeverIdentified(t *testing.T) {
+	h := NewHarness(Options{PPID: os.Getpid(), Token: testToken, SockDir: shortDir(t), Host: func(int) bool { return true }})
+	r := probeRegistrar{h: h, seen: make(chan [2]bool, 1)}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- h.ServeClaims(ctx, r) }()
+	t.Cleanup(func() { cancel(); <-done })
+	c := dial(t, h.sockPath())
+	c.send(t, helloFor("s1", ""))
+	m, err := c.read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustRefuse(t, m, "not registered")
+	seen := <-r.seen
+	if !seen[0] {
+		t.Fatal("the registration's own call did not see the session it registers")
+	}
+	if seen[1] {
+		t.Fatal("another call saw a session whose registration was then refused")
+	}
+	if _, ok, _ := h.Identify(context.Background(), harness.RequestContext{ParentPID: os.Getpid()}); ok {
+		t.Fatal("refused session identified after the refusal")
+	}
+}
