@@ -43,4 +43,5 @@ AGENTS.md says identity is per request, never per process: Claude from the paren
 - Commits: `git log --grep 'Provisional-ADR: 0036'`; slices 3 (#340), 4 (#341) and 5 (#342).
 - Pinning tests: `TestPeerOtherThanParentClosedUnread`, `TestSecondSessionIDRefused`, `TestIdentifyOnlyProvenParent`, `TestSecondClaimantRefusedNoTakeover` (`internal/harness/pi/listen_test.go`), `TestMCPListsPiSessionBeforeAnyToolCall` (`cmd/crosstalk/pi_wire_test.go`).
 - Verified offline: the tests above with a fake extension client; spike 24 measured the parent pid and peer pid on Pi 1.6.0 (macOS and a Linux arm64 container).
-- Not yet verified: the product shim against a live Pi (slice 9: L2, L6, L8), the bare-id ref with no session file (M4), `IsPiHost` against a real Pi on its own, and the x64 recheck (M6).
+- Verified live (slice 9, spike 25, Pi 1.6.0, macOS): a real Pi session registered before any tool call and left the list on quit, `/new` gave a new agent (L2, L8), Pi asks round-tripped (L6), a `--no-session` Pi registered the bare id (M4), and the Pi process reads `pi` to `ps`, which `IsPiHost` requires.
+- Not yet verified: two Pi processes on one session file through the product, a wrong-peer or wrong-token connection against a live Pi, and the x64 recheck (M6).
