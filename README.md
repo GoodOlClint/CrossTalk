@@ -1,6 +1,6 @@
 # CrossTalk
 
-Cross-harness agent messaging for coding-agent sessions. One small process per session lets Claude Code, Codex, OpenCode and Pi sessions message each other by name (Pi support is built but not yet in a release or run live), with delivery into the running session through each harness's native inbound channel: Claude Code's per-session unix socket, Codex's app-server (`turn/start.toolOutput`, `thread/inject_items`), OpenCode's local service and a Pi extension. No screen scraping, no spawn-per-request, no central router.
+Cross-harness agent messaging for coding-agent sessions. One small process per session lets Claude Code, Codex, OpenCode and Pi sessions message each other by name (Pi support is built but not yet in a release; it ran live once, with named gaps, and its compatibility check has not run), with delivery into the running session through each harness's native inbound channel: Claude Code's per-session unix socket, Codex's app-server (`turn/start.toolOutput`, `thread/inject_items`), OpenCode's local service and a Pi extension. No screen scraping, no spawn-per-request, no central router.
 
 Status: v1 is implemented; `docs/design.md` is still a draft under operator review. Install: download the release binary and run `./crosstalk install` (`docs/setup.md`, macOS and Linux). CI builds and tests on both; a Linux install from the release asset has not been run live yet. Nothing stops a message loop or bounds spend: two sessions can message each other without end, and you stop one by ending the session.
 

@@ -41,4 +41,5 @@ Pi asks for no approval before tool calls (its security doc: "it does not ask fo
 - Commits: `git log --grep 'Provisional-ADR: 0037'`; slices 2 (#339) and 4 (#341).
 - Pinning tests: `TestExtensionAvoidsForbiddenCalls`, `TestExtensionWithStubAPI` (`internal/harness/pi/ext_test.go`), `TestInjectD6ClassRule`, `TestInjectHostileBodyKeepsOuterFields`, `TestInjectStateTable` (`internal/harness/pi/inject_test.go`).
 - Verified offline: the tests above; spike 24 M1 and M3 measured Pi 1.6.0 with a hand-built frame, one model.
-- Not yet verified: delivery through the product into a live Pi (slice 9: L3 to L7, L10, L11). Notice effectiveness is unmeasured (M1).
+- Verified live (slice 9, spike 25, Pi 1.6.0, one model, one sample per row): idle and busy `immediate` and `next_turn` delivery and their sender states (L3, L4, L7), ask and reply (L5, L6), the fixed wake and `receive_message` for a script sender (L10), and a hostile body kept inside `parts` (L11). The Pi screen was captured for L3 and the idle half of L7 only.
+- Not yet verified: the remote and inbox-copy classes against a live Pi. Notice effectiveness is unmeasured (M1).

@@ -6,7 +6,7 @@ You probably run more than one agent. One Claude Code session reviews a pull req
 
 With CrossTalk, you tell your agent "ask the Codex session in the `api` repo whether it changed the schema", and it does. The answer shows up in your session as a new message. You do not copy anything, and nobody writes a hand-off file. CrossTalk puts each message straight into the receiving session's context through that harness's own inbound path, the same path a message from its own kind takes.
 
-Supported harnesses: Claude Code, Codex, OpenCode (v2 line only, from v0.3.0) and Pi (1.x, 1.6.0 tested; `crosstalk install pi`). Pi support is built but not yet in a release, and it has not been run live end to end.
+Supported harnesses: Claude Code, Codex, OpenCode (v2 line only, from v0.3.0) and Pi (1.x, 1.6.0 tested; `crosstalk install pi`). Pi support is built but not yet in a release. It ran live once, on 2026-11-25, with named gaps, and its compatibility check has not run.
 
 ## The 30-second picture
 

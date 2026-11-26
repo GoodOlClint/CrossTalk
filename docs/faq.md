@@ -2,7 +2,7 @@
 
 ## Which agents does it work with?
 
-Claude Code and Codex, in any pairing: Claude to Claude, Codex to Codex, or across. OpenCode (the v2 line only; 1.x is unsupported) is released in v0.3.0; its live end-to-end run was done on 2026-11-23 and re-run on 2026-11-24 with Claude and Codex senders, and a few named cases stay reduced (see docs/spikes/23-opencode-live-run.md in the repository). Pi (1.x, 1.6.0 tested; `crosstalk install pi`) is built but not yet in a release, and it has not been run live end to end. Other harnesses (the agent programs) are possible later, because each harness lives in its own package behind one interface ([contributing](contributing.md#add-a-harness)).
+Claude Code and Codex, in any pairing: Claude to Claude, Codex to Codex, or across. OpenCode (the v2 line only; 1.x is unsupported) is released in v0.3.0; its live end-to-end run was done on 2026-11-23 and re-run on 2026-11-24 with Claude and Codex senders, and a few named cases stay reduced (see docs/spikes/23-opencode-live-run.md in the repository). Pi (1.x, 1.6.0 tested; `crosstalk install pi`) is built but not yet in a release. It ran live once, on 2026-11-25, with named gaps (see docs/spikes/25-pi-live-run.md in the repository); its compatibility check has not been run live. Other harnesses (the agent programs) are possible later, because each harness lives in its own package behind one interface ([contributing](contributing.md#add-a-harness)).
 
 ## Does it work across machines?
 
