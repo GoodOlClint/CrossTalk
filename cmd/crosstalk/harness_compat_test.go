@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -10,10 +11,13 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/GoodOlClint/crosstalk/internal/harness/pi"
 )
 
 func compatDetect(t *testing.T, npmVersion string, args ...string) (string, error) {
@@ -97,7 +101,7 @@ func TestHarnessCompatWorkflowSafe(t *testing.T) {
 		}
 	}
 	body := jobs["harness"]
-	for _, want := range []string{"environment: harness-compat\n", "secrets.OPENROUTER_API_KEY", "HARNESS_COMPAT_CODEX_MODEL", "HARNESS_COMPAT_CLAUDE_MODEL", "HARNESS_COMPAT_OPENCODE_MODEL", "@opencode/cli@$VERSION", "fail-fast: false"} {
+	for _, want := range []string{"environment: harness-compat\n", "secrets.OPENROUTER_API_KEY", "HARNESS_COMPAT_CODEX_MODEL", "HARNESS_COMPAT_CLAUDE_MODEL", "HARNESS_COMPAT_OPENCODE_MODEL", "@opencode/cli@$VERSION", "HARNESS_COMPAT_PI_MODEL", "@earendil-works/pi-coding-agent@$VERSION", "fail-fast: false"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("harness lacks %q", want)
 		}
@@ -1176,12 +1180,12 @@ func TestHarnessCompatLegNeverKeysOnModelProse(t *testing.T) {
 		l := strings.TrimSpace(line)
 		// The words the prompts use may appear only inside a prompt handed to a session, never in a check.
 		for _, word := range []string{"READY", "PONG"} {
-			if strings.Contains(l, word) && !strings.HasPrefix(l, "start_claude ") && !strings.HasPrefix(l, "start_codex ") && !strings.HasPrefix(l, "start_codex_nd ") && !strings.HasPrefix(l, "oc_prompt ") && !strings.Contains(l, "compat-") {
+			if strings.Contains(l, word) && !strings.HasPrefix(l, "start_claude ") && !strings.HasPrefix(l, "start_codex ") && !strings.HasPrefix(l, "start_codex_nd ") && !strings.HasPrefix(l, "oc_prompt ") && !strings.HasPrefix(l, "start_pi ") && !strings.Contains(l, "compat-") {
 				t.Errorf("line %d matches model prose (%s) outside a prompt: %s", i+1, word, l)
 			}
 		}
 		// A queue-wake tab legitimately shows reachable false and an empty status, so no check may depend on them.
-		if strings.Contains(l, "reachable") || strings.Contains(l, ".status") {
+		if (strings.Contains(l, "reachable") || strings.Contains(l, ".status")) && !strings.Contains(l, "sock/pi/") && !strings.Contains(l, ".status == \"idle\"") {
 			t.Errorf("line %d depends on a reachable or status field: %s", i+1, l)
 		}
 	}
@@ -1227,12 +1231,12 @@ func TestHarnessCompatRestructureJobs(t *testing.T) {
 	}
 }
 
-func TestHarnessCompatLegNamesAreTheSixSameHarnessLegs(t *testing.T) {
+func TestHarnessCompatLegNamesAreTheSameHarnessLegs(t *testing.T) {
 	if _, err := exec.LookPath("jq"); err != nil {
 		t.Skip("jq not on PATH")
 	}
 	out, err := exec.Command(filepath.Join(releaseRepoRoot(t), "scripts", "harness-compat.sh"), "legs",
-		`[{"harness":"codex","version":"0.171.0"},{"harness":"claude-code","version":"2.1.330"},{"harness":"opencode","version":"2.4.1"}]`).CombinedOutput()
+		`[{"harness":"codex","version":"0.171.0"},{"harness":"claude-code","version":"2.1.330"},{"harness":"opencode","version":"2.4.1"},{"harness":"pi","version":"1.6.0"}]`).CombinedOutput()
 	if err != nil {
 		t.Fatalf("%v\n%s", err, out)
 	}
@@ -1244,8 +1248,8 @@ func TestHarnessCompatLegNamesAreTheSixSameHarnessLegs(t *testing.T) {
 	for _, l := range legs {
 		got[l.Leg] = l.Runner
 	}
-	want := map[string]string{"claude-linux": "ubuntu-latest", "claude-macos": "macos-latest", "codex-linux": "ubuntu-latest", "codex-macos": "macos-latest", "opencode-linux": "ubuntu-latest", "opencode-macos": "macos-latest"}
-	if len(got) != 6 {
+	want := map[string]string{"claude-linux": "ubuntu-latest", "claude-macos": "macos-latest", "codex-linux": "ubuntu-latest", "codex-macos": "macos-latest", "opencode-linux": "ubuntu-latest", "opencode-macos": "macos-latest", "pi-linux": "ubuntu-latest", "pi-macos": "macos-latest"}
+	if len(got) != 8 {
 		t.Fatalf("legs = %v, want exactly %v", got, want)
 	}
 	for k, v := range want {
@@ -1289,6 +1293,11 @@ func TestHarnessCompatEveryLegAssertsTheScratchHomeDescriptor(t *testing.T) {
 		t.Fatal(err)
 	}
 	src := string(b)
+	_, piBody, _ := strings.Cut(src, "\tpi_roundtrip() {")
+	piBody, _, _ = strings.Cut(piBody, "\n\t}")
+	if strings.Count(piBody, "assert_home_resolved pi") != 1 {
+		t.Error("the shared Pi round trip must run assert_home_resolved pi exactly once")
+	}
 	if strings.Count(compatLegArm(t, src, "claude-linux|claude-macos"), "assert_home_resolved claude") != 1 {
 		t.Error("the Claude legs must run assert_home_resolved claude exactly once")
 	}
@@ -1364,11 +1373,13 @@ func TestHarnessCompatLegNeedsOnlyItsOwnHarnessModel(t *testing.T) {
 		"codex-macos":    {"CODEX_MODEL", "CLAUDE_MODEL"},
 		"opencode-linux": {"OPENCODE_MODEL", "CODEX_MODEL"},
 		"opencode-macos": {"OPENCODE_MODEL", "CLAUDE_MODEL"},
+		"pi-linux":       {"PI_COMPAT_MODEL", "CODEX_MODEL"},
+		"pi-macos":       {"PI_COMPAT_MODEL", "OPENCODE_MODEL"},
 	} {
 		cmd := exec.Command(script, "leg", leg, t.TempDir())
 		var env []string
 		for _, kv := range os.Environ() {
-			if !strings.HasPrefix(kv, "CLAUDE_MODEL=") && !strings.HasPrefix(kv, "CODEX_MODEL=") && !strings.HasPrefix(kv, "OPENCODE_MODEL=") && !strings.HasPrefix(kv, "CROSSTALK_BIN=") && !strings.HasPrefix(kv, "LIVE_LOGS=") {
+			if !strings.HasPrefix(kv, "CLAUDE_MODEL=") && !strings.HasPrefix(kv, "CODEX_MODEL=") && !strings.HasPrefix(kv, "OPENCODE_MODEL=") && !strings.HasPrefix(kv, "PI_COMPAT_MODEL=") && !strings.HasPrefix(kv, "CROSSTALK_BIN=") && !strings.HasPrefix(kv, "LIVE_LOGS=") {
 				env = append(env, kv)
 			}
 		}
@@ -1586,6 +1597,8 @@ func TestHarnessCompatReportJobFailsWhenAHarnessDidNotPass(t *testing.T) {
 		`{"codex":{"pass":true},"claude-code":{"pass":true},"opencode":{"pass":true}}`:  true,
 		`{"codex":{"pass":true},"claude-code":{"pass":true},"opencode":{"pass":false}}`: false,
 		`{"opencode":{"pass":false}}`:                                                   false,
+		`{"codex":{"pass":true},"pi":{"pass":true}}`:                                    true,
+		`{"codex":{"pass":true},"pi":{"pass":false}}`:                                   false,
 	} {
 		cmd := exec.Command("sh", "-c", `printf '%s' "$R" | jq -e 'all(.[]; .pass)' >/dev/null`)
 		cmd.Env = append(os.Environ(), "R="+results)
@@ -1955,7 +1968,7 @@ func TestHarnessCompatCheckUpdatesAllIncludesOpenCode(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec := filepath.Join(bin, "record.json")
-	if err := os.WriteFile(rec, []byte(`{"codex": {"tested": "0.171.0", "checked": "2026-11-20"}, "claude-code": {"tested": "2.1.330", "checked": "2026-11-20"}}`), 0o644); err != nil {
+	if err := os.WriteFile(rec, []byte(`{"codex": {"tested": "0.171.0", "checked": "2026-11-20"}, "claude-code": {"tested": "2.1.330", "checked": "2026-11-20"}, "pi": {"tested": "2.1.330", "checked": "2026-11-20"}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	logf := filepath.Join(bin, "npm.log")
@@ -1994,14 +2007,16 @@ func TestHarnessCompatFailedStepsAttributesByHarness(t *testing.T) {
 		compatJob("compare-opencode-linux", "failure", "Harness probes"),
 		compatJob("harness-opencode-linux", "failure", "Run the leg"),
 		compatJob("harness-opencode-macos", "success"),
+		compatJob("compare-pi-linux", "failure", "Harness probes"),
+		compatJob("harness-pi-macos", "failure", "Run the leg"),
 		compatJob("build (ubuntu-latest)", "failure", "go vet"),
 	)
-	for h, own := range map[string]string{"opencode": "opencode", "codex": "codex", "claude-code": "claude"} {
+	for h, own := range map[string]string{"opencode": "opencode", "codex": "codex", "claude-code": "claude", "pi": "pi"} {
 		out, err := compatScript(t, "failed-steps", jobs, h)
 		if err != nil {
 			t.Fatalf("%s: %v\n%s", h, err, out)
 		}
-		for _, other := range []string{"claude", "codex", "opencode"} {
+		for _, other := range []string{"claude", "codex", "opencode", "pi"} {
 			has := strings.Contains(out, "-"+other+"-")
 			if (other == own) != has {
 				t.Errorf("%s: lists %s jobs = %v\n%s", h, other, has, out)
@@ -2327,5 +2342,471 @@ func TestHarnessCompatOpenCodeServiceMustBeTheLaunchedPid(t *testing.T) {
 	}
 	if out, err := exec.Command(script, "opencode-service", f, fmt.Sprint(os.Getpid()+1)).CombinedOutput(); err == nil {
 		t.Errorf("a service this leg did not launch was accepted:\n%s", out)
+	}
+}
+
+func TestHarnessCompatPiPkgAndCheckUpdates(t *testing.T) {
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not on PATH")
+	}
+	root := releaseRepoRoot(t)
+	bin := t.TempDir()
+	fake := "#!/bin/sh\necho \"$*\" >> \"$FAKE_LOG\"\ncase \"$2\" in @earendil-works/pi-coding-agent) echo 1.6.0 ;; @opencode/cli) echo 2.4.1 ;; @openai/codex) echo 0.171.0 ;; *) echo 2.1.330 ;; esac\n"
+	if err := os.WriteFile(filepath.Join(bin, "npm"), []byte(fake), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rec := filepath.Join(bin, "record.json")
+	if err := os.WriteFile(rec, []byte(`{"codex": {"tested": "0.171.0"}, "claude-code": {"tested": "2.1.330"}, "opencode": {"tested": "2.4.1"}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	logf := filepath.Join(bin, "npm.log")
+	run := func(args ...string) (string, error) {
+		cmd := exec.Command(filepath.Join(root, "scripts", "harness-compat.sh"), append([]string{"check-updates", rec}, args...)...)
+		cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "FAKE_LOG="+logf)
+		out, err := cmd.CombinedOutput()
+		return strings.TrimSpace(string(out)), err
+	}
+	if out, err := run("all", "", "", ""); err != nil || out != `[{"harness":"pi","version":"1.6.0"}]` {
+		t.Fatalf("all must include an unrecorded pi: %q, %v", out, err)
+	}
+	if b, _ := os.ReadFile(logf); !strings.Contains(string(b), "view @earendil-works/pi-coding-agent version") {
+		t.Errorf("npm was asked for: %s", b)
+	}
+	if out, err := run("cursor", "", "", ""); err == nil || !strings.Contains(out, "unknown harness") {
+		t.Errorf("an unknown harness must fail closed: %q, %v", out, err)
+	}
+}
+
+// The record has no pi row until a run passes, so the first bump writes it.
+func TestHarnessCompatPiRecordEntry(t *testing.T) {
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not on PATH")
+	}
+	b, err := os.ReadFile(filepath.Join(releaseRepoRoot(t), ".github", "harness-compat.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := filepath.Join(t.TempDir(), "rec.json")
+	if err := os.WriteFile(rec, b, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := compatScript(t, "bump-record", rec, "pi", "1.6.0", "2026-11-25"); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if b, err = os.ReadFile(rec); err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]struct{ Tested, Checked string }
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatal(err)
+	}
+	for h, e := range got {
+		if !regexp.MustCompile(`^\d+\.\d+\.\d+$`).MatchString(e.Tested) || !regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`).MatchString(e.Checked) {
+			t.Errorf("%s record = %+v", h, e)
+		}
+	}
+	if got["pi"].Tested != "1.6.0" {
+		t.Errorf("pi record = %+v", got["pi"])
+	}
+}
+
+func TestHarnessCompatPiLegsReportBumpAndIssue(t *testing.T) {
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not on PATH")
+	}
+	run := func(args ...string) string {
+		t.Helper()
+		out, err := compatScript(t, args...)
+		if err != nil {
+			t.Fatalf("%v\n%s", err, out)
+		}
+		return out
+	}
+	only := run("legs", `[{"harness":"pi","version":"1.6.0"}]`, "0.167.0")
+	if want := `[{"leg":"pi-linux","harness":"pi","version":"1.6.0","runner":"ubuntu-latest"},{"leg":"pi-macos","harness":"pi","version":"1.6.0","runner":"macos-latest"}]`; only != want {
+		t.Fatalf("pi legs = %s, want %s", only, want)
+	}
+	okRes := run("report", compatJobs(t, passJob("harness-pi-linux"), passJob("harness-pi-macos")), only)
+	if got := run("passing", okRes); got != "pi 1.6.0" {
+		t.Errorf("passing = %q", got)
+	}
+	for name, jobs := range map[string]string{
+		"macOS leg failed":   compatJobs(t, passJob("harness-pi-linux"), compatJob("harness-pi-macos", "failure", "Run the leg")),
+		"macOS leg missing":  compatJobs(t, passJob("harness-pi-linux")),
+		"leg skipped":        compatJobs(t, passJob("harness-pi-linux"), compatJob("harness-pi-macos", "skipped")),
+		"leg step never ran": compatJobs(t, passJob("harness-pi-linux"), compatJob("harness-pi-macos", "success")),
+	} {
+		res := run("report", jobs, only)
+		if run("passing", res) != "" || run("failing", res) != "pi 1.6.0" {
+			t.Errorf("%s: must hold the bump and file an issue: %s", name, res)
+		}
+	}
+	rec := filepath.Join(t.TempDir(), "rec.json")
+	if err := os.WriteFile(rec, []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("bump-record", rec, "pi", "1.6.0", "2026-11-25")
+	if b, _ := os.ReadFile(rec); !strings.Contains(string(b), `"pi": {"tested": "1.6.0", "checked": "2026-11-25"}`) {
+		t.Errorf("record = %s", b)
+	}
+	fake, bin := t.TempDir(), t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "gh"), []byte(fakeIssueGH), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	jf := compatJobs(t, compatJob("compare-pi-macos", "failure", "Harness probes"), compatJob("harness-codex-linux", "failure", "Run the leg"))
+	cmd := exec.Command(filepath.Join(releaseRepoRoot(t), "scripts", "harness-compat.sh"), "file-issue", "Owner/Repo", "pi", "1.6.0", "https://github.com/Owner/Repo/actions/runs/7", jf)
+	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"), "FAKE_DIR="+fake)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	c, _ := os.ReadFile(filepath.Join(fake, "created"))
+	if !strings.Contains(string(c), "harness-compat: pi 1.6.0 did not pass") || !strings.Contains(string(c), "compare-pi-macos: Harness probes") || strings.Contains(string(c), "codex") {
+		t.Errorf("issue:\n%s", c)
+	}
+}
+
+func TestHarnessCompatPiWorkflow(t *testing.T) {
+	jobs := workflowJobs(readCompatWorkflow(t))
+	w := readCompatWorkflow(t)
+	for job, wants := range map[string][]string{
+		"compare": {"pi) pkg=@earendil-works/pi-coding-agent", "pi) name=pi", `compare-pi "$SCRATCH_HOME" "$VERSION"`, "node-version: 24"},
+		"harness": {
+			"PI_COMPAT_MODEL: ${{ vars.HARNESS_COMPAT_PI_MODEL }}",
+			`pi) model="$PI_COMPAT_MODEL"; var=HARNESS_COMPAT_PI_MODEL ;;`,
+			`[ -n "$model" ] || { echo "::error::$var is not set"; exit 1; }`,
+			`npm install -g "@earendil-works/pi-coding-agent@$VERSION"; [ "$(pi --version)" = "$VERSION" ]`,
+			"node-version: 24",
+		},
+	} {
+		for _, want := range wants {
+			if !strings.Contains(jobs[job], want) {
+				t.Errorf("job %s lacks %q", job, want)
+			}
+		}
+	}
+	if !strings.Contains(w, "(all, codex, claude-code, opencode or pi)") {
+		t.Error("the dispatch input must name pi")
+	}
+	if strings.Contains(jobs["compare"], "secrets.") || strings.Contains(jobs["compare"], "OPENROUTER") {
+		t.Error("the no-token legs hold no secret")
+	}
+	floor := map[string]int{"checkout": 6, "cache": 5, "upload-artifact": 5, "download-artifact": 6, "setup-node": 7, "setup-go": 7}
+	for _, m := range regexp.MustCompile(`uses: actions/([a-z-]+)@v(\d+)`).FindAllStringSubmatch(w, -1) {
+		if n, _ := strconv.Atoi(m[2]); floor[m[1]] != 0 && n < floor[m[1]] {
+			t.Errorf("actions/%s@v%d is below v%d", m[1], n, floor[m[1]])
+		}
+	}
+}
+
+func TestHarnessCompatPiLegShape(t *testing.T) {
+	root := releaseRepoRoot(t)
+	read := func(n string) string {
+		b, err := os.ReadFile(filepath.Join(root, "scripts", n))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	sc, live := read("harness-compat.sh"), read("harness-compat-live.sh")
+	i := strings.Index(sc, "\ncompare-pi)")
+	if i < 0 {
+		t.Fatal("no compare-pi")
+	}
+	arm := sc[i:]
+	arm = arm[:strings.Index(arm, "\n\t;;\n")]
+	for _, want := range []string{
+		`export HOME="$home" PI_CODING_AGENT_DIR="$home/.pi/agent" PI_OFFLINE=1 PI_TELEMETRY=0`,
+		"unset PI_CODING_AGENT_SESSION_DIR",
+		"script -qfec", "script -q /dev/null",
+		`.state == "mailboxed"`, `"$0" pi-wake`,
+	} {
+		if !strings.Contains(arm, want) {
+			t.Errorf("compare-pi lacks %q", want)
+		}
+	}
+	if want := "wake='" + pi.WakeText + "'"; !strings.Contains(sc, want) {
+		t.Errorf("pi-wake must pin the shim's fixed wake: %s", want)
+	}
+	if n := strings.Count(live, "\n\tpi-linux | pi-macos)\n\t\tpi_roundtrip\n"); n != 1 {
+		t.Errorf("both pi legs must run pi_roundtrip once; arms = %d", n)
+	}
+	for _, want := range []string{`pi --model "$PI_COMPAT_MODEL"`, `export PI_CODING_AGENT_DIR="$home/.pi/agent" PI_TELEMETRY=0`, "unset PI_CODING_AGENT_SESSION_DIR", "assert-pi-no-turn", `"$logs/pi-sessions"`} {
+		if !strings.Contains(live, want) {
+			t.Errorf("live leg lacks %q", want)
+		}
+	}
+	printMode := regexp.MustCompile(`(^|[;&|(\s])pi\s+([^|;]*\s)?(-p|--print)(\s|$)`)
+	for _, src := range []string{sc, live} {
+		for n, line := range strings.Split(src, "\n") {
+			if printMode.MatchString(line) && !strings.Contains(line, "</dev/null") {
+				t.Errorf("line %d: pi -p without </dev/null hangs on piped stdin: %s", n+1, strings.TrimSpace(line))
+			}
+		}
+	}
+}
+
+const piSession = "01a21575-4ddd-70c0-8a54-282e681e5104"
+
+func piSessionDir(t *testing.T, lines ...map[string]any) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "--work--")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var b strings.Builder
+	for _, l := range lines {
+		b.WriteString(journalLine(t, l) + "\n")
+	}
+	if err := os.WriteFile(filepath.Join(dir, "2026-11-26T00-00-00-000Z_"+piSession+".jsonl"), []byte(b.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Dir(dir)
+}
+
+func piCustom(content string) map[string]any {
+	return map[string]any{"type": "custom_message", "customType": "crosstalk", "content": content}
+}
+
+func piMessage(role, stop string) map[string]any {
+	return map[string]any{"type": "message", "message": map[string]any{"role": role, "stopReason": stop, "content": []any{}}}
+}
+
+func TestHarnessCompatPiWakeCheck(t *testing.T) {
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not on PATH")
+	}
+	sys, wake := piMessage("system", ""), piCustom(pi.WakeText)
+	cases := []struct {
+		name  string
+		lines []map[string]any
+		ok    bool
+		out   string
+	}{
+		{"admitted, run started, provider failed", []map[string]any{sys, wake, piMessage("assistant", "error")}, true, "admitted=yes run_started=yes provider_stop=error"},
+		{"nothing in the session", []map[string]any{sys}, false, "wake"},
+		{"admitted but no run", []map[string]any{sys, wake}, false, "no run started"},
+		{"a model answered", []map[string]any{sys, wake, piMessage("assistant", "stop")}, false, "a model answered"},
+		{"another text", []map[string]any{sys, piCustom("hello"), piMessage("assistant", "error")}, false, "wake"},
+		{"a second custom message", []map[string]any{sys, wake, piCustom("more"), piMessage("assistant", "error")}, false, "wake"},
+		{"a user message", []map[string]any{sys, wake, piMessage("user", ""), piMessage("assistant", "error")}, false, "wake"},
+		{"the peer body", []map[string]any{sys, wake, piCustom("compat-body"), piMessage("assistant", "error")}, false, "body"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			out, err := compatScript(t, "pi-wake", piSessionDir(t, c.lines...), piSession, "compat-body")
+			if (err == nil) != c.ok || !strings.Contains(out, c.out) {
+				t.Errorf("err = %v, want ok=%v with %q\n%s", err, c.ok, c.out, out)
+			}
+		})
+	}
+	if out, err := compatScript(t, "pi-wake", t.TempDir(), piSession, "compat-body"); err == nil {
+		t.Errorf("no session file passed: %s", out)
+	}
+}
+
+func TestHarnessCompatPiNoTurnCheck(t *testing.T) {
+	if _, err := exec.LookPath("jq"); err != nil {
+		t.Skip("jq not on PATH")
+	}
+	state := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(state, "journal"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	journal := func(st string) {
+		j := journalLine(t, map[string]any{"type": "dedupe", "message_id": "m1", "message": map[string]any{"parts": []map[string]any{{"type": "text", "text": "compat-NT"}}}}) + "\n" +
+			journalLine(t, map[string]any{"type": "outcome", "message_id": "m1", "state": st}) + "\n"
+		if err := os.WriteFile(filepath.Join(state, "journal", "recv.jsonl"), []byte(j), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for f, body := range map[string]string{"agents/recv.json": `{"harness_pid":7}`, "sock/pi/7.8.status": ""} {
+		p := filepath.Join(state, f)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	before, shown := piMessage("assistant", "stop"), piCustom("preamble compat-NT")
+	cases := []struct {
+		name, state string
+		lines       []map[string]any
+		ok          bool
+	}{
+		{"shown, queued, no turn", "queued", []map[string]any{before, shown}, true},
+		{"a turn followed", "queued", []map[string]any{before, shown, piMessage("assistant", "stop")}, false},
+		{"never shown", "queued", []map[string]any{before}, false},
+		{"a run still going", "queued", []map[string]any{before, shown}, false},
+		{"only the fixed wake", "queued", []map[string]any{before, piCustom(pi.WakeText)}, false},
+		{"not queued", "unknown", []map[string]any{before, shown}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			journal(c.state)
+			status := "idle"
+			if c.name == "a run still going" {
+				status = "busy"
+			}
+			if err := os.WriteFile(filepath.Join(state, "sock", "pi", "7.8.status"), []byte(`{"pid":8,"status":"`+status+`"}`), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			out, err := exec.Command(filepath.Join(releaseRepoRoot(t), "scripts", "harness-compat-live.sh"), "assert-pi-no-turn", state, "recv", piSessionDir(t, c.lines...), piSession, "compat-NT").CombinedOutput()
+			if (err == nil) != c.ok {
+				t.Errorf("err = %v, want ok=%v\n%s", err, c.ok, out)
+			}
+		})
+	}
+}
+
+// fakePi stands in for Pi under the pty: it registers a "shim" child in the
+// scratch state and obeys /new and /quit. FAKE_BREAK names the one behaviour
+// it gets wrong.
+const fakePi = `#!/usr/bin/env python3
+import json, os, subprocess, sys, time
+brk = os.environ.get("FAKE_BREAK", "")
+if sys.argv[1:] == ["--version"]:
+    print({"banner": "hello\n1.6.0", "candidate": "1.5.0"}.get(brk, "1.6.0"))
+    sys.exit()
+home = os.environ["HOME"]
+if os.environ.get("PI_OFFLINE") != "1" or os.environ.get("PI_CODING_AGENT_DIR") != home + "/.pi/agent" or any(k in os.environ for k in ("OPENROUTER_API_KEY", "ANTHROPIC_API_KEY", "PI_CODING_AGENT_SESSION_DIR")):
+    sys.exit("fake pi: not a scratch offline environment")
+agents = home + "/.local/state/crosstalk/agents"
+os.makedirs(agents, exist_ok=True)
+def shim():
+    return subprocess.Popen(["sleep", "60"], stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+def describe(n, p):
+    d = {"agent_id": "a%d" % n, "harness": "pi", "pid": p.pid, "harness_pid": os.getpid() + (brk == "parent"), "session_ref": "s%d@0" % n}
+    open(agents + "/a.json", "w").write(json.dumps(d))
+child = None
+if brk != "register":
+    child = shim()
+    describe(1, child)
+for line in sys.stdin:
+    cmd = line.strip()
+    if cmd.endswith("/new") and brk != "new":
+        if brk != "old-shim":
+            child.kill()
+            child.wait()
+        child = shim()
+        describe(2, child)
+    elif cmd.endswith("/quit"):
+        if child and brk != "quit":
+            child.kill()
+            child.wait()
+            os.remove(agents + "/a.json")
+        if brk == "pi-stays":
+            time.sleep(30)
+        break
+`
+
+const fakeCrosstalk = `#!/usr/bin/env python3
+import glob, json, os, sys
+brk = os.environ.get("FAKE_BREAK", "")
+home = os.environ["HOME"]
+state = home + "/.local/state/crosstalk"
+ds = [json.load(open(f)) for f in glob.glob(state + "/agents/*.json")]
+if sys.argv[1] == "mcp":
+    for line in sys.stdin:
+        if json.loads(line).get("id") == 2:
+            rows = [{"agent_id": d["agent_id"], "harness": "pi", "reachable": brk != "reachable"} for d in ds]
+            print(json.dumps({"id": 2, "result": {"structuredContent": {"agents": rows}}}), flush=True)
+    sys.exit()
+to, body = sys.argv[2], sys.argv[3]
+st = "accepted" if brk == "state" else "mailboxed"
+os.makedirs(state + "/journal", exist_ok=True)
+with open(state + "/journal/" + to + ".jsonl", "w") as j:
+    if brk != "journal":
+        j.write(json.dumps({"type": "dedupe", "message_id": "m1", "message": {"parts": [{"type": "text", "text": body}]}}) + "\n")
+    j.write(json.dumps({"type": "outcome", "message_id": "m1", "state": st}) + "\n")
+d = os.environ["PI_CODING_AGENT_DIR"] + "/sessions/w"
+os.makedirs(d, exist_ok=True)
+ref = ds[0]["session_ref"].split("@")[0]
+with open(d + "/t_" + ref + ".jsonl", "w") as s:
+    s.write(json.dumps({"type": "custom_message", "customType": "crosstalk", "content": body if brk == "leak" else "A CrossTalk message is waiting: call receive_message"}) + "\n")
+    s.write(json.dumps({"type": "message", "message": {"role": "assistant", "stopReason": "error"}}) + "\n")
+print(json.dumps({"message_id": "m1", "state": st}))
+sys.exit(1)
+`
+
+func TestHarnessCompatComparePiFailsClosed(t *testing.T) {
+	for _, tool := range []string{"jq", "python3", "script"} {
+		if _, err := exec.LookPath(tool); err != nil {
+			t.Skip(tool + " not on PATH")
+		}
+	}
+	for _, c := range []struct{ brk, reason string }{
+		{"", ""},
+		{"banner", "no longer parses"},
+		{"candidate", "candidate"},
+		{"no-extension", "no extension"},
+		{"register", "did not register"},
+		{"parent", "parent"},
+		{"reachable", "reachable"},
+		{"new", "did not register a new session"},
+		{"old-shim", "old shim"},
+		{"state", "did not answer mailboxed"},
+		{"journal", "journal"},
+		{"leak", "body"},
+		{"quit", "still registered after pi quit"},
+		{"pi-stays", "Pi process is still running"},
+	} {
+		t.Run("break="+c.brk, func(t *testing.T) {
+			t.Parallel()
+			bin, home := t.TempDir(), t.TempDir()
+			for name, src := range map[string]string{"pi": fakePi, "crosstalk": fakeCrosstalk} {
+				if err := os.WriteFile(filepath.Join(bin, name), []byte(src), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if c.brk != "no-extension" {
+				ext := filepath.Join(home, ".pi", "agent", "extensions", "crosstalk")
+				if err := os.MkdirAll(ext, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(ext, "index.ts"), nil, 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+			defer cancel()
+			cmd := exec.CommandContext(ctx, filepath.Join(releaseRepoRoot(t), "scripts", "harness-compat.sh"), "compare-pi", home, "1.6.0")
+			cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
+				"CROSSTALK_BIN="+filepath.Join(bin, "crosstalk"), "FAKE_BREAK="+c.brk, "COMPAT_WAIT_TRIES=8", "OPENROUTER_API_KEY=k-should-not-reach-pi", "ANTHROPIC_API_KEY=k", "PI_CODING_AGENT_SESSION_DIR="+bin)
+			cmd.WaitDelay = 10 * time.Second
+			out, err := cmd.CombinedOutput()
+			if c.brk == "" {
+				if err != nil || !strings.Contains(string(out), "pi registration, /new, mailbox wake and quit ok") {
+					t.Fatalf("the good fake must pass: %v\n%s", err, out)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(string(out), c.reason) {
+				t.Errorf("err = %v, want a failure naming %q\n%s", err, c.reason, out)
+			}
+		})
+	}
+}
+
+func TestHarnessCompatPiLegRefusesANonEmptyHomeBeforeStagingIt(t *testing.T) {
+	home, logs := t.TempDir(), filepath.Join(t.TempDir(), "out")
+	f := filepath.Join(home, ".pi", "agent", "sessions", "w", "private.jsonl")
+	if err := os.MkdirAll(filepath.Dir(f), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(f, []byte("sentinel"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(filepath.Join(releaseRepoRoot(t), "scripts", "harness-compat-live.sh"), "leg", "pi-linux", home)
+	cmd.Env = append(os.Environ(), "OPENROUTER_API_KEY=k", "PI_COMPAT_MODEL=m", "CROSSTALK_BIN=/usr/bin/true", "LIVE_LOGS="+logs)
+	out, err := cmd.CombinedOutput()
+	if err == nil || !strings.Contains(string(out), "empty scratch home") {
+		t.Fatalf("a non-empty home must stop the leg: %v\n%s", err, out)
+	}
+	if _, err := os.Stat(logs); !os.IsNotExist(err) {
+		t.Errorf("nothing may be staged from a refused home: %v", err)
+	}
+	if es, _ := os.ReadDir(home); len(es) != 1 {
+		t.Errorf("the refused home was written to: %v", es)
 	}
 }
