@@ -197,7 +197,7 @@ func TestFAQCoversAutoRefresh(t *testing.T) {
 func TestDocsSetupNamesOpenCodeInstallChecks(t *testing.T) {
 	doc := repoFile(t, "docs/setup.md")
 	for _, want := range []string{
-		"`claude`, `codex` and `opencode`", "crosstalk install opencode", "K13", "K2, K5 and K6",
+		"`claude`, `codex`, `opencode` and `pi`", "crosstalk install opencode", "K13", "K2, K5 and K6",
 		"Supported OpenCode versions", "2.4", "1.x", "ADR 0032", "Kilo",
 		"`immediate`", "`next_turn`", "stored without a model turn", "paid model turn",
 		"restart the OpenCode service", "refuses to rewrite a config that has comments",
@@ -258,6 +258,21 @@ func TestDocsDesignAndAgentsNameOpenCode(t *testing.T) {
 	for _, p := range []string{"docs/faq.md", "docs/how-it-works.md", "docs/examples.md", "docs/contributing.md"} {
 		if !strings.Contains(repoFile(t, p), "OpenCode") {
 			t.Errorf("%s does not name OpenCode", p)
+		}
+	}
+}
+
+func TestDocsSetupCoversPi(t *testing.T) {
+	doc := repoFile(t, "docs/setup.md")
+	for _, want := range []string{
+		"## Pi", "crosstalk install pi", "Supported Pi versions", "1.6.0", "ADR 0035", "ADR 0037",
+		"extensions/crosstalk/index.ts", "$PI_CODING_AGENT_DIR", "pi mcp remove crosstalk", "writes no `mcp.json` entry",
+		"`pi mcp list` does not show CrossTalk", "`/mcp` inside a Pi session", "`/reload` restarts a session's MCP servers",
+		"wakes the session with a fixed line", "`receive_message`", "paid model turn",
+		"no approval prompt", "K3 and K4 do not apply", "K14", "K1, K3, K4, K9, K10 and K13 do not apply to Pi",
+	} {
+		if !strings.Contains(doc, want) {
+			t.Errorf("setup.md lacks %q", want)
 		}
 	}
 }

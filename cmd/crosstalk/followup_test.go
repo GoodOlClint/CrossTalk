@@ -79,6 +79,7 @@ func fuSandbox(t *testing.T, home string, setUp ...string) (*fuRec, harness.Inst
 		t.Setenv("HOME", home)
 	}
 	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+	t.Setenv("PI_CODING_AGENT_DIR", "")
 	bin := t.TempDir()
 	for _, c := range []string{"claude", "codex", "sh"} {
 		script := "#!/bin/sh\necho " + c + " >> " + filepath.Join(home, "started") + "\nexit 3\n"

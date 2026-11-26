@@ -46,6 +46,8 @@ func TestMain(m *testing.M) {
 		fakePiHost(os.Getenv("CROSSTALK_TEST_PI_HOST"))
 		os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
 	}
+	// No test may reach a Pi agent dir named by the caller's environment.
+	os.Unsetenv("PI_CODING_AGENT_DIR")
 	os.Setenv("GORACE", strings.TrimSpace(os.Getenv("GORACE")+" atexit_sleep_ms=0"))
 	code := m.Run()
 	if builtMain.dir != "" {
