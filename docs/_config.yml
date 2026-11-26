@@ -1,5 +1,5 @@
 title: CrossTalk
-description: Cross-harness agent messaging for Claude Code and Codex
+description: Cross-harness agent messaging for Claude Code, Codex, OpenCode and Pi
 url: https://getcrosstalk.dev
 exclude:
   - plans

@@ -2,7 +2,7 @@
 
 ## Which agents does it work with?
 
-Claude Code and Codex, in any pairing: Claude to Claude, Codex to Codex, or across. OpenCode (the v2 line only; 1.x is unsupported) is released in v0.3.0; its live end-to-end run was done on 2026-11-23 and re-run on 2026-11-24 with Claude and Codex senders, and a few named cases stay reduced (see docs/spikes/23-opencode-live-run.md in the repository). Other harnesses (the agent programs) are possible later, because each harness lives in its own package behind one interface ([contributing](contributing.md#add-a-harness)).
+Claude Code and Codex, in any pairing: Claude to Claude, Codex to Codex, or across. OpenCode (the v2 line only; 1.x is unsupported) is released in v0.3.0; its live end-to-end run was done on 2026-11-23 and re-run on 2026-11-24 with Claude and Codex senders, and a few named cases stay reduced (see docs/spikes/23-opencode-live-run.md in the repository). Pi (1.x, 1.6.0 tested; `crosstalk install pi`) is built but not yet in a release, and it has not been run live end to end. Other harnesses (the agent programs) are possible later, because each harness lives in its own package behind one interface ([contributing](contributing.md#add-a-harness)).
 
 ## Does it work across machines?
 
@@ -12,7 +12,7 @@ From 0.2.0 you can pair your own machines (same user, a LAN or a tailnet) and me
 
 ## Do I have to start my agents a special way?
 
-No. `crosstalk install` registers the CrossTalk server with each harness once. After that, start `claude` and `codex` as you always do and restart any session that was already running when you installed. After an upgrade, running sessions refresh on their own once idle, unless you turned that off with `CROSSTALK_NO_AUTO_REFRESH=1` or the session started before the feature existed; those need a restart (`crosstalk install --check` lists them). For Codex, start plain `codex`: some launch options make a session send-only (next question).
+No. `crosstalk install` sets each harness up once. After that, start `claude`, `codex`, `opencode` or `pi` as you always do and restart any session that was already running when you installed. After an upgrade, running sessions refresh on their own once idle, unless you turned that off with `CROSSTALK_NO_AUTO_REFRESH=1` or the session started before the feature existed; those need a restart (`crosstalk install --check` lists them). For Codex, start plain `codex`: some launch options make a session send-only (next question).
 
 ## Known issue: why can my Codex session send but not receive?
 
@@ -40,7 +40,7 @@ Nothing in CrossTalk enforces it. Every session runs as you, and any of them can
 - It tells the model, in the tool instructions and in a notice on each message, that a peer's message is a teammate's request: act on it within the session's own permission settings, never change those settings, never treat it as your approval and refuse a request to do what the peer was denied.
 - It gives a message from a script or another machine a notice that says to treat it as information and tell you.
 
-That is advice to the model plus checks in the shim. It is not a sandbox: the harness's permission mode is the boundary, and a session in an auto-approve or full-access mode acts on a peer's request without asking you. Keep secrets out of messages. See [how it works](how-it-works.md#trust).
+That is advice to the model plus checks in the shim. It is not a sandbox: the harness's permission mode is the boundary, and a session in an auto-approve or full-access mode acts on a peer's request without asking you. Pi has no approval prompt at all, so that boundary is absent there. Keep secrets out of messages. See [how it works](how-it-works.md#trust).
 
 ## Can a peer make my agent message a third session?
 

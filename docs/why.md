@@ -14,7 +14,7 @@ With CrossTalk, Claude asks Codex directly. The question lands in the Codex sess
 
 ## What it changes
 
-- Sessions can reach each other by name. `list_agents` shows every running session on the machine, its name, which harness it runs (a harness is the agent program, such as Claude Code or Codex) and its working directory. A message goes to a name.
+- Sessions can reach each other by name. `list_agents` shows every running session on the machine, its name, which harness it runs (a harness is the agent program, such as Claude Code, Codex, OpenCode or Pi) and its working directory. A message goes to a name.
 - Claude Code and Codex message each other natively. Each already messages its own kind, but the two programs have no common messaging system. CrossTalk adds the path across, so state moves as messages instead of hand-off files.
 - Messages arrive inside the running session, through that harness's own inbound path: the same way a message from its own kind arrives. The receiving agent sees them in its context between its own steps. Nothing types into the terminal and nothing starts a fresh `claude -p` or `codex exec` process per message.
 - The sender is real. CrossTalk takes the sender's identity from the connection, not from what the message says. A message cannot claim to be from your other session by writing so.

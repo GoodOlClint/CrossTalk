@@ -40,5 +40,7 @@ AGENTS.md says identity is per request, never per process: Claude from the paren
 
 - Council: none sat; one-shot Codex critique recorded in the plan's "Review disposition" section.
 - Rests on: ADR 0003, ADR 0004, ADR 0006, ADR 0035.
-- Commits: none yet (plan stage).
-- Pinning test: planned in the plan's slice 3 (peer pid other than the parent closed without a read; hello for a second session id refused; `Identify` ok only for the proven parent).
+- Commits: `git log --grep 'Provisional-ADR: 0036'`; slices 3 (#340), 4 (#341) and 5 (#342).
+- Pinning tests: `TestPeerOtherThanParentClosedUnread`, `TestSecondSessionIDRefused`, `TestIdentifyOnlyProvenParent`, `TestSecondClaimantRefusedNoTakeover` (`internal/harness/pi/listen_test.go`), `TestMCPListsPiSessionBeforeAnyToolCall` (`cmd/crosstalk/pi_wire_test.go`).
+- Verified offline: the tests above with a fake extension client; spike 24 measured the parent pid and peer pid on Pi 1.6.0 (macOS and a Linux arm64 container).
+- Not yet verified: the product shim against a live Pi (slice 9: L2, L6, L8), the bare-id ref with no session file (M4), `IsPiHost` against a real Pi on its own, and the x64 recheck (M6).

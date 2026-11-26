@@ -193,7 +193,7 @@ var shimGroupText = map[shimParentKind]struct{ who, fix string }{
 	parentAppServer: {"standalone Codex app-servers", "end each of those Codex sessions and start it again; its app-server then starts a new shim" + newThreadsNote},
 	parentClaude:    {"Claude Code sessions", "restart each session (in Claude, /mcp and reconnect also works)"},
 	parentOpenCode:  {"the OpenCode service", "restart the OpenCode service (opencode TUIs reconnect); it ends running turns"},
-	parentPi:        {"Pi sessions", "restart each Pi session (/reload also restarts its shim)"},
+	parentPi:        {"Pi sessions", "run /reload in each Pi session"},
 	parentOther:     {"other parents", "restart the process that started each one"},
 }
 
