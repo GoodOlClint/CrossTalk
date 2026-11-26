@@ -2,7 +2,7 @@
 
 Each example shows what you say to your agent, what the agent calls, and what the other session sees. The tool names, fields and result shapes below come from the code. The session names, ids, task ids and message text are made up.
 
-A few terms first. A *tool* is an action the agent can take, like reading a file. CrossTalk adds the tools named in the examples below. A *harness* is the agent program: Claude Code or Codex (OpenCode, v2 line only, is supported from v0.3.0). A *session* is one running conversation in a harness. An *MCP server* (MCP is the Model Context Protocol, the standard way a harness loads extra tools) is how the tools reach the agent. You do not use any of this directly; your agent does.
+A few terms first. A *tool* is an action the agent can take, like reading a file. CrossTalk adds the tools named in the examples below. A *harness* is the agent program: Claude Code or Codex (OpenCode, v2 line only, is supported from v0.3.0; Pi 1.x is built but not yet in a release). A *session* is one running conversation in a harness. An *MCP server* (MCP is the Model Context Protocol, the standard way a harness loads extra tools) is how the tools reach the agent. You do not use any of this directly; your agent does.
 
 ## See who is there
 

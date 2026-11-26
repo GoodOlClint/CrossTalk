@@ -241,7 +241,7 @@ func TestDocsDesignAndAgentsNameOpenCode(t *testing.T) {
 			}
 		}
 	}
-	for _, want := range []string{"MailSignal", "fixed steer prompt", `"harness": "claude|codex|opencode"`} {
+	for _, want := range []string{"MailSignal", "fixed steer prompt", `"harness": "claude|codex|opencode|pi"`} {
 		if !strings.Contains(design, want) {
 			t.Errorf("design.md lacks %q", want)
 		}
@@ -273,6 +273,39 @@ func TestDocsSetupCoversPi(t *testing.T) {
 	} {
 		if !strings.Contains(doc, want) {
 			t.Errorf("setup.md lacks %q", want)
+		}
+	}
+}
+
+func TestDocsAndPluginNamePi(t *testing.T) {
+	for p, wants := range map[string][]string{
+		"docs/design.md": {
+			`"harness": "claude|codex|opencode|pi"`, "1.6.0", "ADR 0035", "ADR 0036", "ADR 0037",
+			"TestInjectStateTable", "TestInstallPiEndToEnd", "not yet verified (slice 9)",
+		},
+		"docs/faq.md":                     {"Pi", "1.6.0", "crosstalk install pi", "not been run live"},
+		"docs/how-it-works.md":            {"Pi", "1.6.0", "crosstalk install pi", "no approval prompt"},
+		"docs/examples.md":                {"OpenCode", "Pi"},
+		"docs/contributing.md":            {"internal/harness/pi"},
+		"docs/index.md":                   {"OpenCode", "Pi", "crosstalk install pi"},
+		"docs/why.md":                     {"OpenCode or Pi"},
+		"docs/_config.yml":                {"Claude Code, Codex, OpenCode and Pi"},
+		"AGENTS.md":                       {"pi-linux", "pi-macos", "@earendil-works/pi-coding-agent", "slices 1 to 7"},
+		"docs/plans/harness-compat-ci.md": {"pi-linux", "pi-macos", "@earendil-works/pi-coding-agent"},
+		"plugins/crosstalk/skills/crosstalk/SKILL.md":  {"(Claude Code, Codex, OpenCode, Pi)", "Claude, Codex, OpenCode or Pi"},
+		"plugins/crosstalk/README.md":                  {"Claude Code, Codex, OpenCode and Pi"},
+		"plugins/crosstalk/.claude-plugin/plugin.json": {"(Claude Code, Codex, OpenCode, Pi)"},
+		"plugins/crosstalk/.codex-plugin/plugin.json":  {"(Claude Code, Codex, OpenCode, Pi)"},
+		".claude-plugin/marketplace.json":              {"(Claude Code, Codex, OpenCode, Pi)"},
+	} {
+		doc := repoFile(t, p)
+		for _, want := range wants {
+			if !strings.Contains(doc, want) {
+				t.Errorf("%s lacks %q", p, want)
+			}
+		}
+		if strings.Contains(doc, "(Claude Code, Codex)") {
+			t.Errorf("%s still names two harnesses", p)
 		}
 	}
 }

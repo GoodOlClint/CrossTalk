@@ -1,7 +1,7 @@
 {
   "name": "crosstalk",
   "version": "0.3.0",
-  "description": "Message other running agent sessions (Claude Code, Codex) on this Mac by name.",
+  "description": "Message other running agent sessions (Claude Code, Codex, OpenCode, Pi) on this Mac by name.",
   "author": {
     "name": "GoodOlClint",
     "url": "https://github.com/GoodOlClint"
@@ -13,7 +13,7 @@
   "interface": {
     "displayName": "CrossTalk",
     "shortDescription": "Message other agent sessions on this Mac.",
-    "longDescription": "Message other running agent sessions (Claude Code, Codex) on this Mac by name.",
+    "longDescription": "Message other running agent sessions (Claude Code, Codex, OpenCode, Pi) on this Mac by name.",
     "developerName": "GoodOlClint",
     "category": "Productivity",
     "capabilities": [

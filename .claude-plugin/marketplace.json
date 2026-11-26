@@ -3,7 +3,7 @@
   "owner": {
     "name": "GoodOlClint"
   },
-  "description": "Message other running agent sessions (Claude Code, Codex) on this Mac by name.",
+  "description": "Message other running agent sessions (Claude Code, Codex, OpenCode, Pi) on this Mac by name.",
   "plugins": [
     {
       "name": "crosstalk",
@@ -13,7 +13,7 @@
         "path": "plugins/crosstalk",
         "ref": "v0.3.0"
       },
-      "description": "Message other running agent sessions (Claude Code, Codex) on this Mac by name.",
+      "description": "Message other running agent sessions (Claude Code, Codex, OpenCode, Pi) on this Mac by name.",
       "version": "0.3.0",
       "author": {
         "name": "GoodOlClint"

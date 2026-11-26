@@ -4,7 +4,7 @@ This is the plain-English version of the [design](design.md), which is the speci
 
 ## The pieces
 
-- A *harness* is the agent program: Claude Code, Codex or (since v0.3.0) OpenCode. A *session* is one running conversation in a harness.
+- A *harness* is the agent program: Claude Code, Codex, OpenCode (since v0.3.0) or Pi (1.x, 1.6.0 tested; `crosstalk install pi`; built, not yet in a release or run live). A *session* is one running conversation in a harness.
 - *MCP* (Model Context Protocol) is the standard a harness uses to load extra tools from a helper program. The helper talks to the harness over standard input and output.
 - *A2A* (Agent-to-Agent) is a standard way for agent programs to message each other over HTTP.
 - The *shim* is `crosstalk mcp`, the helper program a harness starts. One shim serves each harness connection, and it ends when the harness closes it.
@@ -13,7 +13,7 @@ This is the plain-English version of the [design](design.md), which is the speci
 
 ## What one shim does for its session
 
-1. Gives the model these tools over MCP: `list_agents`, `send_message`, `reply`, `ask`, `receive_message`, `claim`, `release`, `rename`, `attach`, `detach` and `grant`. The same tools appear in Claude Code and Codex.
+1. Gives the model these tools over MCP: `list_agents`, `send_message`, `reply`, `ask`, `receive_message`, `claim`, `release`, `rename`, `attach`, `detach` and `grant`. The same tools appear in every harness.
 2. Listens for messages from other shims. They arrive over A2A on a loopback address (`127.0.0.1`, reachable only from this machine). The shim also listens on a unix socket (a file-based local connection) that speaks Claude Code's own cross-session protocol, so Claude's native peers can reach it.
 3. Delivers into its own harness, as described under [delivery](#delivery).
 4. Keeps a journal. Every accepted message is written to a file under `~/.local/state/crosstalk/journal/` before anything acknowledges it. After a restart, the journal tells the shim what was already delivered, so a retry is not injected twice. This holds while the record is retained: resolved records older than 24 hours are dropped when the journal is next opened.
@@ -28,7 +28,9 @@ CrossTalk decides which session is calling on each request, not once at startup.
 
 - Claude Code: from the parent process of the shim, which is the Claude session. Claude records each session in `~/.claude/sessions/`.
 - Codex: from the thread id Codex attaches to each tool call. One shim process can serve several Codex threads.
-- If neither works, the call is `unbound`, and only `list_agents` runs.
+- OpenCode: from the session id OpenCode attaches to each tool call.
+- Pi: Pi attaches no session id, so a CrossTalk extension inside Pi connects to the shim, which checks that the connection comes from the Pi process that started it.
+- If none works, the call is `unbound`, and only `list_agents` runs.
 
 Each session gets an `agent_id` (the first 16 hex characters of a hash of its harness and session id). The `agent_id` does not change when you rename the session. The name is a lookup alias: the session's own name if free, otherwise a fallback built from the harness, the folder name and part of the `agent_id`.
 
@@ -38,6 +40,8 @@ A message has to land inside a session that is already running. CrossTalk uses t
 
 - Claude Code: the shim writes the message to the session's own unix socket. The session sees a `<cross-session-message>` block between its steps. Claude sends no acknowledgement, so CrossTalk calls the message `accepted` when the connection stays open past a short grace period.
 - Codex: the shim talks to Codex's app server (the local service that runs Codex threads). For immediate delivery from a verified sender, it starts a turn with the message as tool output: an idle thread wakes, and a busy one picks the message up at its next model step. For deferred delivery or an unverified sender, it appends the message to the thread's history without waking it (`queued`).
+- OpenCode: the shim adds the message as a prompt through OpenCode's local service. A `next_turn` message from a verified agent is stored without starting a model turn.
+- Pi: the CrossTalk extension adds the message to the session under a `[crosstalk]` label. Only a verified agent on this machine gets its own words in; for a script, another machine or an inbox copy, a fixed line wakes the session, which can start a paid turn, and tells it to call `receive_message`.
 
 The result of a send is a delivery fact:
 
@@ -71,7 +75,7 @@ Every session on the machine runs as you. CrossTalk does not isolate sessions fr
 
 `kind` is a label the sending model picks. It is not a trust boundary, and a `command` gives the receiver no new permissions: whatever the session needs approval for, it still needs approval for.
 
-These controls are advice to the model plus checks in the shim. The harness's permission mode is the real boundary: a session running in an auto-approve or full-access mode acts on a peer's request without asking you. Do not put secrets in messages.
+These controls are advice to the model plus checks in the shim. The harness's permission mode is the real boundary: a session running in an auto-approve or full-access mode acts on a peer's request without asking you. Pi has no approval prompt, so there that boundary is absent. Do not put secrets in messages.
 
 ## Remote
 

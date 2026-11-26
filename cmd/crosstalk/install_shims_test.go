@@ -202,7 +202,7 @@ func TestK11GroupsPiParent(t *testing.T) {
 		t.Fatalf("got %v", k11Lines(rs))
 	}
 	d := rs[0].Detail
-	for _, want := range []string{"2 crosstalk mcp process(es) under Pi sessions", "pids 31, 32", "restart each Pi session", "/reload"} {
+	for _, want := range []string{"2 crosstalk mcp process(es) under Pi sessions", "pids 31, 32", "run /reload in each Pi session"} {
 		if !strings.Contains(d, want) {
 			t.Errorf("detail %q lacks %q", d, want)
 		}

@@ -38,5 +38,7 @@ An extension can also add the MCP server itself with `pi.registerMcpServer(name,
 
 - Council: none sat; one-shot Codex critique recorded in the plan's "Review disposition" section.
 - Rests on: ADR 0006, ADR 0008, ADR 0016, ADR 0031.
-- Commits: none yet (plan stage).
-- Pinning test: planned in the plan's slices 2 and 6.
+- Commits: `git log --grep 'Provisional-ADR: 0035'`; slices 1 to 7 are merged (#338 to #344), slice 8 is docs.
+- Pinning tests: `TestFill`, `TestExtensionWithStubAPI` (`internal/harness/pi/ext_test.go`), `TestPiInstallWritesOnce`, `TestPiInstallRefusesMCPEntry`, `TestPiCheckK14` (`internal/harness/pi/install_test.go`), `TestInstallPiEndToEnd` (`cmd/crosstalk/install_pi_test.go`).
+- Verified offline: the tests above, against scratch directories, a fake `pi` and a stub extension API. Spike 24 measured Pi 1.6.0 itself.
+- Not yet verified: install and checks against a live Pi session, the compat dispatch and the plan's section 8 live run (slice 9: L1, L1b, L9, L12, L13). M5 is reduced (real-shim timing with a model calling `list_agents`: L2).

@@ -1,6 +1,6 @@
 # crosstalk plugin
 
-Lets Claude Code and Codex sessions on one machine message each other by name. The plugin carries the skill only; the `crosstalk` binary registers its own MCP server (ADR 0016). Setup: `docs/setup.md` in the repository.
+Lets Claude Code, Codex, OpenCode and Pi sessions on one machine message each other by name. The plugin is for Claude Code and Codex; OpenCode and Pi are set up with `crosstalk install opencode` and `crosstalk install pi` (Pi support is built but not yet in a release). The plugin carries the skill only; the `crosstalk` binary registers its own MCP server (ADR 0016). Setup: `docs/setup.md` in the repository.
 
 Install: download the binary for your OS from the releases page, then run `./crosstalk install`. It installs this plugin into Claude Code and Codex, registers the MCP server at the binary's installed path and adds the allow rule `mcp__crosstalk__*`.
 
