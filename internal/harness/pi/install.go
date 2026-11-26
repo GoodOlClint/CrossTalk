@@ -21,6 +21,7 @@ import (
 var (
 	_ harness.Installer     = (*Harness)(nil)
 	_ harness.PluginUpdater = (*Harness)(nil)
+	_ harness.Leftover      = (*Harness)(nil)
 )
 
 // AgentDirEnv relocates Pi's agent directory.
@@ -118,6 +119,27 @@ func refuseLink(path string) error {
 	return nil
 }
 
+// shadowed refuses a directory Pi would not load the written index.ts from,
+// or whose own entry point the new file would replace. have reports that
+// CrossTalk's index.ts is already there.
+func shadowed(dir string, have bool) error {
+	names := []string{"package.json"}
+	if !have {
+		names = append(names, "index.js")
+	}
+	for _, n := range names {
+		if _, err := os.Lstat(filepath.Join(dir, n)); !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("%s exists, which CrossTalk did not write and which changes what Pi loads from %s; move it away, then run install again", filepath.Join(dir, n), dir)
+		}
+	}
+	return nil
+}
+
+// linked refuses a symlinked extension directory or file.
+func linked(path string) error {
+	return errors.Join(refuseLink(filepath.Dir(path)), refuseLink(path))
+}
+
 // mcpFiles are the global mcp.json and the working directory's project one.
 func mcpFiles(dir string) []string {
 	files := []string{filepath.Join(dir, "mcp.json")}
@@ -127,28 +149,58 @@ func mcpFiles(dir string) []string {
 	return files
 }
 
-// mcpEntries lists the mcp.json files that have a crosstalk server.
-func mcpEntries(dir string) ([]string, error) {
-	var out []string
+// readJSON parses path into v, past a byte-order mark as Pi does.
+func readJSON(path string, v any) error {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	if err := json.Unmarshal(bytes.TrimPrefix(b, []byte("\ufeff")), v); err != nil {
+		return fmt.Errorf("%s: %w", path, err)
+	}
+	return nil
+}
+
+type mcpEntry struct{ file, command string }
+
+// mcpEntries lists the crosstalk servers in both mcp.json files.
+func mcpEntries(dir string) ([]mcpEntry, error) {
+	var out []mcpEntry
 	for _, f := range mcpFiles(dir) {
-		b, err := os.ReadFile(f)
+		var c struct {
+			Servers map[string]json.RawMessage `json:"mcpServers"`
+		}
+		err := readJSON(f, &c)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
 		}
 		if err != nil {
 			return nil, err
 		}
-		var c struct {
-			Servers map[string]json.RawMessage `json:"mcpServers"`
+		raw, ok := c.Servers["crosstalk"]
+		if !ok || slices.ContainsFunc(out, func(e mcpEntry) bool { return e.file == f }) {
+			continue
 		}
-		if err := json.Unmarshal(b, &c); err != nil {
-			return nil, fmt.Errorf("%s: %w", f, err)
+		var server struct {
+			Command string `json:"command"`
 		}
-		if _, ok := c.Servers["crosstalk"]; ok && !slices.Contains(out, f) {
-			out = append(out, f)
-		}
+		_ = json.Unmarshal(raw, &server)
+		out = append(out, mcpEntry{f, server.Command})
 	}
 	return out, nil
+}
+
+// removal names each entry's file and the command that removes it.
+func removal(dir string, entries []mcpEntry) string {
+	var out []string
+	for _, e := range entries {
+		cmd := "pi mcp remove crosstalk"
+		if e.file != filepath.Join(dir, "mcp.json") {
+			cmd += " --local, in that project"
+		}
+		out = append(out, e.file+" (run `"+cmd+"`)")
+	}
+	return strings.Join(out, " and ")
 }
 
 func piVersion(ctx context.Context, env harness.InstallEnv) (string, error) {
@@ -187,7 +239,7 @@ func checkInstallable(ctx context.Context, env harness.InstallEnv) error {
 		return fmt.Errorf("%w; no Pi file was written", err)
 	}
 	if len(entries) > 0 {
-		return fmt.Errorf("%s has a crosstalk server entry, which takes precedence over the extension's; no Pi file was written: run `pi mcp remove crosstalk` (in that project for a project entry), then run install again", strings.Join(entries, " and "))
+		return fmt.Errorf("a crosstalk server entry takes precedence over the extension's; no Pi file was written: remove %s, then run install again", removal(dir, entries))
 	}
 	return nil
 }
@@ -203,11 +255,14 @@ func (h *Harness) PluginStep(env harness.InstallEnv) harness.Step {
 			if err != nil {
 				return err
 			}
-			if err := refuseLink(path); err != nil {
+			if err := linked(path); err != nil {
 				return err
 			}
 			if x.content != nil && !x.owned {
 				return fmt.Errorf("%s exists and is not CrossTalk's (no marker line), so it is left as it is; move it away, then run install again", path)
+			}
+			if err := shadowed(filepath.Dir(path), x.owned); err != nil {
+				return err
 			}
 			next := Fill(env.Bin, env.Version, env.NoAutoRefresh, x.content)
 			if bytes.Equal(next, x.content) {
@@ -240,9 +295,10 @@ func (h *Harness) InstallSteps(env harness.InstallEnv) []harness.Step {
 	return []harness.Step{step}
 }
 
-// ownedFile reports that path is a regular file, not a link, with the marker.
+// ownedFile reports that path is a regular file with the marker, reached
+// through no link in the extension's own directory.
 func ownedFile(path string) (extension, bool) {
-	if refuseLink(path) != nil {
+	if linked(path) != nil {
 		return extension{}, false
 	}
 	x, err := readExtension(path)
@@ -263,6 +319,15 @@ func (h *Harness) UninstallSteps(env harness.InstallEnv) []harness.Step {
 				out = io.Discard
 			}
 			dir := filepath.Dir(path)
+			removed := false
+			if err := linked(path); err != nil {
+				// Failing here keeps the binary a linked extension still runs.
+				if x, rerr := readExtension(path); rerr == nil && x.owned && sameBin(x.bin, env.Bin) {
+					return err
+				}
+				fmt.Fprintf(out, "%s is kept: %v\n", path, err)
+				return nil
+			}
 			if _, err := os.Lstat(path); err == nil {
 				if x, ok := ownedFile(path); !ok || !sameBin(x.bin, env.Bin) {
 					fmt.Fprintf(out, "%s is kept: it is not CrossTalk's file for %s\n", path, env.Bin)
@@ -271,13 +336,18 @@ func (h *Harness) UninstallSteps(env harness.InstallEnv) []harness.Step {
 				if err := os.Remove(path); err != nil {
 					return err
 				}
+				removed = true
 			} else if !errors.Is(err, os.ErrNotExist) {
 				return err
 			}
-			if _, ok := ownedFile(path + backupSuffix); ok {
+			if x, ok := ownedFile(path + backupSuffix); ok && (removed || sameBin(x.bin, env.Bin)) {
 				if err := os.Remove(path + backupSuffix); err != nil {
 					return err
 				}
+				removed = true
+			}
+			if !removed {
+				return nil
 			}
 			left, err := os.ReadDir(dir)
 			if errors.Is(err, os.ErrNotExist) {
@@ -307,6 +377,24 @@ func (h *Harness) Registered(env harness.InstallEnv) (bool, error) {
 func (h *Harness) SetUp(env harness.InstallEnv) (bool, error) {
 	_, x, err := h.installed(env.Home)
 	return x.owned, err
+}
+
+// Leftover reports mcp.json servers, which uninstall does not edit.
+func (h *Harness) Leftover(env harness.InstallEnv, anyBin bool) (string, error) {
+	dir, err := agentDir(env.Home)
+	if err != nil {
+		return "", err
+	}
+	entries, err := mcpEntries(dir)
+	if err != nil {
+		return "", err
+	}
+	for _, e := range entries {
+		if anyBin || sameBin(e.command, env.Bin) {
+			return "a crosstalk entry in " + e.file, nil
+		}
+	}
+	return "", nil
 }
 
 // missing says why there is no owned extension to check, or "".
@@ -347,11 +435,14 @@ func (h *Harness) Checks(ctx context.Context, env harness.InstallEnv) []harness.
 	k2 := harness.CheckResult{ID: "K2", Detail: why}
 	if why == "" {
 		entries, err := mcpEntries(AgentDir(env.Home))
+		shadow := shadowed(filepath.Dir(path), true)
 		switch {
+		case shadow != nil:
+			k2.Detail = shadow.Error()
 		case err != nil:
 			k2.Detail = "cannot read the Pi MCP config: " + err.Error()
 		case len(entries) > 0:
-			k2.Detail = "a crosstalk entry in " + strings.Join(entries, " and ") + " takes precedence over the extension's; run pi mcp remove crosstalk"
+			k2.Detail = "a crosstalk entry takes precedence over the extension's; remove " + removal(AgentDir(env.Home), entries)
 		default:
 			k2.OK, k2.Detail = true, "one CrossTalk server, registered by "+path
 		}
@@ -399,10 +490,7 @@ func (h *Harness) k14(ctx context.Context, env harness.InstallEnv) harness.Check
 	var s struct {
 		Extensions []string `json:"extensions"`
 	}
-	b, err := os.ReadFile(settings)
-	if err == nil {
-		err = json.Unmarshal(b, &s)
-	}
+	err = readJSON(settings, &s)
 	switch {
 	case err != nil && !errors.Is(err, os.ErrNotExist):
 		warns = append(warns, "cannot read "+settings+": "+err.Error())

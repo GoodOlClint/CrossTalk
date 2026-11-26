@@ -204,6 +204,9 @@ func TestPiInstallRefusesMCPEntry(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), "pi mcp remove crosstalk") {
 				t.Fatalf("install: %v", err)
 			}
+			if strings.Contains(err.Error(), "--local") != (where == "project") {
+				t.Errorf("wrong removal command: %v", err)
+			}
 			if !absent(filepath.Join(s.agent(), "extensions")) {
 				t.Error("a refused install wrote a Pi file")
 			}
@@ -273,10 +276,70 @@ func TestPiForeignBackupAndLinkKept(t *testing.T) {
 		if err := s.install(t); err == nil {
 			t.Error("install replaced a symlink")
 		}
-		if err := s.uninstall(t); err != nil || absent(s.ext()) {
-			t.Errorf("uninstall removed a symlink: %v", err)
+		if err := s.uninstall(t); err == nil || absent(s.ext()) {
+			t.Errorf("uninstall of a linked extension that runs the binary: %v", err)
 		}
 	})
+	t.Run("linked directory", func(t *testing.T) {
+		s := newSandbox(t)
+		dev := filepath.Join(s.root, "dev")
+		old := string(Fill(s.bin, "0.0.1", false, nil))
+		write(t, filepath.Join(dev, "index.ts"), old, 0o600)
+		if err := os.MkdirAll(filepath.Dir(filepath.Dir(s.ext())), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(dev, filepath.Dir(s.ext())); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.install(t); err == nil {
+			t.Error("install wrote through a linked directory")
+		}
+		if err := s.uninstall(t); err == nil {
+			t.Error("uninstall of a linked directory that runs the binary succeeded")
+		}
+		if read(t, filepath.Join(dev, "index.ts")) != old || !absent(filepath.Join(dev, "index.ts"+backupSuffix)) || absent(filepath.Dir(s.ext())) {
+			t.Error("the linked directory or its target changed")
+		}
+	})
+}
+
+func TestPiShadowingFilesRefused(t *testing.T) {
+	for _, name := range []string{"index.js", "package.json"} {
+		t.Run(name, func(t *testing.T) {
+			s := newSandbox(t)
+			mine := filepath.Join(filepath.Dir(s.ext()), name)
+			write(t, mine, "{}", 0o600)
+			if err := s.install(t); err == nil || !absent(s.ext()) {
+				t.Errorf("install beside %s: %v", name, err)
+			}
+		})
+	}
+	t.Run("package.json added later", func(t *testing.T) {
+		s := installedSandbox(t)
+		write(t, filepath.Join(filepath.Dir(s.ext()), "package.json"), "{}", 0o600)
+		if r := s.check(t, "K2"); r.OK {
+			t.Errorf("K2 with a package.json: %+v", r)
+		}
+	})
+}
+
+func TestPiLeftoverMCPEntry(t *testing.T) {
+	s := newSandbox(t)
+	if what, err := s.h.Leftover(s.env, true); what != "" || err != nil {
+		t.Fatalf("nothing there: %q %v", what, err)
+	}
+	cfg := filepath.Join(s.agent(), "mcp.json")
+	write(t, cfg, "\ufeff"+`{"mcpServers":{"crosstalk":{"command":"`+s.bin+`"}}}`, 0o600)
+	if what, err := s.h.Leftover(s.env, false); what == "" || err != nil {
+		t.Errorf("an entry running the binary: %q %v", what, err)
+	}
+	write(t, cfg, `{"mcpServers":{"crosstalk":{"command":"/other"}}}`, 0o600)
+	if what, _ := s.h.Leftover(s.env, false); what != "" {
+		t.Errorf("an entry running another command: %q", what)
+	}
+	if what, _ := s.h.Leftover(s.env, true); what == "" {
+		t.Error("anyBin missed an entry")
+	}
 }
 
 func TestPiAgentDirEnv(t *testing.T) {
@@ -486,6 +549,20 @@ func TestPiUninstall(t *testing.T) {
 		}
 		if err := s.uninstall(t); err != nil {
 			t.Errorf("second uninstall: %v", err)
+		}
+	})
+	t.Run("nothing of ours", func(t *testing.T) {
+		s := newSandbox(t)
+		backup := s.ext() + backupSuffix
+		write(t, backup, string(Fill(filepath.Join(s.root, "bin", "other"), "0.0.1", false, nil)), 0o600)
+		if err := s.uninstall(t); err != nil || absent(backup) {
+			t.Errorf("removed another binary's backup: %v", err)
+		}
+		if err := os.Remove(backup); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.uninstall(t); err != nil || absent(filepath.Dir(s.ext())) {
+			t.Errorf("removed a directory it did not empty: %v", err)
 		}
 	})
 	t.Run("another binary", func(t *testing.T) {
