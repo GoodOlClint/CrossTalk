@@ -341,6 +341,11 @@ assert-pi-no-turn)
 		echo "FAIL no-turn: no inbound message carrying $marker is queued at $recv"
 		exit 1
 	}
+	hp="$(jq -r .harness_pid "$state/agents/$recv.json")"
+	cat "$state/sock/pi/$hp".*.status 2>/dev/null | jq -es 'length > 0 and all(.[]; .status == "idle")' >/dev/null || {
+		echo "FAIL no-turn: the receiver is not idle after the delivery, so a run started or its state is unknown"
+		exit 1
+	}
 	f="$(find "$dir" -type f -name "*_$id.jsonl" 2>/dev/null)"
 	[ -n "$f" ] || {
 		echo "FAIL no-turn: no session file for $id"
@@ -406,6 +411,15 @@ leg)
 			exit 1
 		}
 	fi
+	case "$leg" in
+	pi-*)
+		# Before the log trap: a refused home must not have its transcripts staged as artifacts.
+		[ -d "$home" ] && [ -z "$(ls -A "$home")" ] || {
+			echo "pi-* needs an empty scratch home, '$home' is not one" >&2
+			exit 1
+		}
+		;;
+	esac
 	export HOME="$home"
 	state="$home/.local/state/crosstalk"
 	logs="$home/raw"
@@ -422,6 +436,7 @@ leg)
 		;;
 	pi-*)
 		export PI_CODING_AGENT_DIR="$home/.pi/agent" PI_TELEMETRY=0
+		unset PI_CODING_AGENT_SESSION_DIR
 		;;
 	esac
 	pids=
@@ -729,10 +744,6 @@ PY
 	}
 
 	install_pi() {
-		[ ! -e "$home/.pi" ] || {
-			echo "pi-* needs a scratch home: $home/.pi already exists and is not touched" >&2
-			return 1
-		}
 		"$xt" install pi --yes </dev/null >"$logs/install-pi.log" 2>&1
 	}
 	start_pi() { # label fd prompt: an interactive session in a pty

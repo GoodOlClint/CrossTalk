@@ -98,6 +98,7 @@ jobs:
           home="$(mktemp -d /tmp/ct.XXXXXX)"
           echo "SCRATCH_HOME=$home" >> "$GITHUB_ENV"
           case "$HARNESS" in codex) name=codex ;; opencode) name=opencode ;; pi) name=pi ;; *) name=claude ;; esac
+          unset PI_CODING_AGENT_DIR PI_CODING_AGENT_SESSION_DIR
           HOME="$home" "$RUNNER_TEMP/bin/crosstalk" install "$name" --yes </dev/null
           HOME="$home" "$home/.local/bin/crosstalk" install "$name" --check </dev/null
       - name: Harness probes

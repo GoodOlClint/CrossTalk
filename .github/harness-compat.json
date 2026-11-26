@@ -1,6 +1,5 @@
 {
   "codex": {"tested": "0.172.0", "checked": "2026-11-24"},
   "claude-code": {"tested": "2.1.332", "checked": "2026-11-25"},
-  "opencode": {"tested": "2.4.1", "checked": "2026-11-23"},
-  "pi": {"tested": "1.6.0", "checked": "2026-11-25"}
+  "opencode": {"tested": "2.4.1", "checked": "2026-11-23"}
 }

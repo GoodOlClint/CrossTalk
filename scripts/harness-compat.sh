@@ -259,6 +259,10 @@ pi-wake)
 		exit 1
 	}
 	echo "pi wake: admitted=yes run_started=yes provider_stop=$stop"
+	[ "$stop" = error ] || {
+		echo "the offline run did not fail at the provider: a model answered" >&2
+		exit 1
+	}
 	;;
 compare-pi)
 	usage="usage: harness-compat.sh compare-pi HOME [VERSION]"
@@ -268,7 +272,11 @@ compare-pi)
 	state="$home/.local/state/crosstalk"
 	mkdir -p "$home/work"
 	export HOME="$home" PI_CODING_AGENT_DIR="$home/.pi/agent" PI_OFFLINE=1 PI_TELEMETRY=0
-	unset OPENROUTER_API_KEY
+	# Any inherited credential would let the offline wake reach a real provider.
+	for v in $(env | sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' | grep -E '(_API_KEY|_TOKEN|_SECRET|_ACCESS_KEY|_CREDENTIALS)$|^(AWS|AZURE|GOOGLE|ANTHROPIC|OPENAI)_'); do
+		unset "$v"
+	done
+	unset PI_CODING_AGENT_SESSION_DIR
 	out="$(pi --version)"
 	[ "$(printf '%s\n' "$out" | wc -l)" -eq 1 ] && semver "$out" || {
 		echo "pi --version no longer parses: $out" >&2
@@ -310,7 +318,7 @@ compare-pi)
 		exit 1
 	}
 	# The cat that feeds the pty holds the FIFO open itself, so it never sees EOF.
-	trap '[ -z "$pid" ] || kill "$pid" 2>/dev/null || true; pkill -P $$ -x cat || true' EXIT
+	trap '[ -z "$pid" ] || { pkill -P "$pid" || true; kill "$pid" 2>/dev/null || true; }; pkill -P $$ -x cat || true' EXIT
 	[ "$(descs)" = "[]" ] || {
 		echo "a pi descriptor exists before pi started: $home is not a fresh scratch home" >&2
 		exit 1
@@ -367,6 +375,7 @@ compare-pi)
 	empty() { [ "$(descs)" = "[]" ]; }
 	wait_for empty || die "the pi session is still registered after pi quit"
 	wait_for gone "$shim" || die "the shim is still running after pi quit"
+	wait_for gone "$host" || die "the Pi process is still running after /quit"
 	listed="$(rows)" || die "list_agents through a second shim returned nothing"
 	[ "$listed" = "[]" ] || die "a second shim still lists a pi session after pi quit: $listed"
 	echo "pi registration, /new, mailbox wake and quit ok"
