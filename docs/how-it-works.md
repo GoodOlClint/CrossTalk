@@ -40,8 +40,8 @@ A message has to land inside a session that is already running. CrossTalk uses t
 
 - Claude Code: the shim writes the message to the session's own unix socket. The session sees a `<cross-session-message>` block between its steps. Claude sends no acknowledgement, so CrossTalk calls the message `accepted` when the connection stays open past a short grace period.
 - Codex: the shim talks to Codex's app server (the local service that runs Codex threads). For immediate delivery from a verified sender, it starts a turn with the message as tool output: an idle thread wakes, and a busy one picks the message up at its next model step. For deferred delivery or an unverified sender, it appends the message to the thread's history without waking it (`queued`).
-- OpenCode: the shim adds the message as a prompt through OpenCode's local service. A `next_turn` message is stored without starting a model turn.
-- Pi: the CrossTalk extension adds the message to the session under a `[crosstalk]` label. Only a verified agent on this machine gets its own words in; for a script, another machine or an inbox copy, a fixed line tells the session to call `receive_message`, which can start a paid turn.
+- OpenCode: the shim adds the message as a prompt through OpenCode's local service. A `next_turn` message from a verified agent is stored without starting a model turn.
+- Pi: the CrossTalk extension adds the message to the session under a `[crosstalk]` label. Only a verified agent on this machine gets its own words in; for a script, another machine or an inbox copy, a fixed line wakes the session, which can start a paid turn, and tells it to call `receive_message`.
 
 The result of a send is a delivery fact:
 
