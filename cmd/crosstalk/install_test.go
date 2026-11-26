@@ -29,6 +29,7 @@ func installSandbox(t *testing.T, clis ...string) string {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+	t.Setenv("PI_CODING_AGENT_DIR", "")
 	t.Setenv("SHELL", "/bin/sh")
 	exe, err := os.Executable()
 	if err != nil {
@@ -432,7 +433,7 @@ func TestInstallNamesComeFromRegisteredHarnesses(t *testing.T) {
 func TestInstallNoPathMessageNamesEveryHarness(t *testing.T) {
 	installSandbox(t)
 	code, out := installRunCmd(t, "install", "--yes")
-	if code != 1 || !strings.Contains(out, "crosstalk: neither claude, codex nor opencode is on PATH") {
+	if code != 1 || !strings.Contains(out, "crosstalk: neither claude, codex, opencode nor pi is on PATH") {
 		t.Errorf("exit %d\n%s", code, out)
 	}
 }

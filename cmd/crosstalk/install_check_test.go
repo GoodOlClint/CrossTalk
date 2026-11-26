@@ -160,3 +160,19 @@ func TestCheckSkipsHarnessNotSetUp(t *testing.T) {
 		t.Errorf("other binary: exit %d\n%s", code, out)
 	}
 }
+
+func TestCheckPiOnlyItsChecks(t *testing.T) {
+	_, bin, _ := piSandbox(t)
+	if code, out := installRunCmd(t, "install", "pi", "--yes", "--bin-dir", bin); code != 0 {
+		t.Fatalf("install: exit %d\n%s", code, out)
+	}
+	_, out := installRunCmd(t, "install", "--check", "pi", "--bin-dir", bin)
+	for _, id := range []string{"K1", "K3", "K4", "K9", "K10", "K13"} {
+		if l := installCheckLine(out, id, "pi"); l != "" {
+			t.Errorf("%s does not apply to Pi: %q", id, l)
+		}
+	}
+	if l := installCheckLine(out, "K14", "pi"); l == "" {
+		t.Errorf("no K14:\n%s", out)
+	}
+}

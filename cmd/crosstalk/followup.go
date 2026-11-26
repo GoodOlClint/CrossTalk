@@ -15,6 +15,7 @@ import (
 
 	"github.com/GoodOlClint/crosstalk/internal/harness"
 	"github.com/GoodOlClint/crosstalk/internal/harness/codex/appserver"
+	"github.com/GoodOlClint/crosstalk/internal/harness/pi"
 	"github.com/GoodOlClint/crosstalk/internal/mcpserver"
 	"github.com/GoodOlClint/crosstalk/internal/quiesce"
 	"github.com/GoodOlClint/crosstalk/internal/refresh"
@@ -32,17 +33,20 @@ const (
 )
 
 // markerKey is the upgrade marker name of a target. Codex acts on one Codex
-// home, so a home other than ~/.codex gets its own marker; two profiles under
-// one state directory do not skip each other's update.
+// home and Pi on one agent dir, so a non-default one gets its own marker; two
+// profiles under one state directory do not skip each other's update.
 func markerKey(name, home string) string {
-	if name != "codex" {
+	var dir, def string
+	switch name {
+	case "codex":
+		dir, def = appserver.CodexHome(home), filepath.Join(home, ".codex")
+	case "pi":
+		dir, def = pi.AgentDir(home), filepath.Join(home, ".pi", "agent")
+	}
+	if dir == def {
 		return name
 	}
-	h := appserver.CodexHome(home)
-	if h == filepath.Join(home, ".codex") {
-		return name
-	}
-	sum := sha256.Sum256([]byte(h))
+	sum := sha256.Sum256([]byte(dir))
 	return name + "-" + hex.EncodeToString(sum[:4])
 }
 
